@@ -9,27 +9,92 @@
  */
 
 import type { RuntimeValue, RuntimeTensor } from "../../runtime/types.js";
-import { isRuntimeTensor, isRuntimeChar } from "../../runtime/types.js";
+import {
+  isRuntimeTensor,
+  isRuntimeChar,
+  isRuntimeComplexNumber,
+  isRuntimeSparseMatrix,
+} from "../../runtime/types.js";
 import { RTV, RuntimeError, tensorSize2D } from "../../runtime/index.js";
-import type { JitType } from "../../jitTypes.js";
-import { defineBuiltin } from "./types.js";
+import { builtin } from "./builtin.js";
+import { builtinError, mustBeRealError, numericArg } from "./args.js";
 import { allocFloat64Array } from "../../runtime/alloc.js";
 import {
   getDelaunayBackend,
   getConvexHullBackend,
 } from "../../native/geometry-bridge.js";
-import { toNumArray } from "../../helpers/reduction-helpers.js";
+import { imagAllZero } from "../../helpers/effectively-real.js";
+import { sparseToDense } from "../../helpers/sparse-arithmetic.js";
+
+// ── Argument checks ──────────────────────────────────────────────────────
+
+/** MATLAB's errors for bad coordinate arguments of one function. */
+interface GeomErrors {
+  /** Complex coordinates. */
+  complex: () => RuntimeError;
+  /** Non-numeric coordinates. */
+  badType: () => RuntimeError;
+}
+
+const COMPLEX_POINTS_MSG =
+  "Data points in complex number format are not supported.\n" +
+  "Use REAL and IMAG to extract the real and imaginary components.";
+
+function badArgsError(name: string): RuntimeError {
+  return builtinError(
+    `MATLAB:${name}:BadArgsErrId`,
+    "Invalid arguments - the input does not match the allowable argument specification."
+  );
+}
+
+/** delaunay / convhull: MATLAB built-ins with their own error ids. */
+function builtinGeomErrors(name: string): GeomErrors {
+  return {
+    complex: () =>
+      builtinError(`MATLAB:${name}:ComplexDataPointErrId`, COMPLEX_POINTS_MSG),
+    badType: () => badArgsError(name),
+  };
+}
+
+/** delaunayn / convhulln: M-files that validate through cgprechecks. */
+const CGPRECHECKS_ERRORS: GeomErrors = {
+  complex: () => builtinError("MATLAB:cgprechecks:Complex", COMPLEX_POINTS_MSG),
+  badType: () =>
+    builtinError(
+      "MATLAB:cgprechecks:NonNumericInput",
+      "The specified data points are not in numeric array format."
+    ),
+};
+
+/** A real coordinate argument: a double/logical scalar (as a number) or
+ *  array. Complex values raise `errs.complex` (an all-zero imaginary part
+ *  counts as real); anything else (char, cell, sparse, ...) raises
+ *  `errs.badType`. */
+function realCoordArg(
+  v: RuntimeValue,
+  errs: GeomErrors
+): number | RuntimeTensor {
+  if (typeof v === "number") return v;
+  if (typeof v === "boolean") return v ? 1 : 0;
+  if (isRuntimeComplexNumber(v)) {
+    if (v.im !== 0) throw errs.complex();
+    return v.re;
+  }
+  if (isRuntimeTensor(v)) {
+    if (v.imag && !imagAllZero(v.imag)) throw errs.complex();
+    return v;
+  }
+  throw errs.badType();
+}
 
 /** Extract a flat list of numbers from a scalar or tensor argument. */
-function toFlatArray(v: RuntimeValue, name: string): number[] {
-  if (isRuntimeTensor(v) && v.imag)
-    throw new RuntimeError(`${name}: inputs must be real`);
-  return toNumArray(v, name);
+function toFlatArray(v: RuntimeValue, errs: GeomErrors): number[] {
+  const a = realCoordArg(v, errs);
+  return typeof a === "number" ? [a] : Array.from(a.data);
 }
 
 /** Convert an m-by-d (column-major) tensor into an array of m d-dimensional points. */
-function matrixToPoints(P: RuntimeTensor, name: string): number[][] {
-  if (P.imag) throw new RuntimeError(`${name}: inputs must be real`);
+function matrixToPoints(P: RuntimeTensor): number[][] {
   const [m, d] = tensorSize2D(P);
   const points: number[][] = new Array(m);
   for (let i = 0; i < m; i++) {
@@ -145,7 +210,7 @@ function triangulateToTensor(
 
 // ── delaunay ───────────────────────────────────────────────────────────────
 
-defineBuiltin({
+builtin({
   name: "delaunay",
   help: {
     signatures: [
@@ -159,52 +224,54 @@ defineBuiltin({
       "Returns a matrix where each row holds the 1-based point indices of one " +
       "triangle (2-D) or tetrahedron (3-D).",
   },
-  cases: [
-    {
-      match: (argTypes, nargout) => {
-        if (nargout > 1) return null;
-        if (argTypes.length < 1 || argTypes.length > 3) return null;
-        const numeric = (t: JitType) =>
-          t.kind === "number" || t.kind === "boolean" || t.kind === "tensor";
-        if (!argTypes.every(numeric)) return null;
-        return [{ kind: "tensor", isComplex: false }];
-      },
-      apply: args => {
-        let points: number[][];
+  // MATLAB's delaunay reports arity errors with its own ids (checked below).
+  nargout: [0, Infinity],
+  apply: (args, nargout) => {
+    if (args.length === 0) throw badArgsError("delaunay");
+    if (args.length > 3)
+      throw builtinError(
+        "MATLAB:delaunay:WrongInputNumArgsErrId",
+        "Invalid number of input arguments."
+      );
+    if (nargout > 1)
+      throw builtinError(
+        "MATLAB:delaunay:WrongOutputNumArgsErrId",
+        "Invalid number of output arguments."
+      );
+    const errs = builtinGeomErrors("delaunay");
+    let points: number[][];
 
-        if (args.length === 1) {
-          // delaunay(P): P is N-by-d, d in {2,3}
-          const P = args[0];
-          if (!isRuntimeTensor(P))
-            throw new RuntimeError(
-              "delaunay: P must be an N-by-2 or N-by-3 matrix"
-            );
-          const [, d] = tensorSize2D(P);
-          if (d !== 2 && d !== 3)
-            throw new RuntimeError("delaunay: P must have 2 or 3 columns");
-          points = matrixToPoints(P, "delaunay");
-        } else {
-          // delaunay(x,y) or delaunay(x,y,z): coordinate vectors
-          const coords = args.map(a => toFlatArray(a, "delaunay"));
-          const n = coords[0].length;
-          if (coords.some(c => c.length !== n))
-            throw new RuntimeError(
-              "delaunay: coordinate vectors must have the same length"
-            );
-          points = new Array(n);
-          for (let i = 0; i < n; i++) points[i] = coords.map(c => c[i]);
-        }
+    if (args.length === 1) {
+      // delaunay(P): P is N-by-d, d in {2,3}
+      const P = realCoordArg(args[0], errs);
+      if (!isRuntimeTensor(P))
+        throw new RuntimeError(
+          "delaunay: P must be an N-by-2 or N-by-3 matrix"
+        );
+      const [, d] = tensorSize2D(P);
+      if (d !== 2 && d !== 3)
+        throw new RuntimeError("delaunay: P must have 2 or 3 columns");
+      points = matrixToPoints(P);
+    } else {
+      // delaunay(x,y) or delaunay(x,y,z): coordinate vectors
+      const coords = args.map(a => toFlatArray(a, errs));
+      const n = coords[0].length;
+      if (coords.some(c => c.length !== n))
+        throw new RuntimeError(
+          "delaunay: coordinate vectors must have the same length"
+        );
+      points = new Array(n);
+      for (let i = 0; i < n; i++) points[i] = coords.map(c => c[i]);
+    }
 
-        const dim = args.length === 1 ? (points[0]?.length ?? 2) : args.length;
-        if (points.length < dim + 1)
-          throw new RuntimeError(
-            `delaunay: need at least ${dim + 1} points for a ${dim}-D triangulation`
-          );
+    const dim = args.length === 1 ? (points[0]?.length ?? 2) : args.length;
+    if (points.length < dim + 1)
+      throw new RuntimeError(
+        `delaunay: need at least ${dim + 1} points for a ${dim}-D triangulation`
+      );
 
-        return triangulateToTensor(points, dim, true);
-      },
-    },
-  ],
+    return triangulateToTensor(points, dim, true);
+  },
 });
 
 // ── delaunayn ────────────────────────────────────────────────────────────────
@@ -219,7 +286,7 @@ defineBuiltin({
 
 const DELAUNAYN_MAX_DIM = 3;
 
-defineBuiltin({
+builtin({
   name: "delaunayn",
   help: {
     signatures: ["T = delaunayn(X)", "T = delaunayn(X,opts)"],
@@ -230,39 +297,34 @@ defineBuiltin({
       "(Qhull options) is accepted for MATLAB compatibility but ignored. " +
       "Note: only n = 2 and n = 3 are supported (see source comments).",
   },
-  cases: [
-    {
-      match: (argTypes, nargout) => {
-        if (nargout > 1) return null;
-        // X is required; opts (any type) is optional and ignored.
-        if (argTypes.length < 1 || argTypes.length > 2) return null;
-        const x = argTypes[0];
-        if (x.kind !== "tensor" && x.kind !== "number" && x.kind !== "boolean")
-          return null;
-        return [{ kind: "tensor", isComplex: false }];
-      },
-      apply: args => {
-        const X = args[0];
-        if (!isRuntimeTensor(X))
-          throw new RuntimeError("delaunayn: X must be an m-by-n matrix");
-        const [m, n] = tensorSize2D(X);
-        if (n < 2)
-          throw new RuntimeError("delaunayn: X must have at least 2 columns");
-        if (n > DELAUNAYN_MAX_DIM)
-          // See the dimension-limitation note above: only n <= 3 is validated.
-          throw new RuntimeError(
-            `delaunayn: only 2-D and 3-D triangulations are supported (got ${n}-D); ` +
-              `higher dimensions are not yet validated`
-          );
-        if (m < n + 1)
-          throw new RuntimeError(
-            `delaunayn: need at least ${n + 1} points for a ${n}-D triangulation`
-          );
-        const points = matrixToPoints(X, "delaunayn");
-        return triangulateToTensor(points, n);
-      },
-    },
-  ],
+  // X is required (checked below with MATLAB's id); opts is ignored.
+  nargin: [0, 2],
+  mfile: true,
+  apply: args => {
+    if (args.length === 0)
+      throw builtinError(
+        "MATLAB:delaunayn:NotEnoughInputs",
+        "Not enough input arguments."
+      );
+    const X = realCoordArg(args[0], CGPRECHECKS_ERRORS);
+    if (!isRuntimeTensor(X))
+      throw new RuntimeError("delaunayn: X must be an m-by-n matrix");
+    const [m, n] = tensorSize2D(X);
+    if (n < 2)
+      throw new RuntimeError("delaunayn: X must have at least 2 columns");
+    if (n > DELAUNAYN_MAX_DIM)
+      // See the dimension-limitation note above: only n <= 3 is validated.
+      throw new RuntimeError(
+        `delaunayn: only 2-D and 3-D triangulations are supported (got ${n}-D); ` +
+          `higher dimensions are not yet validated`
+      );
+    if (m < n + 1)
+      throw new RuntimeError(
+        `delaunayn: need at least ${n + 1} points for a ${n}-D triangulation`
+      );
+    const points = matrixToPoints(X);
+    return triangulateToTensor(points, n);
+  },
 });
 
 // ── convhull / convhulln ─────────────────────────────────────────────────
@@ -402,7 +464,7 @@ function orderHull2D(facets: number[][], points: number[][]): RuntimeTensor {
   return RTV.tensor(out, [loop.length, 1]); // column vector
 }
 
-defineBuiltin({
+builtin({
   name: "convhull",
   help: {
     signatures: [
@@ -422,75 +484,72 @@ defineBuiltin({
       "name-value pair is accepted for compatibility; the hull is always " +
       "returned in minimal (simplified) form.",
   },
-  cases: [
-    {
-      match: (argTypes, nargout) => {
-        if (nargout > 2) return null;
-        if (argTypes.length < 1 || argTypes.length > 5) return null;
-        const ok = (t: JitType) =>
-          t.kind === "number" ||
-          t.kind === "boolean" ||
-          t.kind === "tensor" ||
-          t.kind === "string" ||
-          t.kind === "char";
-        if (!argTypes.every(ok)) return null;
-        const k: JitType = { kind: "tensor", isComplex: false };
-        return nargout > 1 ? [k, { kind: "number" }] : [k];
-      },
-      apply: (args, nargout) => {
-        // Strip a trailing 'Simplify', tf name-value pair (accepted, ignored).
-        let coordArgs = args;
-        const tail = args[args.length - 2];
-        const isSimplifyName = (v: RuntimeValue) =>
-          (typeof v === "string" && v.toLowerCase() === "simplify") ||
-          (isRuntimeChar(v) && v.value.toLowerCase() === "simplify");
-        if (args.length >= 3 && isSimplifyName(tail)) {
-          coordArgs = args.slice(0, args.length - 2);
-        }
+  // MATLAB's convhull reports arity errors with its own ids (checked below).
+  nargout: [0, Infinity],
+  apply: (args, nargout) => {
+    if (args.length === 0) throw badArgsError("convhull");
+    if (args.length > 5)
+      throw builtinError(
+        "MATLAB:convhull:WrongInputNumArgsErrId",
+        "Invalid number of input arguments."
+      );
+    if (nargout > 2)
+      throw builtinError(
+        "MATLAB:convhull:WrongOutputNumArgsErrId",
+        "Invalid number of output arguments."
+      );
+    const errs = builtinGeomErrors("convhull");
+    // Strip a trailing 'Simplify', tf name-value pair (accepted, ignored).
+    let coordArgs = args;
+    const tail = args[args.length - 2];
+    const isSimplifyName = (v: RuntimeValue) =>
+      (typeof v === "string" && v.toLowerCase() === "simplify") ||
+      (isRuntimeChar(v) && v.value.toLowerCase() === "simplify");
+    if (args.length >= 3 && isSimplifyName(tail)) {
+      coordArgs = args.slice(0, args.length - 2);
+    }
 
-        let points: number[][];
-        let dim: number;
-        if (coordArgs.length === 1) {
-          const P = coordArgs[0];
-          if (!isRuntimeTensor(P))
-            throw new RuntimeError(
-              "convhull: P must be an N-by-2 or N-by-3 matrix"
-            );
-          const [, d] = tensorSize2D(P);
-          if (d !== 2 && d !== 3)
-            throw new RuntimeError("convhull: P must have 2 or 3 columns");
-          points = matrixToPoints(P, "convhull");
-          dim = d;
-        } else if (coordArgs.length === 2 || coordArgs.length === 3) {
-          const coords = coordArgs.map(a => toFlatArray(a, "convhull"));
-          const n = coords[0].length;
-          if (coords.some(c => c.length !== n))
-            throw new RuntimeError(
-              "convhull: coordinate vectors must have the same length"
-            );
-          points = new Array(n);
-          for (let i = 0; i < n; i++) points[i] = coords.map(c => c[i]);
-          dim = coordArgs.length;
-        } else {
-          throw new RuntimeError("convhull: invalid arguments");
-        }
+    let points: number[][];
+    let dim: number;
+    if (coordArgs.length === 1) {
+      const P = realCoordArg(coordArgs[0], errs);
+      if (!isRuntimeTensor(P))
+        throw new RuntimeError(
+          "convhull: P must be an N-by-2 or N-by-3 matrix"
+        );
+      const [, d] = tensorSize2D(P);
+      if (d !== 2 && d !== 3)
+        throw new RuntimeError("convhull: P must have 2 or 3 columns");
+      points = matrixToPoints(P);
+      dim = d;
+    } else if (coordArgs.length === 2 || coordArgs.length === 3) {
+      const coords = coordArgs.map(a => toFlatArray(a, errs));
+      const n = coords[0].length;
+      if (coords.some(c => c.length !== n))
+        throw new RuntimeError(
+          "convhull: coordinate vectors must have the same length"
+        );
+      points = new Array(n);
+      for (let i = 0; i < n; i++) points[i] = coords.map(c => c[i]);
+      dim = coordArgs.length;
+    } else {
+      throw badArgsError("convhull");
+    }
 
-        if (points.length < dim + 1)
-          throw new RuntimeError(
-            `convhull: need at least ${dim + 1} points for a ${dim}-D hull`
-          );
+    if (points.length < dim + 1)
+      throw new RuntimeError(
+        `convhull: need at least ${dim + 1} points for a ${dim}-D hull`
+      );
 
-        const facets = convexHullFacets(points, dim, "convhull");
-        const k =
-          dim === 2 ? orderHull2D(facets, points) : facetsToTensor(facets, 3);
-        if (nargout > 1) return [k, hullMeasure(points, facets, dim)];
-        return k;
-      },
-    },
-  ],
+    const facets = convexHullFacets(points, dim, "convhull");
+    const k =
+      dim === 2 ? orderHull2D(facets, points) : facetsToTensor(facets, 3);
+    if (nargout > 1) return [k, hullMeasure(points, facets, dim)];
+    return k;
+  },
 });
 
-defineBuiltin({
+builtin({
   name: "convhulln",
   help: {
     signatures: [
@@ -506,58 +565,59 @@ defineBuiltin({
       "argument (Qhull options) is accepted for MATLAB compatibility but " +
       "ignored. Note: only n = 2 and n = 3 are supported (see source comments).",
   },
-  cases: [
-    {
-      match: (argTypes, nargout) => {
-        if (nargout > 2) return null;
-        if (argTypes.length < 1 || argTypes.length > 2) return null;
-        const x = argTypes[0];
-        if (x.kind !== "tensor" && x.kind !== "number" && x.kind !== "boolean")
-          return null;
-        const k: JitType = { kind: "tensor", isComplex: false };
-        return nargout > 1 ? [k, { kind: "number" }] : [k];
-      },
-      apply: (args, nargout) => {
-        const P = args[0];
-        if (!isRuntimeTensor(P))
-          throw new RuntimeError("convhulln: P must be an m-by-n matrix");
-        const [m, n] = tensorSize2D(P);
-        if (n < 2)
-          throw new RuntimeError("convhulln: P must have at least 2 columns");
-        if (n > CONVHULLN_MAX_DIM)
-          // Only n <= 3 is validated (parity with delaunayn).
-          throw new RuntimeError(
-            `convhulln: only 2-D and 3-D hulls are supported (got ${n}-D); ` +
-              `higher dimensions are not yet validated`
-          );
-        if (m < n + 1)
-          throw new RuntimeError(
-            `convhulln: need at least ${n + 1} points for a ${n}-D hull`
-          );
-        const points = matrixToPoints(P, "convhulln");
-        const facets = convexHullFacets(points, n, "convhulln");
-        const k = facetsToTensor(facets, n);
-        if (nargout > 1) return [k, hullMeasure(points, facets, n)];
-        return k;
-      },
-    },
-  ],
+  // P is required (checked below with MATLAB's id); opts is ignored.
+  nargin: [0, 2],
+  nargout: 2,
+  mfile: true,
+  apply: (args, nargout) => {
+    if (args.length === 0)
+      throw builtinError(
+        "MATLAB:convhulln:NotEnoughInputs",
+        "Needs at least 1 input."
+      );
+    const P = realCoordArg(args[0], CGPRECHECKS_ERRORS);
+    if (!isRuntimeTensor(P))
+      throw new RuntimeError("convhulln: P must be an m-by-n matrix");
+    const [m, n] = tensorSize2D(P);
+    if (n < 2)
+      throw new RuntimeError("convhulln: P must have at least 2 columns");
+    if (n > CONVHULLN_MAX_DIM)
+      // Only n <= 3 is validated (parity with delaunayn).
+      throw new RuntimeError(
+        `convhulln: only 2-D and 3-D hulls are supported (got ${n}-D); ` +
+          `higher dimensions are not yet validated`
+      );
+    if (m < n + 1)
+      throw new RuntimeError(
+        `convhulln: need at least ${n + 1} points for a ${n}-D hull`
+      );
+    const points = matrixToPoints(P);
+    const facets = convexHullFacets(points, n, "convhulln");
+    const k = facetsToTensor(facets, n);
+    if (nargout > 1) return [k, hullMeasure(points, facets, n)];
+    return k;
+  },
 });
 
 // ── inpolygon ────────────────────────────────────────────────────────────
 
 /** A query point's value and shape (shape is null for a scalar input). */
-function getQueryValues(
-  v: RuntimeValue,
-  name: string
-): { data: number[]; shape: number[] | null } {
-  if (typeof v === "number") return { data: [v], shape: null };
-  if (typeof v === "boolean") return { data: [v ? 1 : 0], shape: null };
-  if (isRuntimeTensor(v)) {
-    if (v.imag) throw new RuntimeError(`${name}: inputs must be real`);
-    return { data: Array.from(v.data), shape: [...v.shape] };
+function getQueryValues(v: RuntimeValue): {
+  data: number[];
+  shape: number[] | null;
+} {
+  // numericArg: logical -> double, char -> codes, other types rejected with
+  // MATLAB's invalid-data-type error. MATLAB's inpolygon silently uses the
+  // real part of complex input; numbl rejects it instead.
+  let a = numericArg(v);
+  if (typeof a === "number") return { data: [a], shape: null };
+  if (isRuntimeComplexNumber(a)) {
+    if (a.im !== 0) throw mustBeRealError();
+    return { data: [a.re], shape: null };
   }
-  throw new RuntimeError(`${name}: inputs must be numeric`);
+  if (isRuntimeSparseMatrix(a)) a = sparseToDense(a);
+  if (a.imag && !imagAllZero(a.imag)) throw mustBeRealError();
+  return { data: Array.from(a.data), shape: [...a.shape] };
 }
 
 /** Split NaN-separated vertices into closed loops (each a list of [x, y]). */
@@ -638,7 +698,7 @@ function classifyPoint(
   return { in: wn !== 0 || on, on };
 }
 
-defineBuiltin({
+builtin({
   name: "inpolygon",
   help: {
     signatures: [
@@ -652,61 +712,48 @@ defineBuiltin({
       "the edge. Use NaN to separate vertices of multiply connected or " +
       "disjoint polygons.",
   },
-  cases: [
-    {
-      match: (argTypes, nargout) => {
-        if (argTypes.length !== 4) return null;
-        const out: JitType = {
-          kind: "tensor",
-          isComplex: false,
-          isLogical: true,
-          shape: undefined,
-        };
-        return nargout > 1 ? [out, out] : [out];
-      },
-      apply: (args, nargout) => {
-        if (args.length !== 4)
-          throw new RuntimeError("inpolygon requires 4 arguments");
-        const xq = getQueryValues(args[0], "inpolygon");
-        const yq = getQueryValues(args[1], "inpolygon");
-        if (xq.data.length !== yq.data.length)
-          throw new RuntimeError("inpolygon: xq and yq must be the same size");
-        const xv = toFlatArray(args[2], "inpolygon");
-        const yv = toFlatArray(args[3], "inpolygon");
-        if (xv.length !== yv.length)
-          throw new RuntimeError("inpolygon: xv and yv must be the same size");
+  nargin: 4,
+  nargout: 2,
+  mfile: true,
+  apply: (args, nargout) => {
+    const xq = getQueryValues(args[0]);
+    const yq = getQueryValues(args[1]);
+    if (xq.data.length !== yq.data.length)
+      throw new RuntimeError("inpolygon: xq and yq must be the same size");
+    const xv = getQueryValues(args[2]).data;
+    const yv = getQueryValues(args[3]).data;
+    if (xv.length !== yv.length)
+      throw new RuntimeError("inpolygon: xv and yv must be the same size");
 
-        const loops = buildPolygonLoops(xv, yv);
+    const loops = buildPolygonLoops(xv, yv);
 
-        // Tolerance for the on-edge test, scaled to the polygon's magnitude
-        // (mirrors MATLAB, where `on` is a near-edge test, not exact equality).
-        let scale = 0;
-        for (let i = 0; i < xv.length; i++) {
-          if (Number.isFinite(xv[i])) scale = Math.max(scale, Math.abs(xv[i]));
-          if (Number.isFinite(yv[i])) scale = Math.max(scale, Math.abs(yv[i]));
-        }
-        const tol = Math.max(scale, 1) * Math.sqrt(Number.EPSILON);
+    // Tolerance for the on-edge test, scaled to the polygon's magnitude
+    // (mirrors MATLAB, where `on` is a near-edge test, not exact equality).
+    let scale = 0;
+    for (let i = 0; i < xv.length; i++) {
+      if (Number.isFinite(xv[i])) scale = Math.max(scale, Math.abs(xv[i]));
+      if (Number.isFinite(yv[i])) scale = Math.max(scale, Math.abs(yv[i]));
+    }
+    const tol = Math.max(scale, 1) * Math.sqrt(Number.EPSILON);
 
-        const n = xq.data.length;
-        const inData = allocFloat64Array(n);
-        const onData = nargout > 1 ? allocFloat64Array(n) : undefined;
-        for (let i = 0; i < n; i++) {
-          const r = classifyPoint(xq.data[i], yq.data[i], loops, tol);
-          inData[i] = r.in ? 1 : 0;
-          if (onData) onData[i] = r.on ? 1 : 0;
-        }
+    const n = xq.data.length;
+    const inData = allocFloat64Array(n);
+    const onData = nargout > 1 ? allocFloat64Array(n) : undefined;
+    for (let i = 0; i < n; i++) {
+      const r = classifyPoint(xq.data[i], yq.data[i], loops, tol);
+      inData[i] = r.in ? 1 : 0;
+      if (onData) onData[i] = r.on ? 1 : 0;
+    }
 
-        const makeOut = (data: Float64Array): RuntimeValue => {
-          if (xq.shape === null) return RTV.logical(data[0] !== 0);
-          const t = RTV.tensor(data, xq.shape) as RuntimeTensor;
-          t._isLogical = true;
-          return t;
-        };
+    const makeOut = (data: Float64Array): RuntimeValue => {
+      if (xq.shape === null) return RTV.logical(data[0] !== 0);
+      const t = RTV.tensor(data, xq.shape) as RuntimeTensor;
+      t._isLogical = true;
+      return t;
+    };
 
-        const inResult = makeOut(inData);
-        if (nargout > 1) return [inResult, makeOut(onData!)];
-        return inResult;
-      },
-    },
-  ],
+    const inResult = makeOut(inData);
+    if (nargout > 1) return [inResult, makeOut(onData!)];
+    return inResult;
+  },
 });

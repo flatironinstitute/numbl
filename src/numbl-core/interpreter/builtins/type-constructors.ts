@@ -26,11 +26,33 @@ import type {
   RuntimeStruct,
 } from "../../runtime/types.js";
 import { RTV, RuntimeError } from "../../runtime/index.js";
-import { toNumber, toBool, toString } from "../../runtime/convert.js";
-import type { JitType } from "../../jitTypes.js";
-import { defineBuiltin, registerIBuiltin, makeTensor } from "./types.js";
+import { toNumber, toString } from "../../runtime/convert.js";
+import { makeTensor, mkc } from "./types.js";
+import { builtin } from "./builtin.js";
+import { undefinedForTypeError, valueClassName } from "./value-class.js";
+import { builtinError } from "./args.js";
 import { allocFloat64Array } from "../../runtime/alloc.js";
 import { imagAllZero } from "../../helpers/effectively-real.js";
+import { charToNumericTensor } from "../../runtime/indexing.js";
+import { parseShapeArgs } from "../../helpers/shape-utils.js";
+
+// ── Shared helpers ──────────────────────────────────────────────────────
+
+/** MATLAB's "Conversion to <to> from <class> is not possible." */
+function invalidConversion(to: string, v: RuntimeValue): RuntimeError {
+  return builtinError(
+    "MATLAB:invalidConversion",
+    `Conversion to ${to} from ${valueClassName(v)} is not possible.`
+  );
+}
+
+/** The value underlying a built-in-derived class instance (enumeration
+ *  member) or an array of them; other values unchanged. */
+function underlyingValue(v: RuntimeValue): RuntimeValue {
+  if (isRuntimeClassInstance(v) && v._builtinData !== undefined)
+    return v._builtinData;
+  return classInstanceArrayNumeric(v) ?? v;
+}
 
 // ── double ──────────────────────────────────────────────────────────────
 
@@ -57,70 +79,43 @@ function parseDoubleText(s: string): number {
   return Number(t);
 }
 
-defineBuiltin({
+builtin({
   name: "double",
-  cases: [
-    {
-      match: argTypes => {
-        if (argTypes.length !== 1) return null;
-        const a = argTypes[0];
-        if (
-          a.kind === "number" ||
-          a.kind === "boolean" ||
-          a.kind === "char" ||
-          a.kind === "string" ||
-          a.kind === "unknown" ||
-          a.kind === "complex_or_number" ||
-          a.kind === "class_instance"
-        )
-          return [{ kind: "number" }];
-        if (a.kind === "tensor")
-          return [
-            {
-              kind: "tensor",
-              isComplex: a.isComplex,
-              shape: a.shape,
-              ndim: a.ndim,
-            },
-          ];
-        return null;
-      },
-      apply: args => {
-        const v = args[0];
-        if (isRuntimeChar(v)) {
-          if (v.value.length === 0)
-            return RTV.tensor(allocFloat64Array(0), [0, 0]);
-          if (v.value.length === 1) return RTV.num(v.value.charCodeAt(0));
-          const codes = Array.from(v.value).map(c => c.charCodeAt(0));
-          return RTV.row(codes);
-        }
-        // Strings convert by PARSING the text (unlike char code points);
-        // non-numeric text becomes NaN.
-        if (isRuntimeString(v)) return RTV.num(parseDoubleText(v));
-        if (isRuntimeStringArray(v)) {
-          return RTV.tensor(allocFloat64Array(v.data.map(parseDoubleText)), [
-            v.shape[0],
-            v.shape[1],
-          ]);
-        }
-        if (isRuntimeLogical(v)) return RTV.num(v ? 1 : 0);
-        if (isRuntimeNumber(v)) return v;
-        if (isRuntimeComplexNumber(v)) return v.re;
-        if (isRuntimeTensor(v)) {
-          if (v._isLogical) {
-            return RTV.tensor(allocFloat64Array(v.data), v.shape);
-          }
-          return v;
-        }
-        if (isRuntimeClassInstance(v) && v._builtinData !== undefined) {
-          return v._builtinData;
-        }
-        const arr = classInstanceArrayNumeric(v);
-        if (arr) return arr;
-        return RTV.num(toNumber(v));
-      },
-    },
-  ],
+  nargin: 1,
+  apply: args => {
+    const v = args[0];
+    if (isRuntimeChar(v)) {
+      if (v.value.length === 0) return RTV.tensor(allocFloat64Array(0), [0, 0]);
+      if (v.value.length === 1) return RTV.num(v.value.charCodeAt(0));
+      const codes = Array.from(v.value).map(c => c.charCodeAt(0));
+      return RTV.row(codes);
+    }
+    // Strings convert by PARSING the text (unlike char code points);
+    // non-numeric text becomes NaN.
+    if (isRuntimeString(v)) return RTV.num(parseDoubleText(v));
+    if (isRuntimeStringArray(v)) {
+      return RTV.tensor(allocFloat64Array(v.data.map(parseDoubleText)), [
+        v.shape[0],
+        v.shape[1],
+      ]);
+    }
+    if (isRuntimeLogical(v)) return RTV.num(v ? 1 : 0);
+    if (isRuntimeNumber(v)) return v;
+    if (isRuntimeComplexNumber(v)) return v;
+    if (isRuntimeSparseMatrix(v)) return v;
+    if (isRuntimeTensor(v)) {
+      if (v._isLogical) {
+        return RTV.tensor(allocFloat64Array(v.data), v.shape);
+      }
+      return v;
+    }
+    if (isRuntimeClassInstance(v) && v._builtinData !== undefined) {
+      return v._builtinData;
+    }
+    const arr = classInstanceArrayNumeric(v);
+    if (arr) return arr;
+    throw invalidConversion("double", v);
+  },
 });
 
 // ── single ──────────────────────────────────────────────────────────────
@@ -156,39 +151,15 @@ function singleApply(v: RuntimeValue): RuntimeValue {
     return singleApply(v._builtinData);
   const arr = classInstanceArrayNumeric(v);
   if (arr) return singleApply(arr);
-  return RTV.num(Math.fround(toNumber(v)));
+  if (isRuntimeSparseMatrix(v))
+    throw new RuntimeError("single: sparse input is not supported");
+  throw invalidConversion("single", v);
 }
 
-defineBuiltin({
+builtin({
   name: "single",
-  cases: [
-    {
-      match: argTypes => {
-        if (argTypes.length !== 1) return null;
-        const a = argTypes[0];
-        if (
-          a.kind === "number" ||
-          a.kind === "boolean" ||
-          a.kind === "char" ||
-          a.kind === "class_instance"
-        )
-          return [{ kind: "number" }];
-        if (a.kind === "complex_or_number")
-          return [{ kind: "complex_or_number" }];
-        if (a.kind === "tensor")
-          return [
-            {
-              kind: "tensor",
-              isComplex: a.isComplex,
-              shape: a.shape,
-              ndim: a.ndim,
-            },
-          ];
-        return null;
-      },
-      apply: args => singleApply(args[0]),
-    },
-  ],
+  nargin: 1,
+  apply: args => singleApply(args[0]),
 });
 
 // ── Integer types ───────────────────────────────────────────────────────
@@ -233,69 +204,45 @@ function saturateRoundToward(x: number, min: number, max: number): number {
 }
 
 for (const { name, min, max } of INT_RANGES) {
-  defineBuiltin({
+  const sat = (x: number) => saturateRoundToward(x, min, max);
+  builtin({
     name,
-    cases: [
-      {
-        match: argTypes => {
-          if (argTypes.length !== 1) return null;
-          const a = argTypes[0];
-          if (
-            a.kind === "number" ||
-            a.kind === "boolean" ||
-            a.kind === "char" ||
-            a.kind === "complex_or_number" ||
-            a.kind === "class_instance"
-          )
-            return [{ kind: "number" }];
-          if (a.kind === "tensor")
-            return [
-              {
-                kind: "tensor",
-                isComplex: false,
-                shape: a.shape,
-                ndim: a.ndim,
-              },
-            ];
-          return null;
-        },
-        apply: args => {
-          // Enumeration member / built-in-derived instance → its underlying
-          // value (e.g. `uint32(patchtype.tri)` → the stored uint32).
-          const v =
-            isRuntimeClassInstance(args[0]) &&
-            args[0]._builtinData !== undefined
-              ? args[0]._builtinData
-              : (classInstanceArrayNumeric(args[0]) ?? args[0]);
-          if (isRuntimeNumber(v))
-            return RTV.num(saturateRoundToward(v as number, min, max));
-          if (isRuntimeLogical(v)) return RTV.num(v ? 1 : 0);
-          if (isRuntimeComplexNumber(v))
-            return RTV.num(saturateRoundToward(v.re, min, max));
-          if (isRuntimeChar(v)) {
-            if (v.value.length === 0)
-              return RTV.tensor(allocFloat64Array(0), [0, 0]);
-            if (v.value.length === 1)
-              return RTV.num(
-                saturateRoundToward(v.value.charCodeAt(0), min, max)
-              );
-            const out = allocFloat64Array(v.value.length);
-            for (let i = 0; i < v.value.length; i++) {
-              out[i] = saturateRoundToward(v.value.charCodeAt(i), min, max);
-            }
-            return RTV.row(Array.from(out));
-          }
-          if (isRuntimeTensor(v)) {
-            const data = allocFloat64Array(v.data.length);
-            for (let i = 0; i < v.data.length; i++) {
-              data[i] = saturateRoundToward(v.data[i], min, max);
-            }
-            return RTV.tensor(data, [...v.shape]);
-          }
-          return RTV.num(saturateRoundToward(toNumber(v), min, max));
-        },
-      },
-    ],
+    nargin: 1,
+    apply: args => {
+      // Enumeration member / built-in-derived instance → its underlying
+      // value (e.g. `uint32(patchtype.tri)` → the stored uint32).
+      const v = underlyingValue(args[0]);
+      if (isRuntimeNumber(v)) return RTV.num(sat(v));
+      if (isRuntimeLogical(v)) return RTV.num(v ? 1 : 0);
+      // Complex values keep their (rounded, saturated) imaginary part.
+      if (isRuntimeComplexNumber(v)) return mkc(sat(v.re), sat(v.im));
+      if (isRuntimeChar(v)) {
+        if (v.value.length === 0)
+          return RTV.tensor(allocFloat64Array(0), [0, 0]);
+        if (v.value.length === 1) return RTV.num(sat(v.value.charCodeAt(0)));
+        const out = allocFloat64Array(v.value.length);
+        for (let i = 0; i < v.value.length; i++) {
+          out[i] = sat(v.value.charCodeAt(i));
+        }
+        return RTV.row(Array.from(out));
+      }
+      if (isRuntimeTensor(v)) {
+        const data = allocFloat64Array(v.data.length);
+        for (let i = 0; i < v.data.length; i++) data[i] = sat(v.data[i]);
+        let imag: Float64Array | undefined;
+        if (v.imag && !imagAllZero(v.imag)) {
+          imag = allocFloat64Array(v.data.length);
+          for (let i = 0; i < v.data.length; i++) imag[i] = sat(v.imag[i]);
+        }
+        return RTV.tensor(data, [...v.shape], imag);
+      }
+      if (isRuntimeSparseMatrix(v))
+        throw builtinError(
+          "MATLAB:unimplementedSparseType",
+          "Attempt to convert to unimplemented sparse type"
+        );
+      throw invalidConversion(name, v);
+    },
   });
 }
 
@@ -323,57 +270,66 @@ const TYPECAST_VIEWS: Record<
   double: b => new Float64Array(b),
 };
 
-defineBuiltin({
+builtin({
   name: "typecast",
   help: {
     signatures: ["B = typecast(X, CLASS)"],
     description:
       "Reinterpret the raw bytes of numeric array X as CLASS (e.g. 'uint8', 'single', 'int32'). numbl stores all numerics as double, so X is treated as double-precision; this is mainly for serializing numeric data to bytes, e.g. typecast(double(x), 'uint8').",
   },
-  cases: [
-    {
-      match: argTypes => {
-        if (argTypes.length !== 2) return null;
-        const a = argTypes[0];
-        if (
-          a.kind === "number" ||
-          a.kind === "boolean" ||
-          a.kind === "tensor" ||
-          a.kind === "complex_or_number"
-        )
-          return [{ kind: "tensor", isComplex: false }];
-        return null;
-      },
-      apply: args => {
-        const X = args[0];
-        const cls = toString(args[1]).toLowerCase();
-        const makeView = TYPECAST_VIEWS[cls];
-        if (!makeView)
-          throw new RuntimeError(`typecast: unsupported class '${cls}'`);
+  nargin: 2,
+  apply: args => {
+    const X = args[0];
+    const clsArg = args[1];
+    if (!isRuntimeChar(clsArg) && !isRuntimeString(clsArg))
+      throw builtinError(
+        "MATLAB:typecast:invalidSyntax",
+        "Second argument must be either a character row vector or string scalar."
+      );
+    const cls = toString(clsArg).toLowerCase();
 
-        let src: Float64Array;
-        if (isRuntimeNumber(X)) src = Float64Array.of(X);
-        else if (isRuntimeLogical(X)) src = Float64Array.of(X ? 1 : 0);
-        else if (isRuntimeTensor(X)) {
-          if (X.imag)
-            throw new RuntimeError("typecast: complex input not supported");
-          src = X.data;
-        } else {
-          throw new RuntimeError("typecast: X must be a numeric array");
-        }
+    let src: Float64Array;
+    if (isRuntimeNumber(X)) src = Float64Array.of(X);
+    else if (isRuntimeLogical(X)) src = Float64Array.of(X ? 1 : 0);
+    else if (isRuntimeTensor(X)) {
+      if (X.imag && !imagAllZero(X.imag))
+        throw new RuntimeError("typecast: complex input not supported");
+      src = X.data;
+    } else if (isRuntimeComplexNumber(X)) {
+      if (X.im !== 0)
+        throw new RuntimeError("typecast: complex input not supported");
+      src = Float64Array.of(X.re);
+    } else if (isRuntimeChar(X)) {
+      throw new RuntimeError("typecast: char input is not supported");
+    } else {
+      throw builtinError(
+        "MATLAB:typecast:mustBeNumericCharOrLogical",
+        "First argument must be numeric, char, or logical."
+      );
+    }
 
-        // Copy to a tightly-packed buffer so the typed-array view is aligned.
-        const buffer = src.buffer.slice(
-          src.byteOffset,
-          src.byteOffset + src.byteLength
+    const makeView = TYPECAST_VIEWS[cls];
+    if (!makeView) {
+      if (cls === "int64" || cls === "uint64")
+        throw new RuntimeError(
+          `typecast: conversion to '${cls}' is not supported`
         );
-        const view = makeView(buffer);
-        const out = allocFloat64Array(view.length);
-        for (let i = 0; i < view.length; i++) out[i] = view[i];
-        return RTV.tensor(out, [1, view.length]);
-      },
-    },
-  ],
+      throw builtinError(
+        "MATLAB:typecast:unsupportedClass",
+        `Data conversion from 'double' to '${toString(clsArg)}' is not supported.`
+      );
+    }
+
+    // Copy to a tightly-packed buffer so the typed-array view is aligned.
+    const buffer = src.buffer.slice(
+      src.byteOffset,
+      src.byteOffset + src.byteLength
+    );
+    const view = makeView(buffer);
+    const out = allocFloat64Array(view.length);
+    for (let i = 0; i < view.length; i++) out[i] = view[i];
+    return RTV.tensor(out, [1, view.length]);
+  },
 });
 
 // ── jsonencode ──────────────────────────────────────────────────────────
@@ -385,8 +341,14 @@ defineBuiltin({
 // Non-finite numbers (NaN/Inf) are emitted as null to keep the output valid
 // JSON.
 
+/** jsonencode's ConvertInfAndNaN option: when false, non-finite numbers
+ *  are written as NaN / Infinity / -Infinity instead of null. */
+let jsonConvertInfAndNaN = true;
+
 function jsonEncodeNumber(x: number): string {
-  return Number.isFinite(x) ? String(x) : "null";
+  if (Number.isFinite(x)) return String(x);
+  if (jsonConvertInfAndNaN) return "null";
+  return Number.isNaN(x) ? "NaN" : x > 0 ? "Infinity" : "-Infinity";
 }
 
 function jsonEncodeTensor(v: RuntimeTensor): string {
@@ -477,22 +439,63 @@ function jsonEncodeValue(v: RuntimeValue): string {
   throw new RuntimeError("jsonencode: unsupported value type");
 }
 
-defineBuiltin({
+/** jsonencode's name-value options. PrettyPrint is accepted only when
+ *  false. Returns the ConvertInfAndNaN setting. */
+function jsonencodeOptions(opts: RuntimeValue[]): boolean {
+  let convert = true;
+  for (let i = 0; i < opts.length; i += 2) {
+    const nameArg = opts[i];
+    const name =
+      isRuntimeChar(nameArg) || isRuntimeString(nameArg)
+        ? toString(nameArg)
+        : "";
+    if (name !== "ConvertInfAndNaN" && name !== "PrettyPrint")
+      throw builtinError(
+        "MATLAB:json:UnmatchedParameter",
+        "Name argument must be 'ConvertInfAndNaN' or 'PrettyPrint'."
+      );
+    if (i + 1 >= opts.length)
+      throw builtinError(
+        "MATLAB:json:ParamMissingValue",
+        `Name '${name}' requires a value.`
+      );
+    const v = opts[i + 1];
+    let flag: boolean;
+    if (typeof v === "boolean") flag = v;
+    else if (typeof v === "number" && (v === 0 || v === 1)) flag = v === 1;
+    else
+      throw builtinError(
+        "MATLAB:json:InvalidValueType",
+        `Value type must be logical scalar for name '${name}'.`
+      );
+    if (name === "ConvertInfAndNaN") convert = flag;
+    else if (flag)
+      throw new RuntimeError("jsonencode: 'PrettyPrint' is not supported");
+  }
+  return convert;
+}
+
+builtin({
   name: "jsonencode",
   help: {
-    signatures: ["txt = jsonencode(V)"],
+    signatures: [
+      "txt = jsonencode(V)",
+      "txt = jsonencode(V, 'ConvertInfAndNaN', TF)",
+    ],
     description:
-      "Encode value V (struct, cell, char/string, logical, or numeric array) as a JSON-formatted char row vector.",
+      "Encode value V (struct, cell, char/string, logical, or numeric array) as a JSON-formatted char row vector. NaN and Inf are written as null unless ConvertInfAndNaN is false.",
   },
-  cases: [
-    {
-      match: argTypes => {
-        if (argTypes.length < 1) return null;
-        return [{ kind: "char" }];
-      },
-      apply: args => RTV.char(jsonEncodeValue(args[0])),
-    },
-  ],
+  nargin: [1, 5],
+  apply: args => {
+    const convert = jsonencodeOptions(args.slice(1));
+    const saved = jsonConvertInfAndNaN;
+    jsonConvertInfAndNaN = convert;
+    try {
+      return RTV.char(jsonEncodeValue(args[0]));
+    } finally {
+      jsonConvertInfAndNaN = saved;
+    }
+  },
 });
 
 // ── idivide ─────────────────────────────────────────────────────────────
@@ -508,475 +511,431 @@ type IdivMode = "fix" | "floor" | "ceil" | "round";
 function idivideMode(args: RuntimeValue[]): IdivMode {
   if (args.length < 3) return "fix";
   const m = args[2];
-  if (!isRuntimeChar(m))
-    throw new RuntimeError("idivide: OPT argument must be a string");
-  const s = m.value;
+  const s = isRuntimeChar(m) || isRuntimeString(m) ? toString(m) : "";
   if (s === "fix" || s === "floor" || s === "ceil" || s === "round") return s;
-  throw new RuntimeError(
-    "idivide: OPT must be 'fix', 'floor', 'ceil', or 'round'"
+  throw builtinError(
+    "MATLAB:idivide:InvalidRoundingOption",
+    "Unrecognized rounding option."
   );
 }
 
-defineBuiltin({
+/** An idivide operand as a real number or real tensor. */
+function idivideOperand(v: RuntimeValue): number | RuntimeTensor {
+  if (typeof v === "number") return v;
+  if (typeof v === "boolean") return v ? 1 : 0;
+  const complexErr = () =>
+    builtinError(
+      "MATLAB:idivide:complexInts",
+      "Complex integer arithmetic is not supported."
+    );
+  if (isRuntimeComplexNumber(v)) {
+    if (v.im !== 0) throw complexErr();
+    return v.re;
+  }
+  if (isRuntimeTensor(v)) {
+    if (v.imag) {
+      if (!imagAllZero(v.imag)) throw complexErr();
+      return RTV.tensor(v.data, v.shape) as RuntimeTensor;
+    }
+    return v;
+  }
+  throw new RuntimeError("idivide: arguments must be numeric");
+}
+
+builtin({
   name: "idivide",
-  cases: [
-    {
-      match: argTypes => {
-        if (argTypes.length < 2 || argTypes.length > 3) return null;
-        return [{ kind: "unknown" }];
-      },
-      apply: args => {
-        const mode = idivideMode(args);
-        const divFn = ((): ((a: number, b: number) => number) => {
-          switch (mode) {
-            case "fix":
-              return (a, b) => {
-                if (b === 0) return 0;
-                const q = a / b;
-                return q >= 0 ? Math.floor(q) : -Math.floor(-q);
-              };
-            case "floor":
-              return (a, b) => (b === 0 ? 0 : Math.floor(a / b));
-            case "ceil":
-              return (a, b) => (b === 0 ? 0 : Math.ceil(a / b));
-            case "round":
-              return (a, b) => {
-                if (b === 0) return 0;
-                // MATLAB round: ties away from zero.
-                const q = a / b;
-                return q >= 0 ? Math.floor(q + 0.5) : -Math.floor(-q + 0.5);
-              };
-          }
-        })();
-        const a = args[0];
-        const b = args[1];
-        if (isRuntimeNumber(a) && isRuntimeNumber(b)) {
-          return RTV.num(divFn(a as number, b as number));
-        }
-        if (isRuntimeTensor(a) && isRuntimeNumber(b)) {
-          const bv = b as number;
-          const data = allocFloat64Array(a.data.length);
-          for (let i = 0; i < a.data.length; i++)
-            data[i] = divFn(a.data[i], bv);
-          return RTV.tensor(data, [...a.shape]);
-        }
-        if (isRuntimeNumber(a) && isRuntimeTensor(b)) {
-          const av = a as number;
-          const data = allocFloat64Array(b.data.length);
-          for (let i = 0; i < b.data.length; i++)
-            data[i] = divFn(av, b.data[i]);
-          return RTV.tensor(data, [...b.shape]);
-        }
-        if (isRuntimeTensor(a) && isRuntimeTensor(b)) {
-          if (a.data.length !== b.data.length)
-            throw new RuntimeError("idivide: arrays must be the same size");
-          const data = allocFloat64Array(a.data.length);
-          for (let i = 0; i < a.data.length; i++)
-            data[i] = divFn(a.data[i], b.data[i]);
-          return RTV.tensor(data, [...a.shape]);
-        }
-        throw new RuntimeError("idivide: arguments must be numeric");
-      },
-    },
-  ],
+  nargin: [2, 3],
+  mfile: true,
+  apply: args => {
+    const mode = idivideMode(args);
+    const divFn = ((): ((a: number, b: number) => number) => {
+      switch (mode) {
+        case "fix":
+          return (a, b) => {
+            if (b === 0) return 0;
+            const q = a / b;
+            return q >= 0 ? Math.floor(q) : -Math.floor(-q);
+          };
+        case "floor":
+          return (a, b) => (b === 0 ? 0 : Math.floor(a / b));
+        case "ceil":
+          return (a, b) => (b === 0 ? 0 : Math.ceil(a / b));
+        case "round":
+          return (a, b) => {
+            if (b === 0) return 0;
+            // MATLAB round: ties away from zero.
+            const q = a / b;
+            return q >= 0 ? Math.floor(q + 0.5) : -Math.floor(-q + 0.5);
+          };
+      }
+    })();
+    const a = idivideOperand(args[0]);
+    const b = idivideOperand(args[1]);
+    if (isRuntimeNumber(a) && isRuntimeNumber(b)) {
+      return RTV.num(divFn(a, b));
+    }
+    if (isRuntimeTensor(a) && isRuntimeNumber(b)) {
+      const bv = b;
+      const data = allocFloat64Array(a.data.length);
+      for (let i = 0; i < a.data.length; i++) data[i] = divFn(a.data[i], bv);
+      return RTV.tensor(data, [...a.shape]);
+    }
+    if (isRuntimeNumber(a) && isRuntimeTensor(b)) {
+      const av = a;
+      const data = allocFloat64Array(b.data.length);
+      for (let i = 0; i < b.data.length; i++) data[i] = divFn(av, b.data[i]);
+      return RTV.tensor(data, [...b.shape]);
+    }
+    if (isRuntimeTensor(a) && isRuntimeTensor(b)) {
+      if (a.data.length !== b.data.length)
+        throw new RuntimeError("idivide: arrays must be the same size");
+      const data = allocFloat64Array(a.data.length);
+      for (let i = 0; i < a.data.length; i++)
+        data[i] = divFn(a.data[i], b.data[i]);
+      return RTV.tensor(data, [...a.shape]);
+    }
+    throw new RuntimeError("idivide: arguments must be numeric");
+  },
 });
 
 // ── logical ─────────────────────────────────────────────────────────────
 
-defineBuiltin({
+/** One element converted to logical, rejecting NaN as MATLAB does. */
+function toLogicalElem(x: number): number {
+  if (Number.isNaN(x))
+    throw builtinError(
+      "MATLAB:nologicalnan",
+      "NaN values cannot be converted to logicals."
+    );
+  return x !== 0 ? 1 : 0;
+}
+
+builtin({
   name: "logical",
-  cases: [
-    {
-      match: argTypes => {
-        if (argTypes.length !== 1) return null;
-        const a = argTypes[0];
-        if (
-          a.kind === "number" ||
-          a.kind === "boolean" ||
-          a.kind === "class_instance"
-        )
-          return [{ kind: "boolean" }];
-        if (a.kind === "tensor")
-          return [
-            {
-              kind: "tensor",
-              isComplex: false,
-              isLogical: true,
-              shape: a.shape,
-              ndim: a.ndim,
-            },
-          ];
-        return null;
-      },
-      apply: args => {
-        // Enumeration member with a `logical` superclass → underlying value.
-        const v =
-          isRuntimeClassInstance(args[0]) && args[0]._builtinData !== undefined
-            ? args[0]._builtinData
-            : (classInstanceArrayNumeric(args[0]) ?? args[0]);
-        if (isRuntimeTensor(v)) {
-          const result = allocFloat64Array(v.data.length);
-          for (let i = 0; i < v.data.length; i++) {
-            result[i] = v.data[i] !== 0 ? 1 : 0;
-          }
-          const t = RTV.tensor(result, v.shape);
-          t._isLogical = true;
-          return t;
-        }
-        return RTV.logical(toBool(v));
-      },
-    },
-  ],
+  nargin: 1,
+  apply: args => {
+    // Enumeration member with a `logical` superclass → underlying value.
+    let v = underlyingValue(args[0]);
+    const complexErr = () =>
+      builtinError(
+        "MATLAB:nologicalcomplex",
+        "Complex values cannot be converted to logicals."
+      );
+    if (typeof v === "boolean") return v;
+    if (typeof v === "number") return toLogicalElem(v) === 1;
+    if (isRuntimeComplexNumber(v)) throw complexErr();
+    if (isRuntimeChar(v)) {
+      if (v.value.length === 1) return v.value.charCodeAt(0) !== 0;
+      v = charToNumericTensor(v);
+    }
+    if (isRuntimeTensor(v)) {
+      if (v.imag && !imagAllZero(v.imag)) throw complexErr();
+      const result = allocFloat64Array(v.data.length);
+      for (let i = 0; i < v.data.length; i++) {
+        result[i] = toLogicalElem(v.data[i]);
+      }
+      const t = RTV.tensor(result, v.shape);
+      t._isLogical = true;
+      return t;
+    }
+    if (isRuntimeSparseMatrix(v))
+      throw new RuntimeError("logical: sparse input is not supported");
+    throw invalidConversion("logical", v);
+  },
 });
 
 // ── complex ─────────────────────────────────────────────────────────────
 
-defineBuiltin({
+/** A real part / imaginary part operand of complex(a, b): a real number or
+ *  a real tensor (chars become their codes, logicals 0/1). */
+function complexPart(
+  v: RuntimeValue,
+  which: "realPart" | "imagPart"
+): number | RuntimeTensor {
+  const err = () =>
+    builtinError(
+      `MATLAB:complex:${which}InputNonNumericOrNonReal`,
+      `Input for ${which === "realPart" ? "real" : "imaginary"} part must be a real numeric value.`
+    );
+  if (typeof v === "number") return v;
+  if (typeof v === "boolean") return v ? 1 : 0;
+  if (isRuntimeChar(v))
+    return v.value.length === 1
+      ? v.value.charCodeAt(0)
+      : charToNumericTensor(v);
+  if (isRuntimeComplexNumber(v)) {
+    if (v.im !== 0) throw err();
+    return v.re;
+  }
+  if (isRuntimeTensor(v)) {
+    if (v.imag && !imagAllZero(v.imag)) throw err();
+    return v;
+  }
+  if (isRuntimeSparseMatrix(v))
+    throw new RuntimeError("complex: sparse input is not supported");
+  throw err();
+}
+
+builtin({
   name: "complex",
-  cases: [
-    // complex(a) — ensure complex
-    {
-      match: argTypes => {
-        if (argTypes.length !== 1) return null;
-        const a = argTypes[0];
-        if (
-          a.kind === "number" ||
-          a.kind === "boolean" ||
-          a.kind === "complex_or_number"
-        )
-          return [{ kind: "complex_or_number" }];
-        if (a.kind === "tensor")
-          return [
-            { kind: "tensor", isComplex: true, shape: a.shape, ndim: a.ndim },
-          ];
-        return null;
-      },
-      apply: args => {
-        const a = args[0];
-        if (isRuntimeComplexNumber(a)) return a;
-        if (isRuntimeNumber(a)) return RTV.complex(a, 0);
-        if (isRuntimeLogical(a)) return RTV.complex(a ? 1 : 0, 0);
-        if (isRuntimeTensor(a)) {
-          const im = a.imag || allocFloat64Array(a.data.length);
-          return makeTensor(
-            allocFloat64Array(a.data),
-            allocFloat64Array(im),
-            a.shape.slice()
-          );
-        }
-        throw new RuntimeError("complex requires numeric arguments");
-      },
-    },
-    // complex(a, b) — a + bi
-    {
-      match: argTypes => {
-        if (argTypes.length !== 2) return null;
-        const [a, b] = argTypes;
-        const scalarA =
-          a.kind === "number" ||
-          a.kind === "boolean" ||
-          a.kind === "complex_or_number";
-        const scalarB =
-          b.kind === "number" ||
-          b.kind === "boolean" ||
-          b.kind === "complex_or_number";
-        if (scalarA && scalarB) return [{ kind: "complex_or_number" }];
-        // At least one tensor
-        if (a.kind === "tensor" || b.kind === "tensor") {
-          const shape =
-            a.kind === "tensor"
-              ? a.shape
-              : (b as Extract<JitType, { kind: "tensor" }>).shape;
-          return [{ kind: "tensor", isComplex: true, shape }];
-        }
-        return null;
-      },
-      apply: args => {
-        const [a, b] = args;
-        if (
-          (isRuntimeNumber(a) || isRuntimeLogical(a)) &&
-          (isRuntimeNumber(b) || isRuntimeLogical(b))
-        ) {
-          const re = isRuntimeLogical(a) ? (a ? 1 : 0) : (a as number);
-          const im = isRuntimeLogical(b) ? (b ? 1 : 0) : (b as number);
-          return RTV.complex(re, im);
-        }
-        // Tensor cases
-        if (isRuntimeTensor(a) || isRuntimeTensor(b)) {
-          const aIsT = isRuntimeTensor(a);
-          const bIsT = isRuntimeTensor(b);
-          const aData = aIsT ? (a as RuntimeTensor).data : null;
-          const bData = bIsT ? (b as RuntimeTensor).data : null;
-          const shape = aIsT
-            ? (a as RuntimeTensor).shape
-            : (b as RuntimeTensor).shape;
-          const len = aIsT
-            ? (a as RuntimeTensor).data.length
-            : (b as RuntimeTensor).data.length;
-          const reArr = allocFloat64Array(len);
-          const imArr = allocFloat64Array(len);
-          const aScalar = !aIsT ? toNumber(a) : 0;
-          const bScalar = !bIsT ? toNumber(b) : 0;
-          for (let i = 0; i < len; i++) {
-            reArr[i] = aData ? aData[i] : aScalar;
-            imArr[i] = bData ? bData[i] : bScalar;
-          }
-          return makeTensor(reArr, imArr, shape.slice());
-        }
-        throw new RuntimeError("complex requires numeric arguments");
-      },
-    },
-  ],
+  nargin: [1, 2],
+  apply: args => {
+    if (args.length === 1) {
+      // complex(a) — ensure complex
+      let a = args[0];
+      if (isRuntimeComplexNumber(a)) return a;
+      if (isRuntimeChar(a))
+        a =
+          a.value.length === 1 ? a.value.charCodeAt(0) : charToNumericTensor(a);
+      if (isRuntimeNumber(a)) return RTV.complex(a, 0);
+      if (isRuntimeLogical(a)) return RTV.complex(a ? 1 : 0, 0);
+      if (isRuntimeTensor(a)) {
+        const im = a.imag || allocFloat64Array(a.data.length);
+        return makeTensor(
+          allocFloat64Array(a.data),
+          allocFloat64Array(im),
+          a.shape.slice()
+        );
+      }
+      if (isRuntimeSparseMatrix(a))
+        throw new RuntimeError("complex: sparse input is not supported");
+      throw builtinError(
+        "MATLAB:complex:expectsNumeric",
+        "First input must be numeric."
+      );
+    }
+    // complex(a, b) — a + bi. A one-element array counts as a scalar.
+    const asScalar = (x: number | RuntimeTensor) =>
+      typeof x === "number" ? x : x.data.length === 1 ? x.data[0] : x;
+    const a = asScalar(complexPart(args[0], "realPart"));
+    const b = asScalar(complexPart(args[1], "imagPart"));
+    if (typeof a === "number" && typeof b === "number")
+      return RTV.complex(a, b);
+    if (
+      typeof a !== "number" &&
+      typeof b !== "number" &&
+      (a.data.length !== b.data.length ||
+        a.shape.length !== b.shape.length ||
+        a.shape.some((d, i) => d !== b.shape[i]))
+    )
+      throw builtinError(
+        "MATLAB:complex:inputSizeMismatch",
+        "Input arrays must have the same size."
+      );
+    const ref = (typeof a !== "number" ? a : b) as RuntimeTensor;
+    const len = ref.data.length;
+    const reArr = allocFloat64Array(len);
+    const imArr = allocFloat64Array(len);
+    for (let i = 0; i < len; i++) {
+      reArr[i] = typeof a === "number" ? a : a.data[i];
+      imArr[i] = typeof b === "number" ? b : b.data[i];
+    }
+    return makeTensor(reArr, imArr, ref.shape.slice());
+  },
 });
 
 // ── cell ────────────────────────────────────────────────────────────────
 
-defineBuiltin({
+/** One cell() size argument, checked as MATLAB does. */
+function cellSizeArg(v: RuntimeValue): RuntimeValue {
+  if (typeof v === "number") return v;
+  if (isRuntimeTensor(v) && !v._isLogical) {
+    if (v.imag && !imagAllZero(v.imag))
+      throw builtinError(
+        "MATLAB:obsoleteComplexInput",
+        "Size inputs must be real."
+      );
+    return v;
+  }
+  if (isRuntimeComplexNumber(v))
+    throw builtinError(
+      "MATLAB:obsoleteComplexInput",
+      "Size inputs must be real."
+    );
+  throw invalidConversion("cell", v);
+}
+
+builtin({
   name: "cell",
-  cases: [
-    {
-      match: argTypes => {
-        // cell(), cell(n), cell(m,n,...), cell([m,n,...])
-        if (argTypes.length === 0) return [{ kind: "unknown" }];
-        for (const a of argTypes) {
-          if (
-            a.kind !== "number" &&
-            a.kind !== "boolean" &&
-            a.kind !== "tensor"
-          )
-            return null;
-        }
-        return [{ kind: "unknown" }];
-      },
-      apply: args => {
-        if (args.length === 0) return RTV.cell([], [0, 0]);
-        let dims: number[];
-        if (args.length === 1) {
-          const arg = args[0];
-          if (isRuntimeTensor(arg) && arg.data.length > 1) {
-            dims = Array.from(arg.data).map(d => Math.round(d));
-          } else {
-            const n = Math.round(toNumber(arg));
-            dims = [n, n];
-          }
-        } else {
-          dims = args.map(a => Math.round(toNumber(a)));
-        }
-        dims = dims.map(d => Math.max(d, 0));
-        while (dims.length > 2 && dims[dims.length - 1] === 1) dims.pop();
-        const total = dims.reduce((a, b) => a * b, 1);
-        const data: RuntimeValue[] = new Array(total);
-        for (let i = 0; i < total; i++)
-          data[i] = RTV.tensor(allocFloat64Array(0), [0, 0]);
-        return RTV.cell(data, dims);
-      },
-    },
-  ],
+  nargin: [1, Infinity],
+  apply: args => {
+    if (args.length === 1 && isRuntimeCell(args[0])) return args[0];
+    const sizeArgs = args.map(cellSizeArg);
+    let dims = parseShapeArgs(sizeArgs);
+    if (dims.length === 0) dims = [0, 0];
+    else if (dims.length === 1) dims = [dims[0], dims[0]];
+    while (dims.length > 2 && dims[dims.length - 1] === 1) dims.pop();
+    const total = dims.reduce((a, b) => a * b, 1);
+    const data: RuntimeValue[] = new Array(total);
+    for (let i = 0; i < total; i++)
+      data[i] = RTV.tensor(allocFloat64Array(0), [0, 0]);
+    return RTV.cell(data, dims);
+  },
 });
 
 // ── struct ──────────────────────────────────────────────────────────────
 
-defineBuiltin({
+builtin({
   name: "struct",
-  cases: [
-    {
-      match: argTypes => {
-        // struct() or struct([]) or struct(field, value, ...)
-        if (argTypes.length === 0) return [{ kind: "struct", fields: {} }];
-        if (argTypes.length === 1 && argTypes[0].kind === "tensor")
-          return [{ kind: "struct", fields: {} }];
-        if (argTypes.length % 2 !== 0) return null;
-        // Verify field names are strings/chars
-        for (let i = 0; i < argTypes.length; i += 2) {
-          const k = argTypes[i].kind;
-          if (k !== "string" && k !== "char") return null;
+  apply: args => {
+    if (args.length === 0) return RTV.struct(new Map());
+    if (args.length === 1) {
+      const a = args[0];
+      // struct(s) returns s.
+      if (isRuntimeStruct(a) || isRuntimeStructArray(a)) return a;
+      // struct([]) → 0x0 empty struct array with no fields
+      if (isRuntimeTensor(a) && a.data.length === 0)
+        return RTV.structArray([], []);
+      if (isRuntimeClassInstance(a) || isRuntimeClassInstanceArray(a))
+        throw new RuntimeError("struct: object input is not supported");
+      throw invalidConversion("struct", a);
+    }
+    if (args.length % 2 !== 0)
+      throw builtinError(
+        "MATLAB:StructConversion:NonPairedArgs",
+        "Field and value input arguments must come in pairs."
+      );
+    const fieldNames: string[] = [];
+    const fieldValues: RuntimeValue[] = [];
+    let hasCell = false;
+    // A one-element cell value is copied to every element; the other
+    // cell values must all have the same number of elements.
+    let arrayLen = -1;
+    let arrayArg = 0;
+    for (let i = 0; i < args.length; i += 2) {
+      const nameArg = args[i];
+      if (
+        !(isRuntimeChar(nameArg) || isRuntimeString(nameArg)) ||
+        toString(nameArg) === ""
+      )
+        throw builtinError(
+          "MATLAB:Cell2Struct:NonStringFieldNames",
+          "Field names must be non-empty character vectors or string scalars."
+        );
+      const name = toString(nameArg);
+      const val = args[i + 1];
+      fieldNames.push(name);
+      fieldValues.push(val);
+      if (isRuntimeCell(val)) {
+        hasCell = true;
+        const len = val.data.length;
+        if (len === 1) continue;
+        if (arrayLen === -1) {
+          arrayLen = len;
+          arrayArg = i + 2;
+        } else if (len !== arrayLen)
+          throw builtinError(
+            "MATLAB:StructConversion:DimensionMismatch",
+            `Array dimensions of input '${i + 2}' must match those of input '${arrayArg}', or be scalar.`
+          );
+      }
+    }
+    if (hasCell && arrayLen === -1) arrayLen = 1;
+    if (!hasCell) {
+      const fields = new Map<string, RuntimeValue>();
+      for (let i = 0; i < fieldNames.length; i++) {
+        fields.set(fieldNames[i], fieldValues[i]);
+      }
+      return RTV.struct(fields);
+    }
+    // Struct array: each element gets one value from each cell
+    const elements = [];
+    for (let k = 0; k < arrayLen; k++) {
+      const fields = new Map<string, RuntimeValue>();
+      for (let i = 0; i < fieldNames.length; i++) {
+        const val = fieldValues[i];
+        if (isRuntimeCell(val)) {
+          fields.set(fieldNames[i], val.data[val.data.length === 1 ? 0 : k]);
+        } else {
+          fields.set(fieldNames[i], val);
         }
-        return [{ kind: "struct", fields: {} }];
-      },
-      apply: args => {
-        if (args.length === 0) return RTV.struct(new Map());
-        // struct([]) → 0x0 empty struct array with no fields
-        if (args.length === 1 && isRuntimeTensor(args[0])) {
-          if (args[0].data.length !== 0)
-            throw new RuntimeError(
-              "struct: single non-empty numeric argument is not supported"
-            );
-          return RTV.structArray([], []);
-        }
-        if (args.length % 2 !== 0)
-          throw new RuntimeError("struct: requires field-value pairs");
-        const fieldNames: string[] = [];
-        const fieldValues: RuntimeValue[] = [];
-        let hasCell = false;
-        let arrayLen = -1;
-        for (let i = 0; i < args.length; i += 2) {
-          const name = toString(args[i]);
-          const val = args[i + 1];
-          fieldNames.push(name);
-          fieldValues.push(val);
-          if (isRuntimeCell(val)) {
-            hasCell = true;
-            const len = val.data.length;
-            if (arrayLen === -1) arrayLen = len;
-            else if (len !== arrayLen)
-              throw new RuntimeError(
-                "struct: cell array values must have the same length"
-              );
-          }
-        }
-        if (!hasCell) {
-          const fields = new Map<string, RuntimeValue>();
-          for (let i = 0; i < fieldNames.length; i++) {
-            fields.set(fieldNames[i], fieldValues[i]);
-          }
-          return RTV.struct(fields);
-        }
-        // Struct array: each element gets one value from each cell
-        const elements = [];
-        for (let k = 0; k < arrayLen; k++) {
-          const fields = new Map<string, RuntimeValue>();
-          for (let i = 0; i < fieldNames.length; i++) {
-            const val = fieldValues[i];
-            if (isRuntimeCell(val)) {
-              fields.set(fieldNames[i], val.data[k]);
-            } else {
-              fields.set(fieldNames[i], val);
-            }
-          }
-          elements.push(RTV.struct(fields));
-        }
-        // 1x1 result (all cell values have one element) is a scalar struct
-        if (elements.length === 1) return elements[0];
-        return RTV.structArray(fieldNames, elements);
-      },
-    },
-  ],
+      }
+      elements.push(RTV.struct(fields));
+    }
+    // 1x1 result (all cell values have one element) is a scalar struct
+    if (elements.length === 1) return elements[0];
+    return RTV.structArray(fieldNames, elements);
+  },
 });
 
 // ── full (sparse → dense) ───────────────────────────────────────────────
 
-defineBuiltin({
+builtin({
   name: "full",
-  cases: [
-    {
-      match: argTypes => {
-        if (argTypes.length !== 1) return null;
-        const a = argTypes[0];
-        // Passthrough for non-sparse types
-        if (a.kind === "number" || a.kind === "boolean")
-          return [{ kind: "number" }];
-        if (a.kind === "tensor")
-          return [
-            {
-              kind: "tensor",
-              isComplex: a.isComplex,
-              shape: a.shape,
-              ndim: a.ndim,
-            },
-          ];
-        // unknown covers sparse and others
-        return [{ kind: "unknown" }];
-      },
-      apply: args => {
-        const v = args[0];
-        if (!isRuntimeSparseMatrix(v)) return v; // passthrough for non-sparse
-        const { m, n, ir, jc, pr, pi } = v;
-        const data = allocFloat64Array(m * n);
-        const imag = pi ? allocFloat64Array(m * n) : undefined;
-        for (let col = 0; col < n; col++) {
-          for (let k = jc[col]; k < jc[col + 1]; k++) {
-            data[col * m + ir[k]] = pr[k]; // column-major
-            if (imag && pi) imag[col * m + ir[k]] = pi[k];
-          }
-        }
-        return RTV.tensor(data, [m, n], imag);
-      },
-    },
-  ],
+  nargin: 1,
+  apply: args => {
+    const v = args[0];
+    if (!isRuntimeSparseMatrix(v)) return v; // passthrough for non-sparse
+    const { m, n, ir, jc, pr, pi } = v;
+    const data = allocFloat64Array(m * n);
+    const imag = pi ? allocFloat64Array(m * n) : undefined;
+    for (let col = 0; col < n; col++) {
+      for (let k = jc[col]; k < jc[col + 1]; k++) {
+        data[col * m + ir[k]] = pr[k]; // column-major
+        if (imag && pi) imag[col * m + ir[k]] = pi[k];
+      }
+    }
+    return RTV.tensor(data, [m, n], imag);
+  },
 });
 
 // ── isfield ─────────────────────────────────────────────────────────────
 
-defineBuiltin({
+builtin({
   name: "isfield",
-  cases: [
-    {
-      match: argTypes => {
-        if (argTypes.length !== 2) return null;
-        return [{ kind: "boolean" }];
-      },
-      apply: args => {
-        const v = args[0];
-        const hasField = (name: string): boolean => {
-          if (isRuntimeStructArray(v)) return v.fieldNames.includes(name);
-          if (!isRuntimeStruct(v) && !isRuntimeClassInstance(v)) return false;
-          return v.fields.has(name);
-        };
-        // Cell array of field names → logical array of the same size
-        if (isRuntimeCell(args[1])) {
-          const cell = args[1] as RuntimeCell;
-          const result = allocFloat64Array(cell.data.length);
-          for (let i = 0; i < cell.data.length; i++) {
-            result[i] = hasField(toString(cell.data[i])) ? 1 : 0;
-          }
-          return new RuntimeTensor(result, cell.shape.slice(), undefined, true);
-        }
-        return RTV.logical(hasField(toString(args[1])));
-      },
-    },
-  ],
+  nargin: 2,
+  apply: args => {
+    const v = args[0];
+    const hasField = (name: string): boolean => {
+      if (isRuntimeStructArray(v)) return v.fieldNames.includes(name);
+      if (!isRuntimeStruct(v) && !isRuntimeClassInstance(v)) return false;
+      return v.fields.has(name);
+    };
+    // Cell array of field names → logical array of the same size
+    if (isRuntimeCell(args[1])) {
+      const cell = args[1] as RuntimeCell;
+      const result = allocFloat64Array(cell.data.length);
+      for (let i = 0; i < cell.data.length; i++) {
+        result[i] = hasField(toString(cell.data[i])) ? 1 : 0;
+      }
+      return new RuntimeTensor(result, cell.shape.slice(), undefined, true);
+    }
+    return RTV.logical(hasField(toString(args[1])));
+  },
 });
 
 // ── deal ────────────────────────────────────────────────────────────────
 
-registerIBuiltin({
+builtin({
   name: "deal",
-  resolve: (argTypes, nargout) => {
-    if (argTypes.length === 0) return null;
-    if (argTypes.length === 1) {
-      // Replicate single input to nargout outputs
-      const outTypes = new Array(Math.max(nargout, 1)).fill(argTypes[0]);
-      return {
-        outputTypes: outTypes,
-        apply: (args, nargout) => {
-          if (nargout <= 1) return args[0];
-          return new Array(nargout).fill(args[0]);
-        },
-      };
+  nargin: [0, Infinity],
+  nargout: [0, Infinity],
+  mfile: true,
+  apply: (args, nargout) => {
+    // deal(X) copies X to every output; otherwise inputs map 1:1 to
+    // outputs.
+    if (args.length === 1) {
+      if (nargout <= 1) return args[0];
+      return new Array(nargout).fill(args[0]);
     }
-    // N inputs → N outputs
-    return {
-      outputTypes: argTypes.slice(),
-      apply: (args, nargout) => {
-        if (args.length !== nargout)
-          throw new RuntimeError(
-            `deal: number of inputs (${args.length}) must match number of outputs (${nargout})`
-          );
-        if (nargout <= 1) return args[0];
-        return args;
-      },
-    };
+    if (args.length !== Math.max(nargout, 1))
+      throw builtinError(
+        "MATLAB:deal:narginNargoutMismatch",
+        "The number of outputs should match the number of inputs."
+      );
+    if (nargout <= 1) return args[0];
+    return args;
   },
 });
 
 // ── func2str ────────────────────────────────────────────────────────────
 
-defineBuiltin({
+builtin({
   name: "func2str",
-  cases: [
-    {
-      match: argTypes => {
-        if (argTypes.length !== 1) return null;
-        return [{ kind: "string" }];
-      },
-      apply: args => {
-        const v = args[0];
-        if (!isRuntimeFunction(v))
-          throw new RuntimeError(
-            "func2str: argument must be a function handle"
-          );
-        return RTV.string(v.name);
-      },
-    },
-  ],
+  nargin: 1,
+  apply: args => {
+    const v = args[0];
+    if (!isRuntimeFunction(v)) throw undefinedForTypeError("func2str", v);
+    return RTV.string(v.name);
+  },
 });

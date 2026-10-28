@@ -46,7 +46,9 @@ export function validateDim(x: number): number {
  *  with "Size inputs must be scalar." */
 export function toScalarDim(v: RuntimeValue): number {
   if (isRuntimeTensor(v) && v.data.length !== 1)
-    throw new RuntimeError("Size inputs must be scalar.");
+    throw new RuntimeError("Size inputs must be scalar.", null, {
+      identifier: "MATLAB:NonScalarInput",
+    });
   return validateDim(toNumber(v));
 }
 

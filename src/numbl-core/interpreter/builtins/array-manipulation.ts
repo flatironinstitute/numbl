@@ -35,9 +35,13 @@ import {
   isRuntimeStringArray,
   stringArrayValue,
 } from "../../runtime/types.js";
-import { defineBuiltin } from "./types.js";
-import type { JitType } from "../../jitTypes.js";
+import { builtin } from "./builtin.js";
+import { builtinError } from "./args.js";
 import { coerceToTensor } from "../../helpers/shape-utils.js";
+import {
+  charToNumericTensor,
+  numericTensorToChar,
+} from "../../runtime/indexing.js";
 import { sparseToDense } from "../../helpers/sparse-arithmetic.js";
 import { mTranspose, mConjugateTranspose } from "../../helpers/arithmetic.js";
 import { allocFloat64Array, releaseFloat64Array } from "../../runtime/alloc.js";
@@ -69,7 +73,9 @@ function flipAlongDim(v: RuntimeTensor, dimIdx: number): RuntimeTensor {
     }
   }
 
-  return RTV.tensor(result, [...shape], resultImag) as RuntimeTensor;
+  const out = RTV.tensor(result, [...shape], resultImag) as RuntimeTensor;
+  if (v._isLogical) out._isLogical = true;
+  return out;
 }
 
 /** Flip a cell array along a specific dimension (0-based dimIdx). N-D safe. */
@@ -146,15 +152,31 @@ function flipSparse(
   return RTV.sparseMatrix(v.m, v.n, ir, jc, pr, pi);
 }
 
-// Match helper: accepts any number of args, returns unknown output type
-function varargMatch(argTypes: JitType[]): JitType[] | null {
-  if (argTypes.length < 1) return null;
-  return [{ kind: "unknown" }];
+/** True for the scalar kinds that flip/rotate/shift return unchanged. */
+function isScalarValue(v: RuntimeValue): boolean {
+  return isRuntimeNumber(v) || isRuntimeLogical(v) || isRuntimeComplexNumber(v);
 }
 
-function varargMatch2(argTypes: JitType[]): JitType[] | null {
-  if (argTypes.length < 2) return null;
-  return [{ kind: "unknown" }];
+/** A scalar as a 1×1 tensor; a logical scalar stays logical. */
+function scalarTensor(v: RuntimeValue, name: string): RuntimeTensor {
+  const t = coerceToTensor(v, name);
+  if (isRuntimeLogical(v)) t._isLogical = true;
+  return t;
+}
+
+/** Flip a char array along dimIdx (0-based) via its character codes. */
+function flipChar(v: RuntimeChar, dimIdx: number): RuntimeChar {
+  return numericTensorToChar(flipAlongDim(charToNumericTensor(v), dimIdx));
+}
+
+/** A real scalar or vector size/replication argument. Complex input raises
+ *  `id` with `message` instead of dropping the imaginary part. */
+function rejectComplex(v: RuntimeValue, id: string, message: string): void {
+  if (
+    (isRuntimeComplexNumber(v) && v.im !== 0) ||
+    (isRuntimeTensor(v) && v.imag !== undefined && v.imag.some(x => x !== 0))
+  )
+    throw builtinError(id, message);
 }
 
 // ── reshape ──────────────────────────────────────────────────────────
@@ -205,647 +227,598 @@ function parseReshapeDims(args: RuntimeValue[], total: number): number[] {
   return shape;
 }
 
-defineBuiltin({
+builtin({
   name: "reshape",
-  cases: [
-    {
-      match: varargMatch2,
-      apply: args => {
-        if (args.length < 2)
-          throw new RuntimeError("reshape requires at least 2 arguments");
-        const v = args[0];
+  nargin: [2, Infinity],
+  apply: args => {
+    for (let i = 1; i < args.length; i++)
+      rejectComplex(
+        args[i],
+        "MATLAB:checkDimCommon:complexSize",
+        "Size argument cannot be complex."
+      );
+    const v = args[0];
 
-        // Sparse reshape
-        if (isRuntimeSparseMatrix(v)) {
-          const totalEl = v.m * v.n;
-          let rawDims: (number | null)[];
-          if (
-            args.length === 2 &&
-            isRuntimeTensor(args[1]) &&
-            args[1].data.length > 1
-          ) {
-            rawDims = Array.from(args[1].data).map(x => Math.round(x));
-          } else {
-            rawDims = args.slice(1).map(a => {
-              if (isRuntimeTensor(a) && a.data.length === 0) return null;
-              return Math.round(toNumber(a));
-            });
-          }
-          const autoCount = rawDims.filter(d => d === null).length;
-          if (autoCount > 1)
-            throw new RuntimeError(
-              "reshape: only one dimension size can be []"
-            );
-          let shape: number[];
-          if (autoCount === 1) {
-            const known = rawDims.filter(d => d !== null) as number[];
-            const knownProduct = known.reduce((a, b) => a * b, 1);
-            if (totalEl % knownProduct !== 0)
-              throw new RuntimeError(
-                "reshape: number of elements must not change"
-              );
-            shape = rawDims.map(d => (d === null ? totalEl / knownProduct : d));
-          } else {
-            shape = rawDims as number[];
-          }
-          if (shape.length !== 2)
-            throw new RuntimeError("reshape: sparse matrices must be 2-D");
-          const newM = shape[0];
-          const newN = shape[1];
-          if (newM * newN !== totalEl)
-            throw new RuntimeError(
-              "reshape: number of elements must not change"
-            );
-          const nnz = v.jc[v.n];
-          const triplets: { row: number; col: number; idx: number }[] = [];
-          for (let c = 0; c < v.n; c++) {
-            for (let k = v.jc[c]; k < v.jc[c + 1]; k++) {
-              const lin = c * v.m + v.ir[k];
-              const newCol = Math.floor(lin / newM);
-              const newRow = lin % newM;
-              triplets.push({ row: newRow, col: newCol, idx: k });
-            }
-          }
-          triplets.sort((a, b) => a.col - b.col || a.row - b.row);
-          const ir = new Int32Array(nnz);
-          const pr = allocFloat64Array(nnz);
-          const pi = v.pi ? allocFloat64Array(nnz) : undefined;
-          const jc = new Int32Array(newN + 1);
-          let ti = 0;
-          for (let c = 0; c < newN; c++) {
-            jc[c] = ti;
-            while (ti < nnz && triplets[ti].col === c) {
-              ir[ti] = triplets[ti].row;
-              pr[ti] = v.pr[triplets[ti].idx];
-              if (pi && v.pi) pi[ti] = v.pi[triplets[ti].idx];
-              ti++;
-            }
-          }
-          jc[newN] = ti;
-          return RTV.sparseMatrix(newM, newN, ir, jc, pr, pi);
+    // Sparse reshape
+    if (isRuntimeSparseMatrix(v)) {
+      const totalEl = v.m * v.n;
+      let rawDims: (number | null)[];
+      if (
+        args.length === 2 &&
+        isRuntimeTensor(args[1]) &&
+        args[1].data.length > 1
+      ) {
+        rawDims = Array.from(args[1].data).map(x => Math.round(x));
+      } else {
+        rawDims = args.slice(1).map(a => {
+          if (isRuntimeTensor(a) && a.data.length === 0) return null;
+          return Math.round(toNumber(a));
+        });
+      }
+      const autoCount = rawDims.filter(d => d === null).length;
+      if (autoCount > 1)
+        throw new RuntimeError("reshape: only one dimension size can be []");
+      let shape: number[];
+      if (autoCount === 1) {
+        const known = rawDims.filter(d => d !== null) as number[];
+        const knownProduct = known.reduce((a, b) => a * b, 1);
+        if (totalEl % knownProduct !== 0)
+          throw new RuntimeError("reshape: number of elements must not change");
+        shape = rawDims.map(d => (d === null ? totalEl / knownProduct : d));
+      } else {
+        shape = rawDims as number[];
+      }
+      if (shape.length !== 2)
+        throw new RuntimeError("reshape: sparse matrices must be 2-D");
+      const newM = shape[0];
+      const newN = shape[1];
+      if (newM * newN !== totalEl)
+        throw new RuntimeError("reshape: number of elements must not change");
+      const nnz = v.jc[v.n];
+      const triplets: { row: number; col: number; idx: number }[] = [];
+      for (let c = 0; c < v.n; c++) {
+        for (let k = v.jc[c]; k < v.jc[c + 1]; k++) {
+          const lin = c * v.m + v.ir[k];
+          const newCol = Math.floor(lin / newM);
+          const newRow = lin % newM;
+          triplets.push({ row: newRow, col: newCol, idx: k });
         }
+      }
+      triplets.sort((a, b) => a.col - b.col || a.row - b.row);
+      const ir = new Int32Array(nnz);
+      const pr = allocFloat64Array(nnz);
+      const pi = v.pi ? allocFloat64Array(nnz) : undefined;
+      const jc = new Int32Array(newN + 1);
+      let ti = 0;
+      for (let c = 0; c < newN; c++) {
+        jc[c] = ti;
+        while (ti < nnz && triplets[ti].col === c) {
+          ir[ti] = triplets[ti].row;
+          pr[ti] = v.pr[triplets[ti].idx];
+          if (pi && v.pi) pi[ti] = v.pi[triplets[ti].idx];
+          ti++;
+        }
+      }
+      jc[newN] = ti;
+      return RTV.sparseMatrix(newM, newN, ir, jc, pr, pi);
+    }
 
-        // Char arrays reshape too (MATLAB accepts any type). Reorder the
-        // characters column-major into the new 2-D shape.
-        if (isRuntimeChar(v)) {
-          const srcRows = v.shape ? v.shape[0] : 1;
-          const srcCols = v.shape ? (v.shape[1] ?? 0) : v.value.length;
-          const total = v.value.length;
-          const reqShape = parseReshapeDims(args, total);
-          const s = [...reqShape];
-          while (s.length > 2 && s[s.length - 1] === 1) s.pop();
-          if (s.length > 2)
-            throw new RuntimeError("reshape: char arrays must be 2-D");
-          const nr = s[0];
-          const nc = s.length >= 2 ? s[1] : 1;
-          // column-major linear order of the source (stored row-major)
-          const linear: string[] = new Array(total);
-          for (let j = 0; j < srcCols; j++)
-            for (let i = 0; i < srcRows; i++)
-              linear[j * srcRows + i] = v.value[i * srcCols + j];
-          const chars: string[] = new Array(total);
-          for (let j2 = 0; j2 < nc; j2++)
-            for (let i2 = 0; i2 < nr; i2++)
-              chars[i2 * nc + j2] = linear[j2 * nr + i2];
-          return new RuntimeChar(chars.join(""), [nr, nc]);
-        }
+    // Char arrays reshape too (MATLAB accepts any type). Reorder the
+    // characters column-major into the new 2-D shape.
+    if (isRuntimeChar(v)) {
+      const srcRows = v.shape ? v.shape[0] : 1;
+      const srcCols = v.shape ? (v.shape[1] ?? 0) : v.value.length;
+      const total = v.value.length;
+      const reqShape = parseReshapeDims(args, total);
+      const s = [...reqShape];
+      while (s.length > 2 && s[s.length - 1] === 1) s.pop();
+      if (s.length > 2)
+        throw new RuntimeError("reshape: char arrays must be 2-D");
+      const nr = s[0];
+      const nc = s.length >= 2 ? s[1] : 1;
+      // column-major linear order of the source (stored row-major)
+      const linear: string[] = new Array(total);
+      for (let j = 0; j < srcCols; j++)
+        for (let i = 0; i < srcRows; i++)
+          linear[j * srcRows + i] = v.value[i * srcCols + j];
+      const chars: string[] = new Array(total);
+      for (let j2 = 0; j2 < nc; j2++)
+        for (let i2 = 0; i2 < nr; i2++)
+          chars[i2 * nc + j2] = linear[j2 * nr + i2];
+      return new RuntimeChar(chars.join(""), [nr, nc]);
+    }
 
-        // String arrays: elements are stored column-major, so reshape only
-        // replaces the shape metadata.
-        if (isRuntimeStringArray(v)) {
-          const s = parseReshapeDims(args, v.data.length);
-          while (s.length > 2 && s[s.length - 1] === 1) s.pop();
-          if (s.length > 2)
-            throw new RuntimeError("reshape: string arrays must be 2-D");
-          const nr = s[0];
-          const nc = s.length >= 2 ? s[1] : 1;
-          return stringArrayValue(v.data.slice(), [nr, nc]);
-        }
-        if (isRuntimeString(v)) {
-          parseReshapeDims(args, 1); // validates the element count is 1
-          return v;
-        }
+    // String arrays: elements are stored column-major, so reshape only
+    // replaces the shape metadata.
+    if (isRuntimeStringArray(v)) {
+      const s = parseReshapeDims(args, v.data.length);
+      while (s.length > 2 && s[s.length - 1] === 1) s.pop();
+      if (s.length > 2)
+        throw new RuntimeError("reshape: string arrays must be 2-D");
+      const nr = s[0];
+      const nc = s.length >= 2 ? s[1] : 1;
+      return stringArrayValue(v.data.slice(), [nr, nc]);
+    }
+    if (isRuntimeString(v)) {
+      parseReshapeDims(args, 1); // validates the element count is 1
+      return v;
+    }
 
-        // Cell arrays: elements are stored column-major, so reshape only
-        // replaces the shape metadata.
-        if (isRuntimeCell(v)) {
-          const total = v.data.length;
-          const s = parseReshapeDims(args, total);
-          while (s.length > 2 && s[s.length - 1] === 1) s.pop();
-          if (s.length > 2)
-            throw new RuntimeError("reshape: cell arrays must be 2-D");
-          const nr = s[0];
-          const nc = s.length >= 2 ? s[1] : 1;
-          return RTV.cell(v.data.slice(), [nr, nc]);
-        }
+    // Cell arrays: elements are stored column-major, so reshape only
+    // replaces the shape metadata.
+    if (isRuntimeCell(v)) {
+      const total = v.data.length;
+      const s = parseReshapeDims(args, total);
+      while (s.length > 2 && s[s.length - 1] === 1) s.pop();
+      if (s.length > 2)
+        throw new RuntimeError("reshape: cell arrays must be 2-D");
+      const nr = s[0];
+      const nc = s.length >= 2 ? s[1] : 1;
+      return RTV.cell(v.data.slice(), [nr, nc]);
+    }
 
-        // Object arrays: elements are stored in linear order, so reshape
-        // only replaces the shape metadata.
-        if (isRuntimeClassInstanceArray(v)) {
-          const total = v.elements.length;
-          const s = parseReshapeDims(args, total);
-          while (s.length > 2 && s[s.length - 1] === 1) s.pop();
-          if (s.length > 2)
-            throw new RuntimeError("reshape: object arrays must be 2-D");
-          const nr = s[0];
-          const nc = s.length >= 2 ? s[1] : 1;
-          if (nr * nc !== total)
-            throw new RuntimeError(
-              "reshape: number of elements must not change"
-            );
-          return RTV.classInstanceArray(v.className, v.elements, [nr, nc]);
-        }
-        if (isRuntimeClassInstance(v)) {
-          const s = parseReshapeDims(args, 1);
-          if (s.reduce((a, b) => a * b, 1) !== 1)
-            throw new RuntimeError(
-              "reshape: number of elements must not change"
-            );
-          return v;
-        }
+    // Object arrays: elements are stored in linear order, so reshape
+    // only replaces the shape metadata.
+    if (isRuntimeClassInstanceArray(v)) {
+      const total = v.elements.length;
+      const s = parseReshapeDims(args, total);
+      while (s.length > 2 && s[s.length - 1] === 1) s.pop();
+      if (s.length > 2)
+        throw new RuntimeError("reshape: object arrays must be 2-D");
+      const nr = s[0];
+      const nc = s.length >= 2 ? s[1] : 1;
+      if (nr * nc !== total)
+        throw new RuntimeError("reshape: number of elements must not change");
+      return RTV.classInstanceArray(v.className, v.elements, [nr, nc]);
+    }
+    if (isRuntimeClassInstance(v)) {
+      const s = parseReshapeDims(args, 1);
+      if (s.reduce((a, b) => a * b, 1) !== 1)
+        throw new RuntimeError("reshape: number of elements must not change");
+      return v;
+    }
 
-        if (
-          !isRuntimeTensor(v) &&
-          !isRuntimeNumber(v) &&
-          !isRuntimeComplexNumber(v)
-        )
-          throw new RuntimeError("reshape: first argument must be numeric");
-        const data = isRuntimeTensor(v)
-          ? v.data
-          : isRuntimeComplexNumber(v)
-            ? allocFloat64Array([v.re])
-            : allocFloat64Array([v as number]);
-        const imag = isRuntimeTensor(v)
-          ? v.imag
-          : isRuntimeComplexNumber(v)
-            ? allocFloat64Array([v.im])
-            : undefined;
+    if (isRuntimeLogical(v)) {
+      parseReshapeDims(args, 1); // validates the element count is 1
+      return v;
+    }
+    if (
+      !isRuntimeTensor(v) &&
+      !isRuntimeNumber(v) &&
+      !isRuntimeComplexNumber(v)
+    )
+      throw new RuntimeError("reshape: first argument must be numeric");
+    const data = isRuntimeTensor(v)
+      ? v.data
+      : isRuntimeComplexNumber(v)
+        ? allocFloat64Array([v.re])
+        : allocFloat64Array([v as number]);
+    const imag = isRuntimeTensor(v)
+      ? v.imag
+      : isRuntimeComplexNumber(v)
+        ? allocFloat64Array([v.im])
+        : undefined;
 
-        const shape = parseReshapeDims(args, data.length);
-        if (isRuntimeTensor(v)) {
-          // Copy the data buffer rather than share it. Sharing buffers
-          // across wrappers would require ref-tracking the buffer
-          // itself (multiple wrappers can be alive at once), and the
-          // current refcount design ties buffer lifetime to a single
-          // wrapper. The cost is one extra Float64Array copy on
-          // reshape, traded for simpler refcount semantics.
-          const dataCopy = allocFloat64Array(data);
-          const imagCopy = imag ? allocFloat64Array(imag) : undefined;
-          const s = [...shape];
-          while (s.length > 2 && s[s.length - 1] === 1) s.pop();
-          return new RuntimeTensor(dataCopy, s, imagCopy, v._isLogical);
-        }
-        return RTV.tensor(
-          allocFloat64Array(data),
-          shape,
-          imag ? allocFloat64Array(imag) : undefined
-        );
-      },
-    },
-  ],
+    const shape = parseReshapeDims(args, data.length);
+    if (isRuntimeTensor(v)) {
+      // Copy the data buffer rather than share it. Sharing buffers
+      // across wrappers would require ref-tracking the buffer
+      // itself (multiple wrappers can be alive at once), and the
+      // current refcount design ties buffer lifetime to a single
+      // wrapper. The cost is one extra Float64Array copy on
+      // reshape, traded for simpler refcount semantics.
+      const dataCopy = allocFloat64Array(data);
+      const imagCopy = imag ? allocFloat64Array(imag) : undefined;
+      const s = [...shape];
+      while (s.length > 2 && s[s.length - 1] === 1) s.pop();
+      return new RuntimeTensor(dataCopy, s, imagCopy, v._isLogical);
+    }
+    return RTV.tensor(
+      allocFloat64Array(data),
+      shape,
+      imag ? allocFloat64Array(imag) : undefined
+    );
+  },
 });
 
 // ── transpose / ctranspose ───────────────────────────────────────────
 
-defineBuiltin({
+builtin({
   name: "transpose",
-  cases: [
-    {
-      match: argTypes => {
-        if (argTypes.length !== 1) return null;
-        return [{ kind: "unknown" }];
-      },
-      apply: args => mTranspose(args[0]),
-    },
-  ],
+  nargin: 1,
+  apply: args => mTranspose(args[0]),
 });
 
-defineBuiltin({
+builtin({
   name: "ctranspose",
-  cases: [
-    {
-      match: argTypes => {
-        if (argTypes.length !== 1) return null;
-        return [{ kind: "unknown" }];
-      },
-      apply: args => mConjugateTranspose(args[0]),
-    },
-  ],
+  nargin: 1,
+  apply: args => mConjugateTranspose(args[0]),
 });
 
 // ── diag ─────────────────────────────────────────────────────────────
 
-defineBuiltin({
+builtin({
   name: "diag",
-  cases: [
-    {
-      match: argTypes => {
-        if (argTypes.length < 1 || argTypes.length > 2) return null;
-        return [{ kind: "unknown" }];
-      },
-      apply: args => {
-        const v = args[0];
-        const k = args.length >= 2 ? Math.round(toNumber(args[1])) : 0;
-        const absK = Math.abs(k);
-        if (isRuntimeNumber(v)) {
-          const m = 1 + absK;
-          const data = allocFloat64Array(m * m);
-          const r = k < 0 ? -k : 0;
-          const c = k > 0 ? k : 0;
-          data[colMajorIndex(r, c, m)] = v as number;
-          return RTV.tensor(data, [m, m]);
-        }
-        if (isRuntimeComplexNumber(v)) {
-          const m = 1 + absK;
-          const data = allocFloat64Array(m * m);
-          const imag = allocFloat64Array(m * m);
-          const r = k < 0 ? -k : 0;
-          const c = k > 0 ? k : 0;
-          data[colMajorIndex(r, c, m)] = v.re;
-          imag[colMajorIndex(r, c, m)] = v.im;
-          return RTV.tensor(data, [m, m], imag);
-        }
-        if (isRuntimeSparseMatrix(v)) {
-          const m = v.m;
-          const n = v.n;
-          const isVec = m === 1 || n === 1;
-          if (isVec) {
-            const vecLen = Math.max(m, n);
-            const sz = vecLen + absK;
-            const irArr: number[] = [];
-            const prArr: number[] = [];
-            const piArr: number[] = [];
-            const isComplex = v.pi !== undefined;
-            for (let c2 = 0; c2 < v.n; c2++) {
-              for (let kk = v.jc[c2]; kk < v.jc[c2 + 1]; kk++) {
-                const vecIdx = m === 1 ? c2 : v.ir[kk];
-                irArr.push(vecIdx + (k < 0 ? -k : 0));
-                prArr.push(v.pr[kk]);
-                if (isComplex) piArr.push(v.pi![kk]);
-              }
-            }
-            const entries: {
-              row: number;
-              col: number;
-              re: number;
-              im: number;
-            }[] = [];
-            for (let i = 0; i < irArr.length; i++) {
-              const r = irArr[i];
-              if (k < 0) {
-                const vecIdx = r - absK;
-                entries.push({
-                  row: r,
-                  col: vecIdx,
-                  re: prArr[i],
-                  im: isComplex ? piArr[i] : 0,
-                });
-              } else {
-                entries.push({
-                  row: r,
-                  col: r + k,
-                  re: prArr[i],
-                  im: isComplex ? piArr[i] : 0,
-                });
-              }
-            }
-            entries.sort((a2, b) => a2.col - b.col || a2.row - b.row);
-            const newIr = new Int32Array(entries.length);
-            const newPr = allocFloat64Array(entries.length);
-            const newPi = isComplex
-              ? allocFloat64Array(entries.length)
-              : undefined;
-            const jc = new Int32Array(sz + 1);
-            let ti = 0;
-            for (let c2 = 0; c2 < sz; c2++) {
-              jc[c2] = ti;
-              while (ti < entries.length && entries[ti].col === c2) {
-                newIr[ti] = entries[ti].row;
-                newPr[ti] = entries[ti].re;
-                if (newPi) newPi[ti] = entries[ti].im;
-                ti++;
-              }
-            }
-            jc[sz] = ti;
-            return RTV.sparseMatrix(sz, sz, newIr, jc, newPr, newPi);
+  nargin: [1, 2],
+  apply: args => {
+    let v = args[0];
+    if (args.length >= 2)
+      rejectComplex(
+        args[1],
+        "MATLAB:diag:kthDiagInputNotInteger",
+        "Kth diagonal input must be an integer scalar."
+      );
+    const k = args.length >= 2 ? Math.round(toNumber(args[1])) : 0;
+    const absK = Math.abs(k);
+    if (isRuntimeLogical(v)) v = scalarTensor(v, "diag");
+    if (isRuntimeNumber(v)) {
+      const m = 1 + absK;
+      const data = allocFloat64Array(m * m);
+      const r = k < 0 ? -k : 0;
+      const c = k > 0 ? k : 0;
+      data[colMajorIndex(r, c, m)] = v as number;
+      return RTV.tensor(data, [m, m]);
+    }
+    if (isRuntimeComplexNumber(v)) {
+      const m = 1 + absK;
+      const data = allocFloat64Array(m * m);
+      const imag = allocFloat64Array(m * m);
+      const r = k < 0 ? -k : 0;
+      const c = k > 0 ? k : 0;
+      data[colMajorIndex(r, c, m)] = v.re;
+      imag[colMajorIndex(r, c, m)] = v.im;
+      return RTV.tensor(data, [m, m], imag);
+    }
+    if (isRuntimeSparseMatrix(v)) {
+      const m = v.m;
+      const n = v.n;
+      const isVec = m === 1 || n === 1;
+      if (isVec) {
+        const vecLen = Math.max(m, n);
+        const sz = vecLen + absK;
+        const irArr: number[] = [];
+        const prArr: number[] = [];
+        const piArr: number[] = [];
+        const isComplex = v.pi !== undefined;
+        for (let c2 = 0; c2 < v.n; c2++) {
+          for (let kk = v.jc[c2]; kk < v.jc[c2 + 1]; kk++) {
+            const vecIdx = m === 1 ? c2 : v.ir[kk];
+            irArr.push(vecIdx + (k < 0 ? -k : 0));
+            prArr.push(v.pr[kk]);
+            if (isComplex) piArr.push(v.pi![kk]);
           }
-          // Sparse matrix → extract k-th diagonal
-          const iStart = Math.max(0, -k);
-          const jStart = Math.max(0, k);
-          const diagLen = Math.min(m - iStart, n - jStart);
-          if (diagLen <= 0) {
-            return RTV.sparseMatrix(
-              0,
-              1,
-              new Int32Array(0),
-              new Int32Array([0]),
-              allocFloat64Array(0)
-            );
-          }
-          const isComplex = v.pi !== undefined;
-          const dIr: number[] = [];
-          const dPr: number[] = [];
-          const dPi: number[] = [];
-          for (let j = 0; j < diagLen; j++) {
-            const row = iStart + j;
-            const col = jStart + j;
-            for (let kk = v.jc[col]; kk < v.jc[col + 1]; kk++) {
-              if (v.ir[kk] === row) {
-                dIr.push(j);
-                dPr.push(v.pr[kk]);
-                if (isComplex) dPi.push(v.pi![kk]);
-                break;
-              }
-            }
-          }
-          const jcOut = new Int32Array([0, dIr.length]);
-          return RTV.sparseMatrix(
-            diagLen,
-            1,
-            new Int32Array(dIr),
-            jcOut,
-            allocFloat64Array(dPr),
-            isComplex ? allocFloat64Array(dPi) : undefined
-          );
         }
+        const entries: {
+          row: number;
+          col: number;
+          re: number;
+          im: number;
+        }[] = [];
+        for (let i = 0; i < irArr.length; i++) {
+          const r = irArr[i];
+          if (k < 0) {
+            const vecIdx = r - absK;
+            entries.push({
+              row: r,
+              col: vecIdx,
+              re: prArr[i],
+              im: isComplex ? piArr[i] : 0,
+            });
+          } else {
+            entries.push({
+              row: r,
+              col: r + k,
+              re: prArr[i],
+              im: isComplex ? piArr[i] : 0,
+            });
+          }
+        }
+        entries.sort((a2, b) => a2.col - b.col || a2.row - b.row);
+        const newIr = new Int32Array(entries.length);
+        const newPr = allocFloat64Array(entries.length);
+        const newPi = isComplex ? allocFloat64Array(entries.length) : undefined;
+        const jc = new Int32Array(sz + 1);
+        let ti = 0;
+        for (let c2 = 0; c2 < sz; c2++) {
+          jc[c2] = ti;
+          while (ti < entries.length && entries[ti].col === c2) {
+            newIr[ti] = entries[ti].row;
+            newPr[ti] = entries[ti].re;
+            if (newPi) newPi[ti] = entries[ti].im;
+            ti++;
+          }
+        }
+        jc[sz] = ti;
+        return RTV.sparseMatrix(sz, sz, newIr, jc, newPr, newPi);
+      }
+      // Sparse matrix → extract k-th diagonal
+      const iStart = Math.max(0, -k);
+      const jStart = Math.max(0, k);
+      const diagLen = Math.min(m - iStart, n - jStart);
+      if (diagLen <= 0) {
+        return RTV.sparseMatrix(
+          0,
+          1,
+          new Int32Array(0),
+          new Int32Array([0]),
+          allocFloat64Array(0)
+        );
+      }
+      const isComplex = v.pi !== undefined;
+      const dIr: number[] = [];
+      const dPr: number[] = [];
+      const dPi: number[] = [];
+      for (let j = 0; j < diagLen; j++) {
+        const row = iStart + j;
+        const col = jStart + j;
+        for (let kk = v.jc[col]; kk < v.jc[col + 1]; kk++) {
+          if (v.ir[kk] === row) {
+            dIr.push(j);
+            dPr.push(v.pr[kk]);
+            if (isComplex) dPi.push(v.pi![kk]);
+            break;
+          }
+        }
+      }
+      const jcOut = new Int32Array([0, dIr.length]);
+      return RTV.sparseMatrix(
+        diagLen,
+        1,
+        new Int32Array(dIr),
+        jcOut,
+        allocFloat64Array(dPr),
+        isComplex ? allocFloat64Array(dPi) : undefined
+      );
+    }
 
-        if (!isRuntimeTensor(v))
-          throw new RuntimeError("diag: argument must be numeric");
-        const [rows, cols] = tensorSize2D(v);
-        if (rows === 1 || cols === 1) {
-          const vecLen = Math.max(rows, cols);
-          const m2 = vecLen + absK;
-          const data = allocFloat64Array(m2 * m2);
-          const imag = v.imag ? allocFloat64Array(m2 * m2) : undefined;
-          for (let i = 0; i < vecLen; i++) {
-            const r = k < 0 ? i - k : i;
-            const c = k > 0 ? i + k : i;
-            data[colMajorIndex(r, c, m2)] = v.data[i];
-            if (imag) imag[colMajorIndex(r, c, m2)] = v.imag![i];
-          }
-          return RTV.tensor(data, [m2, m2], imag);
-        }
-        const diagLen =
-          k >= 0
-            ? Math.max(0, Math.min(rows, cols - k))
-            : Math.max(0, Math.min(rows + k, cols));
-        const data = allocFloat64Array(diagLen);
-        const imag = v.imag ? allocFloat64Array(diagLen) : undefined;
-        for (let i = 0; i < diagLen; i++) {
-          const r = k < 0 ? i - k : i;
-          const c = k > 0 ? i + k : i;
-          data[i] = v.data[colMajorIndex(r, c, rows)];
-          if (imag) imag[i] = v.imag![colMajorIndex(r, c, rows)];
-        }
-        return RTV.tensor(data, [diagLen, 1], imag);
-      },
-    },
-  ],
+    if (!isRuntimeTensor(v))
+      throw new RuntimeError("diag: argument must be numeric");
+    const [rows, cols] = tensorSize2D(v);
+    if (rows === 1 || cols === 1) {
+      const vecLen = Math.max(rows, cols);
+      const m2 = vecLen + absK;
+      const data = allocFloat64Array(m2 * m2);
+      const imag = v.imag ? allocFloat64Array(m2 * m2) : undefined;
+      for (let i = 0; i < vecLen; i++) {
+        const r = k < 0 ? i - k : i;
+        const c = k > 0 ? i + k : i;
+        data[colMajorIndex(r, c, m2)] = v.data[i];
+        if (imag) imag[colMajorIndex(r, c, m2)] = v.imag![i];
+      }
+      const out = RTV.tensor(data, [m2, m2], imag);
+      if (v._isLogical) out._isLogical = true;
+      return out;
+    }
+    const diagLen =
+      k >= 0
+        ? Math.max(0, Math.min(rows, cols - k))
+        : Math.max(0, Math.min(rows + k, cols));
+    const data = allocFloat64Array(diagLen);
+    const imag = v.imag ? allocFloat64Array(diagLen) : undefined;
+    for (let i = 0; i < diagLen; i++) {
+      const r = k < 0 ? i - k : i;
+      const c = k > 0 ? i + k : i;
+      data[i] = v.data[colMajorIndex(r, c, rows)];
+      if (imag) imag[i] = v.imag![colMajorIndex(r, c, rows)];
+    }
+    const out = RTV.tensor(data, [diagLen, 1], imag);
+    if (v._isLogical) out._isLogical = true;
+    return out;
+  },
 });
 
 // ── cat ──────────────────────────────────────────────────────────────
 
-defineBuiltin({
+builtin({
   name: "cat",
-  cases: [
-    {
-      match: varargMatch,
-      apply: args => {
-        if (args.length < 1)
-          throw new RuntimeError("cat requires at least 1 argument");
-        const dimRaw = toNumber(args[0]);
-        if (!Number.isFinite(dimRaw) || !Number.isInteger(dimRaw) || dimRaw < 1)
-          throw new RuntimeError("cat: dimension must be a positive integer.");
-        const dim = dimRaw;
-        const arrays = args.slice(1);
-        if (dim === 1) return vertcat(...arrays);
-        if (dim === 2) return horzcat(...arrays);
-        const dimIdx = dim - 1;
-        let tensors = arrays.map(a => {
-          if (isRuntimeNumber(a))
-            return {
-              data: allocFloat64Array([a as number]),
-              imag: null as Float64Array | null,
-              shape: [1, 1],
-            };
-          if (!isRuntimeTensor(a))
-            throw new RuntimeError("cat: arguments must be numeric");
-          return { data: a.data, imag: a.imag ?? null, shape: [...a.shape] };
-        });
-        // Drop fully-empty operands (all dims 0, e.g. the `[]` literal) before
-        // the dimension-equality check. MATLAB ignores empties in cat; the
-        // dim 1/2 paths (catAlongDim) already do this via shape.some(d>0), so
-        // cat(3, A, []) must too. Done on the ORIGINAL shape, before padding
-        // to `dim` adds trailing 1s (which would mask a [0,0]).
-        tensors = tensors.filter(t => t.shape.some(d => d > 0));
-        if (tensors.length === 0)
-          return RTV.tensor(allocFloat64Array(0), [0, 0]);
-        const hasComplex = tensors.some(t => t.imag !== null);
-        for (const t of tensors) {
-          while (t.shape.length < dim) t.shape.push(1);
-        }
-        const refShape = tensors[0].shape;
-        for (let i = 1; i < tensors.length; i++) {
-          for (let d = 0; d < refShape.length; d++) {
-            if (d === dimIdx) continue;
-            if (tensors[i].shape[d] !== refShape[d])
-              throw new RuntimeError(
-                `cat: dimension mismatch on dimension ${d + 1}`
-              );
-          }
-        }
-        const resultShape = [...refShape];
-        resultShape[dimIdx] = tensors.reduce((s, t) => s + t.shape[dimIdx], 0);
-        const totalElems = numel(resultShape);
-        const result = allocFloat64Array(totalElems);
-        const resultImag = hasComplex
-          ? allocFloat64Array(totalElems)
-          : undefined;
+  nargin: [1, Infinity],
+  apply: args => {
+    const d0 = args[0];
+    const dimRaw =
+      isRuntimeNumber(d0) || isRuntimeLogical(d0)
+        ? Number(d0)
+        : isRuntimeTensor(d0) && d0.data.length === 1 && !d0.imag
+          ? d0.data[0]
+          : NaN;
+    if (!Number.isFinite(dimRaw) || !Number.isInteger(dimRaw) || dimRaw < 1)
+      throw builtinError(
+        "MATLAB:catenate:invalidDimension",
+        "Dimension argument must be a real, positive, integer scalar."
+      );
+    const dim = dimRaw;
+    const arrays = args.slice(1);
+    if (dim === 1) return vertcat(...arrays);
+    if (dim === 2) return horzcat(...arrays);
+    const dimIdx = dim - 1;
+    const allLogical = arrays.every(
+      a => isRuntimeLogical(a) || (isRuntimeTensor(a) && a._isLogical)
+    );
+    let tensors = arrays.map(a => {
+      if (isScalarValue(a)) a = coerceToTensor(a, "cat");
+      if (!isRuntimeTensor(a))
+        throw new RuntimeError("cat: arguments must be numeric");
+      return {
+        data: a.data,
+        imag: (a.imag ?? null) as Float64Array | null,
+        shape: [...a.shape],
+      };
+    });
+    // Drop fully-empty operands (all dims 0, e.g. the `[]` literal) before
+    // the dimension-equality check. MATLAB ignores empties in cat; the
+    // dim 1/2 paths (catAlongDim) already do this via shape.some(d>0), so
+    // cat(3, A, []) must too. Done on the ORIGINAL shape, before padding
+    // to `dim` adds trailing 1s (which would mask a [0,0]).
+    tensors = tensors.filter(t => t.shape.some(d => d > 0));
+    if (tensors.length === 0) return RTV.tensor(allocFloat64Array(0), [0, 0]);
+    const hasComplex = tensors.some(t => t.imag !== null);
+    for (const t of tensors) {
+      while (t.shape.length < dim) t.shape.push(1);
+    }
+    const refShape = tensors[0].shape;
+    for (let i = 1; i < tensors.length; i++) {
+      for (let d = 0; d < refShape.length; d++) {
+        if (d === dimIdx) continue;
+        if (tensors[i].shape[d] !== refShape[d])
+          throw new RuntimeError(
+            `cat: dimension mismatch on dimension ${d + 1}`
+          );
+      }
+    }
+    const resultShape = [...refShape];
+    resultShape[dimIdx] = tensors.reduce((s, t) => s + t.shape[dimIdx], 0);
+    const totalElems = numel(resultShape);
+    const result = allocFloat64Array(totalElems);
+    const resultImag = hasComplex ? allocFloat64Array(totalElems) : undefined;
 
-        const ndim = resultShape.length;
-        let strideDim = 1;
-        for (let d = 0; d < dimIdx; d++) strideDim *= resultShape[d];
-        let numOuter = 1;
-        for (let d = dimIdx + 1; d < ndim; d++) numOuter *= resultShape[d];
+    const ndim = resultShape.length;
+    let strideDim = 1;
+    for (let d = 0; d < dimIdx; d++) strideDim *= resultShape[d];
+    let numOuter = 1;
+    for (let d = dimIdx + 1; d < ndim; d++) numOuter *= resultShape[d];
 
-        for (let outer = 0; outer < numOuter; outer++) {
-          let dstOff = outer * strideDim * resultShape[dimIdx];
-          for (let t = 0; t < tensors.length; t++) {
-            const srcDimSize = tensors[t].shape[dimIdx];
-            const blockSize = strideDim * srcDimSize;
-            const srcOff = outer * blockSize;
+    for (let outer = 0; outer < numOuter; outer++) {
+      let dstOff = outer * strideDim * resultShape[dimIdx];
+      for (let t = 0; t < tensors.length; t++) {
+        const srcDimSize = tensors[t].shape[dimIdx];
+        const blockSize = strideDim * srcDimSize;
+        const srcOff = outer * blockSize;
+        for (let j = 0; j < blockSize; j++) {
+          result[dstOff + j] = tensors[t].data[srcOff + j];
+        }
+        if (resultImag) {
+          const srcImag = tensors[t].imag;
+          if (srcImag) {
             for (let j = 0; j < blockSize; j++) {
-              result[dstOff + j] = tensors[t].data[srcOff + j];
+              resultImag[dstOff + j] = srcImag[srcOff + j];
             }
-            if (resultImag) {
-              const srcImag = tensors[t].imag;
-              if (srcImag) {
-                for (let j = 0; j < blockSize; j++) {
-                  resultImag[dstOff + j] = srcImag[srcOff + j];
-                }
-              }
-            }
-            dstOff += blockSize;
           }
         }
-        return RTV.tensor(result, resultShape, resultImag);
-      },
-    },
-  ],
+        dstOff += blockSize;
+      }
+    }
+    const out = RTV.tensor(result, resultShape, resultImag);
+    if (allLogical) out._isLogical = true;
+    return out;
+  },
 });
 
 // ── horzcat / vertcat ────────────────────────────────────────────────
 
-defineBuiltin({
+builtin({
   name: "horzcat",
-  cases: [
-    {
-      match: varargMatch,
-      apply: args => horzcat(...args),
-    },
-  ],
+  apply: args => horzcat(...args),
 });
 
-defineBuiltin({
+builtin({
   name: "vertcat",
-  cases: [
-    {
-      match: varargMatch,
-      apply: args => vertcat(...args),
-    },
-  ],
+  apply: args => vertcat(...args),
 });
 
 // ── fliplr / flipud / flip ───────────────────────────────────────────
 
-defineBuiltin({
+builtin({
   name: "fliplr",
-  cases: [
-    {
-      match: argTypes => {
-        if (argTypes.length !== 1) return null;
-        return [{ kind: "unknown" }];
-      },
-      apply: args => {
-        const v = args[0];
-        if (isRuntimeNumber(v)) return v;
-        if (isRuntimeChar(v))
-          return RTV.char(v.value.split("").reverse().join(""));
-        if (isRuntimeSparseMatrix(v)) return flipSparse(v, 1);
-        if (isRuntimeCell(v)) return flipCellAlongDim(v, 1);
-        if (!isRuntimeTensor(v))
-          throw new RuntimeError("fliplr: argument must be numeric or char");
-        return flipAlongDim(v, 1);
-      },
-    },
-  ],
+  nargin: 1,
+  mfile: true,
+  apply: args => {
+    const v = args[0];
+    if (isScalarValue(v)) return v;
+    if (isRuntimeChar(v)) return flipChar(v, 1);
+    if (isRuntimeSparseMatrix(v)) return flipSparse(v, 1);
+    if (isRuntimeCell(v)) return flipCellAlongDim(v, 1);
+    if (!isRuntimeTensor(v))
+      throw new RuntimeError("fliplr: argument must be numeric or char");
+    return flipAlongDim(v, 1);
+  },
 });
 
-defineBuiltin({
+builtin({
   name: "flipud",
-  cases: [
-    {
-      match: argTypes => {
-        if (argTypes.length !== 1) return null;
-        return [{ kind: "unknown" }];
-      },
-      apply: args => {
-        const v = args[0];
-        if (isRuntimeNumber(v)) return v;
-        if (isRuntimeChar(v)) return v;
-        if (isRuntimeSparseMatrix(v)) return flipSparse(v, 0);
-        if (isRuntimeCell(v)) return flipCellAlongDim(v, 0);
-        if (!isRuntimeTensor(v))
-          throw new RuntimeError("flipud: argument must be numeric or char");
-        return flipAlongDim(v, 0);
-      },
-    },
-  ],
+  nargin: 1,
+  mfile: true,
+  apply: args => {
+    const v = args[0];
+    if (isScalarValue(v)) return v;
+    if (isRuntimeChar(v)) return flipChar(v, 0);
+    if (isRuntimeSparseMatrix(v)) return flipSparse(v, 0);
+    if (isRuntimeCell(v)) return flipCellAlongDim(v, 0);
+    if (!isRuntimeTensor(v))
+      throw new RuntimeError("flipud: argument must be numeric or char");
+    return flipAlongDim(v, 0);
+  },
 });
 
-defineBuiltin({
+builtin({
   name: "flip",
-  cases: [
-    {
-      match: argTypes => {
-        if (argTypes.length < 1 || argTypes.length > 2) return null;
-        return [{ kind: "unknown" }];
-      },
-      apply: args => {
-        const v = args[0];
-        if (isRuntimeNumber(v)) return v;
-        if (!isRuntimeTensor(v) && !isRuntimeCell(v))
-          throw new RuntimeError("flip: argument must be numeric or cell");
-        let dimIdx = 0;
-        if (args.length >= 2) {
-          dimIdx = Math.round(toNumber(args[1])) - 1;
-        } else {
-          const shape = v.shape.length >= 2 ? v.shape : [1, ...v.shape];
-          dimIdx = shape.findIndex(d => d > 1);
-          if (dimIdx === -1) dimIdx = 0;
-        }
-        return isRuntimeCell(v)
-          ? flipCellAlongDim(v, dimIdx)
-          : flipAlongDim(v, dimIdx);
-      },
-    },
-  ],
+  nargin: [1, 2],
+  apply: args => {
+    const v = args[0];
+    if (isScalarValue(v)) return v;
+    const t = isRuntimeChar(v) ? charToNumericTensor(v) : v;
+    if (!isRuntimeTensor(t) && !isRuntimeCell(t))
+      throw new RuntimeError("flip: argument must be numeric, char or cell");
+    let dimIdx = 0;
+    if (args.length >= 2) {
+      dimIdx = Math.round(toNumber(args[1])) - 1;
+    } else {
+      const shape = t.shape.length >= 2 ? t.shape : [1, ...t.shape];
+      dimIdx = shape.findIndex(d => d > 1);
+      if (dimIdx === -1) dimIdx = 0;
+    }
+    if (isRuntimeCell(t)) return flipCellAlongDim(t, dimIdx);
+    const out = flipAlongDim(t, dimIdx);
+    return isRuntimeChar(v) ? numericTensorToChar(out) : out;
+  },
 });
 
 // ── rot90 ────────────────────────────────────────────────────────────
 
-defineBuiltin({
+builtin({
   name: "rot90",
-  cases: [
-    {
-      match: argTypes => {
-        if (argTypes.length < 1 || argTypes.length > 2) return null;
-        return [{ kind: "unknown" }];
-      },
-      apply: args => {
-        const v = args[0];
-        if (isRuntimeNumber(v)) return v;
-        if (!isRuntimeTensor(v))
-          throw new RuntimeError("rot90: argument must be numeric");
-        let k = args.length >= 2 ? Math.round(toNumber(args[1])) : 1;
-        k = ((k % 4) + 4) % 4;
-        if (k === 0) {
-          const result = RTV.tensor(
-            allocFloat64Array(v.data),
-            [...v.shape],
-            v.imag ? allocFloat64Array(v.imag) : undefined
-          );
-          if (v._isLogical) result._isLogical = true;
-          return result;
+  nargin: [1, 2],
+  mfile: true,
+  apply: args => {
+    const v = args[0];
+    if (isScalarValue(v)) return v;
+    if (!isRuntimeTensor(v))
+      throw new RuntimeError("rot90: argument must be numeric");
+    let k = args.length >= 2 ? Math.round(toNumber(args[1])) : 1;
+    k = ((k % 4) + 4) % 4;
+    if (k === 0) {
+      const result = RTV.tensor(
+        allocFloat64Array(v.data),
+        [...v.shape],
+        v.imag ? allocFloat64Array(v.imag) : undefined
+      );
+      if (v._isLogical) result._isLogical = true;
+      return result;
+    }
+    const [rows, cols] = tensorSize2D(v);
+    let data = v.data;
+    let imag = v.imag;
+    let r = rows,
+      c = cols;
+    for (let iter = 0; iter < k; iter++) {
+      const newData = allocFloat64Array(r * c);
+      const newImag = imag ? allocFloat64Array(r * c) : undefined;
+      for (let i = 0; i < c; i++) {
+        for (let j = 0; j < r; j++) {
+          const srcIdx = (c - 1 - i) * r + j;
+          const dstIdx = j * c + i;
+          newData[dstIdx] = data[srcIdx];
+          if (newImag) newImag[dstIdx] = imag![srcIdx];
         }
-        const [rows, cols] = tensorSize2D(v);
-        let data = v.data;
-        let imag = v.imag;
-        let r = rows,
-          c = cols;
-        for (let iter = 0; iter < k; iter++) {
-          const newData = allocFloat64Array(r * c);
-          const newImag = imag ? allocFloat64Array(r * c) : undefined;
-          for (let i = 0; i < c; i++) {
-            for (let j = 0; j < r; j++) {
-              const srcIdx = (c - 1 - i) * r + j;
-              const dstIdx = j * c + i;
-              newData[dstIdx] = data[srcIdx];
-              if (newImag) newImag[dstIdx] = imag![srcIdx];
-            }
-          }
-          data = newData;
-          imag = newImag;
-          const tmp = r;
-          r = c;
-          c = tmp;
-        }
-        const result = RTV.tensor(data, [r, c], imag);
-        if (v._isLogical) result._isLogical = true;
-        return result;
-      },
-    },
-  ],
+      }
+      data = newData;
+      imag = newImag;
+      const tmp = r;
+      r = c;
+      c = tmp;
+    }
+    const result = RTV.tensor(data, [r, c], imag);
+    if (v._isLogical) result._isLogical = true;
+    return result;
+  },
 });
 
 // ── repmat ───────────────────────────────────────────────────────────
@@ -893,220 +866,186 @@ function repmatObjects(
     : RTV.classInstanceArray(className, out, [newRows, newCols]);
 }
 
-defineBuiltin({
+builtin({
   name: "repmat",
-  cases: [
-    {
-      // Result is a tensor of the same complexity as arg[0]. Shape depends
-      // on the reps args (runtime-only), so we leave `shape` undefined.
-      match: argTypes => {
-        if (argTypes.length < 2) return null;
-        const a = argTypes[0];
-        if (a.kind === "number" || a.kind === "boolean") {
-          return [{ kind: "tensor", isComplex: false }];
-        }
-        if (a.kind === "tensor") {
-          return [{ kind: "tensor", isComplex: a.isComplex === true }];
-        }
-        if (a.kind === "complex_or_number") {
-          return [{ kind: "tensor", isComplex: true }];
-        }
-        return [{ kind: "unknown" }];
-      },
-      apply: args => {
-        if (args.length < 2)
-          throw new RuntimeError("repmat requires at least 2 arguments");
-        let v = args[0];
-        if (isRuntimeClassInstance(v) || isRuntimeClassInstanceArray(v))
-          return repmatObjects(v, args.slice(1));
-        if (isRuntimeSparseMatrix(v)) v = sparseToDense(v);
-        let reps: number[];
-        if (args.length === 2) {
-          const arg1 = args[1];
-          if (isRuntimeTensor(arg1)) {
-            reps = Array.from(arg1.data).map(x => validateSizeArg(x));
-          } else {
-            const n = validateSizeArg(toNumber(arg1));
-            reps = [n, n];
-          }
-        } else {
-          reps = args.slice(1).map(a => validateSizeArg(toNumber(a)));
-        }
-        if (isRuntimeNumber(v)) {
-          const total = reps.reduce((a, b) => a * b, 1);
-          const data = allocFloat64Array(total).fill(v as number);
-          return RTV.tensor(data, reps.length >= 2 ? reps : [reps[0], reps[0]]);
-        }
-        if (isRuntimeLogical(v)) {
-          const total = reps.reduce((a, b) => a * b, 1);
-          const data = allocFloat64Array(total).fill(v ? 1 : 0);
-          const shape = reps.length >= 2 ? reps : [reps[0], reps[0]];
-          const t = RTV.tensor(data, shape);
-          t._isLogical = true;
-          return t;
-        }
-        if (isRuntimeChar(v)) {
-          const rowReps = reps[0] ?? 1;
-          const colReps = reps.length >= 2 ? reps[1] : 1;
-          if (rowReps === 0 || colReps === 0) return RTV.char("");
-          let row = "";
-          for (let j = 0; j < colReps; j++) row += v.value;
-          let result = "";
-          for (let i = 0; i < rowReps; i++) result += row;
-          return RTV.char(result);
-        }
-        if (isRuntimeComplexNumber(v)) {
-          const total = reps.reduce((a, b) => a * b, 1);
-          const data = allocFloat64Array(total).fill(v.re);
-          const imag = allocFloat64Array(total).fill(v.im);
-          const shape = reps.length >= 2 ? reps : [reps[0], reps[0]];
-          return RTV.tensor(data, shape, imag);
-        }
-        if (isRuntimeCell(v)) {
-          // Tile a cell array (column-major), like any other array type.
-          const srcShape =
-            v.shape.length >= 2 ? v.shape : [1, v.shape[0] ?? v.data.length];
-          const [sm, sn] = [srcShape[0], srcShape[1]];
-          const r0 = reps[0] ?? 1;
-          const r1 = reps.length >= 2 ? reps[1] : (reps[0] ?? 1);
-          const om = sm * r0;
-          const on = sn * r1;
-          const out: RuntimeValue[] = new Array(om * on);
-          for (let J = 0; J < on; J++) {
-            for (let I = 0; I < om; I++) {
-              out[I + J * om] = v.data[(I % sm) + (J % sn) * sm];
-            }
-          }
-          return RTV.cell(out, [om, on]);
-        }
-        if (!isRuntimeTensor(v))
-          throw new RuntimeError("repmat: first argument must be numeric");
-        // Fast path: all reps are 1 → return copy without data duplication
-        if (reps.every(r => r === 1)) {
-          return RTV.tensor(
-            allocFloat64Array(v.data),
-            v.shape,
-            v.imag ? allocFloat64Array(v.imag) : undefined
-          );
-        }
-        const srcShape = v.shape.length >= 2 ? v.shape : [1, v.shape[0] || 1];
-        const ndim = Math.max(srcShape.length, reps.length);
-        const padSrc = [...srcShape];
-        while (padSrc.length < ndim) padSrc.push(1);
-        const padReps = [...reps];
-        while (padReps.length < ndim) padReps.push(1);
-        const resultShape = padSrc.map((s, i) => s * padReps[i]);
-
-        let curData: Float64Array = allocFloat64Array(v.data) as Float64Array;
-        let curImag: Float64Array | undefined = v.imag
-          ? (allocFloat64Array(v.imag) as Float64Array)
-          : undefined;
-        const curShape = [...padSrc];
-
-        for (let d = 0; d < ndim; d++) {
-          const rep = padReps[d];
-          if (rep === 1) continue;
-          const curTotal = curData.length;
-          const newTotal = curTotal * rep;
-          const newData = allocFloat64Array(newTotal);
-          const newImag = curImag ? allocFloat64Array(newTotal) : undefined;
-
-          if (rep === 0) {
-            // 0 reps along this axis -> the result is empty (newTotal===0).
-            // Skip the copy loops: the general (blockSize>1) branch would do
-            // newData.set(subarray, ...) into a zero-length buffer (offset out
-            // of bounds). Nothing to copy; just adopt the empty buffer.
-            releaseFloat64Array(curData);
-            if (curImag) releaseFloat64Array(curImag);
-            curData = newData;
-            curImag = newImag;
-            curShape[d] = 0;
-            continue;
-          }
-
-          let blockSize = 1;
-          for (let i = 0; i <= d; i++) blockSize *= curShape[i];
-          const numBlocks = curTotal / blockSize;
-
-          if (blockSize === 1) {
-            // Each block is a single scalar: fill `rep` consecutive positions
-            // with the same value.  One TypedArray.fill() per source element,
-            // which is a tight C loop inside V8.
-            for (let b = 0; b < numBlocks; b++) {
-              const dstBase = b * rep;
-              newData.fill(curData[b], dstBase, dstBase + rep);
-              if (newImag && curImag) {
-                newImag.fill(curImag[b], dstBase, dstBase + rep);
-              }
-            }
-          } else {
-            // General case: copy the block once at the start of each tile,
-            // then use copyWithin() to double it in place — O(log rep)
-            // copyWithin calls per block instead of O(rep) .set() calls.
-            for (let b = 0; b < numBlocks; b++) {
-              const srcOff = b * blockSize;
-              const dstBase = b * blockSize * rep;
-              const totalToWrite = rep * blockSize;
-              newData.set(
-                curData.subarray(srcOff, srcOff + blockSize),
-                dstBase
-              );
-              if (newImag && curImag) {
-                newImag.set(
-                  curImag.subarray(srcOff, srcOff + blockSize),
-                  dstBase
-                );
-              }
-              let written = blockSize;
-              while (written * 2 <= totalToWrite) {
-                newData.copyWithin(
-                  dstBase + written,
-                  dstBase,
-                  dstBase + written
-                );
-                if (newImag) {
-                  newImag.copyWithin(
-                    dstBase + written,
-                    dstBase,
-                    dstBase + written
-                  );
-                }
-                written *= 2;
-              }
-              if (written < totalToWrite) {
-                const remaining = totalToWrite - written;
-                newData.copyWithin(
-                  dstBase + written,
-                  dstBase,
-                  dstBase + remaining
-                );
-                if (newImag) {
-                  newImag.copyWithin(
-                    dstBase + written,
-                    dstBase,
-                    dstBase + remaining
-                  );
-                }
-              }
-            }
-          }
-          // The prior curData/curImag are intermediate scratch buffers —
-          // not held by any wrapper. Return them to the pool so they can
-          // be reused (often by the next iteration's allocFloat64Array).
-          releaseFloat64Array(curData);
-          if (curImag) releaseFloat64Array(curImag);
-          curData = newData;
-          curImag = newImag;
-          curShape[d] *= rep;
-        }
-
-        const out = RTV.tensor(curData, resultShape, curImag);
-        if (v._isLogical) out._isLogical = true;
-        return out;
-      },
-    },
-  ],
+  nargin: [2, Infinity],
+  mfile: true,
+  apply: args => {
+    for (let i = 1; i < args.length; i++)
+      rejectComplex(
+        args[i],
+        "MATLAB:repmat:complexReplications",
+        "Complex replication factors are not supported."
+      );
+    const v = args[0];
+    if (isRuntimeClassInstance(v) || isRuntimeClassInstanceArray(v))
+      return repmatObjects(v, args.slice(1));
+    // Char arrays tile through their character codes.
+    if (isRuntimeChar(v)) {
+      const out = repmatValue(charToNumericTensor(v), args.slice(1));
+      if (!isRuntimeTensor(out) || out.shape.length > 2)
+        throw new RuntimeError("repmat: char arrays must be 2-D");
+      return numericTensorToChar(out);
+    }
+    return repmatValue(v, args.slice(1));
+  },
 });
+
+function repmatValue(v: RuntimeValue, repArgs: RuntimeValue[]): RuntimeValue {
+  if (isRuntimeSparseMatrix(v)) v = sparseToDense(v);
+  const args = [v, ...repArgs];
+  let reps: number[];
+  if (args.length === 2) {
+    const arg1 = args[1];
+    if (isRuntimeTensor(arg1)) {
+      reps = Array.from(arg1.data).map(x => validateSizeArg(x));
+    } else {
+      const n = validateSizeArg(toNumber(arg1));
+      reps = [n, n];
+    }
+  } else {
+    reps = args.slice(1).map(a => validateSizeArg(toNumber(a)));
+  }
+  if (isRuntimeNumber(v)) {
+    const total = reps.reduce((a, b) => a * b, 1);
+    const data = allocFloat64Array(total).fill(v as number);
+    return RTV.tensor(data, reps.length >= 2 ? reps : [reps[0], reps[0]]);
+  }
+  if (isRuntimeLogical(v)) {
+    const total = reps.reduce((a, b) => a * b, 1);
+    const data = allocFloat64Array(total).fill(v ? 1 : 0);
+    const shape = reps.length >= 2 ? reps : [reps[0], reps[0]];
+    const t = RTV.tensor(data, shape);
+    t._isLogical = true;
+    return t;
+  }
+  if (isRuntimeComplexNumber(v)) {
+    const total = reps.reduce((a, b) => a * b, 1);
+    const data = allocFloat64Array(total).fill(v.re);
+    const imag = allocFloat64Array(total).fill(v.im);
+    const shape = reps.length >= 2 ? reps : [reps[0], reps[0]];
+    return RTV.tensor(data, shape, imag);
+  }
+  if (isRuntimeCell(v)) {
+    // Tile a cell array (column-major), like any other array type.
+    const srcShape =
+      v.shape.length >= 2 ? v.shape : [1, v.shape[0] ?? v.data.length];
+    const [sm, sn] = [srcShape[0], srcShape[1]];
+    const r0 = reps[0] ?? 1;
+    const r1 = reps.length >= 2 ? reps[1] : (reps[0] ?? 1);
+    const om = sm * r0;
+    const on = sn * r1;
+    const out: RuntimeValue[] = new Array(om * on);
+    for (let J = 0; J < on; J++) {
+      for (let I = 0; I < om; I++) {
+        out[I + J * om] = v.data[(I % sm) + (J % sn) * sm];
+      }
+    }
+    return RTV.cell(out, [om, on]);
+  }
+  if (!isRuntimeTensor(v))
+    throw new RuntimeError("repmat: first argument must be numeric");
+  // Fast path: all reps are 1 → return copy without data duplication
+  if (reps.every(r => r === 1)) {
+    return RTV.tensor(
+      allocFloat64Array(v.data),
+      v.shape,
+      v.imag ? allocFloat64Array(v.imag) : undefined
+    );
+  }
+  const srcShape = v.shape.length >= 2 ? v.shape : [1, v.shape[0] || 1];
+  const ndim = Math.max(srcShape.length, reps.length);
+  const padSrc = [...srcShape];
+  while (padSrc.length < ndim) padSrc.push(1);
+  const padReps = [...reps];
+  while (padReps.length < ndim) padReps.push(1);
+  const resultShape = padSrc.map((s, i) => s * padReps[i]);
+
+  let curData: Float64Array = allocFloat64Array(v.data) as Float64Array;
+  let curImag: Float64Array | undefined = v.imag
+    ? (allocFloat64Array(v.imag) as Float64Array)
+    : undefined;
+  const curShape = [...padSrc];
+
+  for (let d = 0; d < ndim; d++) {
+    const rep = padReps[d];
+    if (rep === 1) continue;
+    const curTotal = curData.length;
+    const newTotal = curTotal * rep;
+    const newData = allocFloat64Array(newTotal);
+    const newImag = curImag ? allocFloat64Array(newTotal) : undefined;
+
+    if (rep === 0) {
+      // 0 reps along this axis -> the result is empty (newTotal===0).
+      // Skip the copy loops: the general (blockSize>1) branch would do
+      // newData.set(subarray, ...) into a zero-length buffer (offset out
+      // of bounds). Nothing to copy; just adopt the empty buffer.
+      releaseFloat64Array(curData);
+      if (curImag) releaseFloat64Array(curImag);
+      curData = newData;
+      curImag = newImag;
+      curShape[d] = 0;
+      continue;
+    }
+
+    let blockSize = 1;
+    for (let i = 0; i <= d; i++) blockSize *= curShape[i];
+    const numBlocks = curTotal / blockSize;
+
+    if (blockSize === 1) {
+      // Each block is a single scalar: fill `rep` consecutive positions
+      // with the same value.  One TypedArray.fill() per source element,
+      // which is a tight C loop inside V8.
+      for (let b = 0; b < numBlocks; b++) {
+        const dstBase = b * rep;
+        newData.fill(curData[b], dstBase, dstBase + rep);
+        if (newImag && curImag) {
+          newImag.fill(curImag[b], dstBase, dstBase + rep);
+        }
+      }
+    } else {
+      // General case: copy the block once at the start of each tile,
+      // then use copyWithin() to double it in place — O(log rep)
+      // copyWithin calls per block instead of O(rep) .set() calls.
+      for (let b = 0; b < numBlocks; b++) {
+        const srcOff = b * blockSize;
+        const dstBase = b * blockSize * rep;
+        const totalToWrite = rep * blockSize;
+        newData.set(curData.subarray(srcOff, srcOff + blockSize), dstBase);
+        if (newImag && curImag) {
+          newImag.set(curImag.subarray(srcOff, srcOff + blockSize), dstBase);
+        }
+        let written = blockSize;
+        while (written * 2 <= totalToWrite) {
+          newData.copyWithin(dstBase + written, dstBase, dstBase + written);
+          if (newImag) {
+            newImag.copyWithin(dstBase + written, dstBase, dstBase + written);
+          }
+          written *= 2;
+        }
+        if (written < totalToWrite) {
+          const remaining = totalToWrite - written;
+          newData.copyWithin(dstBase + written, dstBase, dstBase + remaining);
+          if (newImag) {
+            newImag.copyWithin(dstBase + written, dstBase, dstBase + remaining);
+          }
+        }
+      }
+    }
+    // The prior curData/curImag are intermediate scratch buffers —
+    // not held by any wrapper. Return them to the pool so they can
+    // be reused (often by the next iteration's allocFloat64Array).
+    releaseFloat64Array(curData);
+    if (curImag) releaseFloat64Array(curImag);
+    curData = newData;
+    curImag = newImag;
+    curShape[d] *= rep;
+  }
+
+  const out = RTV.tensor(curData, resultShape, curImag);
+  if (v._isLogical) out._isLogical = true;
+  return out;
+}
 
 // ── repelem ──────────────────────────────────────────────────────────
 
@@ -1187,619 +1126,653 @@ function repelemObjects(
   return wrap(out, [newRows, newCols]);
 }
 
-defineBuiltin({
+builtin({
   name: "repelem",
-  cases: [
-    {
-      match: varargMatch2,
-      apply: args => {
-        if (args.length < 2)
-          throw new RuntimeError("repelem requires at least 2 arguments");
-        const v = args[0];
-        if (isRuntimeClassInstance(v) || isRuntimeClassInstanceArray(v))
-          return repelemObjects(v, args.slice(1));
-        if (args.length === 2) {
-          const repArg = args[1];
-          // Per-element count vector: repelem(v, [c1 c2 ...]) repeats v(i)
-          // counts(i) times. (A 1-element count is treated as a scalar.)
-          if (isRuntimeTensor(repArg) && repArg.data.length > 1) {
-            const counts = repArg.data;
-            const vData = isRuntimeNumber(v)
-              ? Float64Array.of(v as number)
-              : isRuntimeTensor(v)
-                ? v.data
-                : null;
-            if (vData === null)
-              throw new RuntimeError("repelem: first argument must be numeric");
-            const len = vData.length;
-            if (counts.length !== len)
-              throw new RuntimeError(
-                `repelem: counts vector length (${counts.length}) must match the number of elements (${len})`
-              );
-            const vImag = isRuntimeTensor(v) ? v.imag : undefined;
-            let total = 0;
-            for (let i = 0; i < len; i++)
-              total += Math.max(0, Math.round(counts[i]));
-            const result = allocFloat64Array(total);
-            const resultImag = vImag ? allocFloat64Array(total) : undefined;
-            let k = 0;
-            for (let i = 0; i < len; i++) {
-              const c = Math.max(0, Math.round(counts[i]));
-              for (let j = 0; j < c; j++) {
-                result[k] = vData[i];
-                if (resultImag) resultImag[k] = vImag![i];
-                k++;
-              }
-            }
-            const isCol =
-              isRuntimeTensor(v) && v.shape.length === 2 && v.shape[1] === 1;
-            const out = RTV.tensor(
-              result,
-              isCol ? [total, 1] : [1, total],
-              resultImag
-            );
-            if (isRuntimeTensor(v) && v._isLogical) out._isLogical = true;
-            return out;
-          }
-          const n = Math.round(toNumber(args[1]));
-          if (isRuntimeNumber(v)) {
-            const data = allocFloat64Array(n).fill(v as number);
-            return RTV.tensor(data, [1, n]);
-          }
-          if (!isRuntimeTensor(v))
-            throw new RuntimeError("repelem: first argument must be numeric");
-          const len = v.data.length;
-          const result = allocFloat64Array(len * n);
-          const resultImag = v.imag ? allocFloat64Array(len * n) : undefined;
-          const isCol = v.shape.length === 2 && v.shape[1] === 1;
-          for (let i = 0; i < len; i++) {
-            for (let j = 0; j < n; j++) {
-              result[i * n + j] = v.data[i];
-              if (resultImag) resultImag[i * n + j] = v.imag![i];
-            }
-          }
-          if (isCol) return RTV.tensor(result, [len * n, 1], resultImag);
-          return RTV.tensor(result, [1, len * n], resultImag);
-        }
-        const rRep = Math.round(toNumber(args[1]));
-        const cRep = Math.round(toNumber(args[2]));
-        if (isRuntimeNumber(v)) {
-          const data = allocFloat64Array(rRep * cRep).fill(v as number);
-          return RTV.tensor(data, [rRep, cRep]);
-        }
-        if (!isRuntimeTensor(v))
+  nargin: [2, Infinity],
+  mfile: true,
+  apply: args => {
+    for (let i = 1; i < args.length; i++)
+      rejectComplex(
+        args[i],
+        "MATLAB:repelem:complexReplications",
+        "Complex replication factors are not supported."
+      );
+    let v = args[0];
+    if (isRuntimeClassInstance(v) || isRuntimeClassInstanceArray(v))
+      return repelemObjects(v, args.slice(1));
+    if (args.length > 3)
+      throw new RuntimeError(
+        "repelem: more than two replication arguments are not supported"
+      );
+    if (isRuntimeLogical(v) || isRuntimeComplexNumber(v))
+      v = scalarTensor(v, "repelem");
+    if (args.length === 2) {
+      const repArg = args[1];
+      // Per-element count vector: repelem(v, [c1 c2 ...]) repeats v(i)
+      // counts(i) times. (A 1-element count is treated as a scalar.)
+      if (isRuntimeTensor(repArg) && repArg.data.length > 1) {
+        const counts = repArg.data;
+        const vData = isRuntimeNumber(v)
+          ? Float64Array.of(v as number)
+          : isRuntimeTensor(v)
+            ? v.data
+            : null;
+        if (vData === null)
           throw new RuntimeError("repelem: first argument must be numeric");
-        const [rows, cols] = tensorSize2D(v);
-        const newRows = rows * rRep;
-        const newCols = cols * cRep;
-        const result = allocFloat64Array(newRows * newCols);
-        const resultImag = v.imag
-          ? allocFloat64Array(newRows * newCols)
-          : undefined;
-        for (let c = 0; c < cols; c++) {
-          for (let r = 0; r < rows; r++) {
-            const srcIdx = c * rows + r;
-            const val = v.data[srcIdx];
-            const valIm = v.imag ? v.imag[srcIdx] : 0;
-            for (let dc = 0; dc < cRep; dc++) {
-              for (let dr = 0; dr < rRep; dr++) {
-                const dstRow = r * rRep + dr;
-                const dstCol = c * cRep + dc;
-                const dstIdx = dstCol * newRows + dstRow;
-                result[dstIdx] = val;
-                if (resultImag) resultImag[dstIdx] = valIm;
-              }
-            }
+        const len = vData.length;
+        if (counts.length !== len)
+          throw new RuntimeError(
+            `repelem: counts vector length (${counts.length}) must match the number of elements (${len})`
+          );
+        const vImag = isRuntimeTensor(v) ? v.imag : undefined;
+        let total = 0;
+        for (let i = 0; i < len; i++)
+          total += Math.max(0, Math.round(counts[i]));
+        const result = allocFloat64Array(total);
+        const resultImag = vImag ? allocFloat64Array(total) : undefined;
+        let k = 0;
+        for (let i = 0; i < len; i++) {
+          const c = Math.max(0, Math.round(counts[i]));
+          for (let j = 0; j < c; j++) {
+            result[k] = vData[i];
+            if (resultImag) resultImag[k] = vImag![i];
+            k++;
           }
         }
-        return RTV.tensor(result, [newRows, newCols], resultImag);
-      },
-    },
-  ],
+        const isCol =
+          isRuntimeTensor(v) && v.shape.length === 2 && v.shape[1] === 1;
+        const out = RTV.tensor(
+          result,
+          isCol ? [total, 1] : [1, total],
+          resultImag
+        );
+        if (isRuntimeTensor(v) && v._isLogical) out._isLogical = true;
+        return out;
+      }
+      const n = Math.round(toNumber(args[1]));
+      if (isRuntimeNumber(v)) {
+        const data = allocFloat64Array(n).fill(v as number);
+        return RTV.tensor(data, [1, n]);
+      }
+      if (!isRuntimeTensor(v))
+        throw new RuntimeError("repelem: first argument must be numeric");
+      const len = v.data.length;
+      const result = allocFloat64Array(len * n);
+      const resultImag = v.imag ? allocFloat64Array(len * n) : undefined;
+      const isCol =
+        v.shape.length === 2 && v.shape[1] === 1 && v.shape[0] !== 1;
+      for (let i = 0; i < len; i++) {
+        for (let j = 0; j < n; j++) {
+          result[i * n + j] = v.data[i];
+          if (resultImag) resultImag[i * n + j] = v.imag![i];
+        }
+      }
+      const out = RTV.tensor(
+        result,
+        isCol ? [len * n, 1] : [1, len * n],
+        resultImag
+      );
+      if (v._isLogical) out._isLogical = true;
+      return out;
+    }
+    const rRep = Math.round(toNumber(args[1]));
+    const cRep = Math.round(toNumber(args[2]));
+    if (isRuntimeNumber(v)) {
+      const data = allocFloat64Array(rRep * cRep).fill(v as number);
+      return RTV.tensor(data, [rRep, cRep]);
+    }
+    if (!isRuntimeTensor(v))
+      throw new RuntimeError("repelem: first argument must be numeric");
+    const [rows, cols] = tensorSize2D(v);
+    const newRows = rows * rRep;
+    const newCols = cols * cRep;
+    const result = allocFloat64Array(newRows * newCols);
+    const resultImag = v.imag
+      ? allocFloat64Array(newRows * newCols)
+      : undefined;
+    for (let c = 0; c < cols; c++) {
+      for (let r = 0; r < rows; r++) {
+        const srcIdx = c * rows + r;
+        const val = v.data[srcIdx];
+        const valIm = v.imag ? v.imag[srcIdx] : 0;
+        for (let dc = 0; dc < cRep; dc++) {
+          for (let dr = 0; dr < rRep; dr++) {
+            const dstRow = r * rRep + dr;
+            const dstCol = c * cRep + dc;
+            const dstIdx = dstCol * newRows + dstRow;
+            result[dstIdx] = val;
+            if (resultImag) resultImag[dstIdx] = valIm;
+          }
+        }
+      }
+    }
+    const out = RTV.tensor(result, [newRows, newCols], resultImag);
+    if (v._isLogical) out._isLogical = true;
+    return out;
+  },
 });
 
 // ── squeeze ──────────────────────────────────────────────────────────
 
-defineBuiltin({
+builtin({
   name: "squeeze",
-  cases: [
-    {
-      match: argTypes => {
-        if (argTypes.length !== 1) return null;
-        return [{ kind: "unknown" }];
-      },
-      apply: args => {
-        const v = args[0];
-        if (isRuntimeNumber(v) || isRuntimeLogical(v)) return v;
-        if (isRuntimeTensor(v)) {
-          const effectiveShape = [...v.shape];
-          while (
-            effectiveShape.length > 2 &&
-            effectiveShape[effectiveShape.length - 1] === 1
-          ) {
-            effectiveShape.pop();
-          }
-          // Copy buffers — sharing them across wrappers conflicts with
-          // refcount-driven pool reclamation (see reshape for the same
-          // tradeoff).
-          const dataCopy = allocFloat64Array(v.data);
-          const imagCopy = v.imag ? allocFloat64Array(v.imag) : undefined;
-          if (effectiveShape.length <= 2) {
-            return RTV.tensor(dataCopy, effectiveShape, imagCopy);
-          }
-          const newShape = effectiveShape.filter(d => d !== 1);
-          if (newShape.length === 0) {
-            if (v.imag && v.imag[0] !== 0)
-              return RTV.complex(v.data[0], v.imag[0]);
-            return RTV.num(v.data[0]);
-          }
-          if (newShape.length === 1) {
-            return RTV.tensor(dataCopy, [newShape[0], 1], imagCopy);
-          }
-          return RTV.tensor(dataCopy, newShape, imagCopy);
-        }
-        // Cell arrays may carry N-D shapes; squeeze the singleton dims.
-        // Element references are shared (RuntimeCell increfs them).
-        if (isRuntimeCell(v)) {
-          const shape = [...v.shape];
-          while (shape.length > 2 && shape[shape.length - 1] === 1) shape.pop();
-          if (shape.length <= 2) return RTV.cell(v.data, shape);
-          const newShape = shape.filter(d => d !== 1);
-          while (newShape.length < 2) newShape.push(1);
-          return RTV.cell(v.data, newShape);
-        }
-        // All other array kinds (structs, struct/class arrays, char, string)
-        // are at most 2-D in numbl, so squeeze is a no-op — return as-is, like
-        // MATLAB, which accepts any type.
-        return v;
-      },
-    },
-  ],
+  nargin: 1,
+  mfile: true,
+  apply: args => {
+    const v = args[0];
+    if (isRuntimeNumber(v) || isRuntimeLogical(v)) return v;
+    if (isRuntimeTensor(v)) {
+      const effectiveShape = [...v.shape];
+      while (
+        effectiveShape.length > 2 &&
+        effectiveShape[effectiveShape.length - 1] === 1
+      ) {
+        effectiveShape.pop();
+      }
+      // Copy buffers — sharing them across wrappers conflicts with
+      // refcount-driven pool reclamation (see reshape for the same
+      // tradeoff).
+      const dataCopy = allocFloat64Array(v.data);
+      const imagCopy = v.imag ? allocFloat64Array(v.imag) : undefined;
+      if (effectiveShape.length <= 2) {
+        return RTV.tensor(dataCopy, effectiveShape, imagCopy);
+      }
+      const newShape = effectiveShape.filter(d => d !== 1);
+      if (newShape.length === 0) {
+        if (v.imag && v.imag[0] !== 0) return RTV.complex(v.data[0], v.imag[0]);
+        return RTV.num(v.data[0]);
+      }
+      if (newShape.length === 1) {
+        return RTV.tensor(dataCopy, [newShape[0], 1], imagCopy);
+      }
+      return RTV.tensor(dataCopy, newShape, imagCopy);
+    }
+    // Cell arrays may carry N-D shapes; squeeze the singleton dims.
+    // Element references are shared (RuntimeCell increfs them).
+    if (isRuntimeCell(v)) {
+      const shape = [...v.shape];
+      while (shape.length > 2 && shape[shape.length - 1] === 1) shape.pop();
+      if (shape.length <= 2) return RTV.cell(v.data, shape);
+      const newShape = shape.filter(d => d !== 1);
+      while (newShape.length < 2) newShape.push(1);
+      return RTV.cell(v.data, newShape);
+    }
+    // All other array kinds (structs, struct/class arrays, char, string)
+    // are at most 2-D in numbl, so squeeze is a no-op — return as-is, like
+    // MATLAB, which accepts any type.
+    return v;
+  },
 });
 
 // ── circshift ────────────────────────────────────────────────────────
 
-defineBuiltin({
+/** Column-major source index for each element of a circular shift of an
+ *  array of `shape` by `shifts` (one per dimension; missing entries are
+ *  0). */
+function circshiftSource(shape: number[], shifts: number[]): Int32Array {
+  const ndim = shape.length;
+  const total = numel(shape);
+  const strides = new Array(ndim);
+  strides[0] = 1;
+  for (let d = 1; d < ndim; d++) strides[d] = strides[d - 1] * shape[d - 1];
+
+  const dimLookup: number[][] = new Array(ndim);
+  for (let d = 0; d < ndim; d++) {
+    const n = shape[d];
+    const s = d < shifts.length && n > 0 ? ((-shifts[d] % n) + n) % n : 0;
+    const lookup = new Array(n);
+    for (let k = 0; k < n; k++) lookup[k] = ((k + s) % n) * strides[d];
+    dimLookup[d] = lookup;
+  }
+
+  const src = new Int32Array(total);
+  const subs = new Array(ndim).fill(0);
+  let srcIdx = 0;
+  for (let d = 0; d < ndim; d++) srcIdx += dimLookup[d][0] ?? 0;
+  for (let i = 0; i < total; i++) {
+    src[i] = srcIdx;
+    for (let d = 0; d < ndim; d++) {
+      const prev = subs[d];
+      subs[d]++;
+      if (subs[d] < shape[d]) {
+        srcIdx += dimLookup[d][subs[d]] - dimLookup[d][prev];
+        break;
+      }
+      srcIdx -= dimLookup[d][prev] - dimLookup[d][0];
+      subs[d] = 0;
+    }
+  }
+  return src;
+}
+
+/** An integer shift amount (scalar or vector) for circshift. */
+function shiftAmounts(v: RuntimeValue): number[] {
+  rejectComplex(
+    v,
+    "MATLAB:circshift:InvalidShiftType",
+    "Invalid shift type: must be a real finite integer vector."
+  );
+  if (isRuntimeTensor(v)) return Array.from(v.data).map(s => Math.round(s));
+  return [Math.round(toNumber(v))];
+}
+
+builtin({
   name: "circshift",
-  cases: [
-    {
-      match: varargMatch2,
-      apply: args => {
-        if (args.length < 2)
-          throw new RuntimeError("circshift requires 2 arguments");
-        const v = args[0];
-        if (isRuntimeNumber(v)) return v;
-        if (!isRuntimeTensor(v))
-          throw new RuntimeError("circshift: first argument must be numeric");
-        const shiftArg = args[1];
-        const shape = v.shape.length >= 2 ? v.shape : [1, ...v.shape];
+  nargin: [2, 3],
+  apply: args => {
+    const v = args[0];
+    if (isScalarValue(v)) return v;
+    const t = isRuntimeChar(v) ? charToNumericTensor(v) : v;
+    if (!isRuntimeTensor(t) && !isRuntimeCell(t))
+      throw new RuntimeError(
+        "circshift: first argument must be numeric, char or cell"
+      );
+    const shape =
+      t.shape.length >= 2 ? [...t.shape] : [1, ...(t.shape as number[])];
 
-        let shifts: number[];
-        if (isRuntimeTensor(shiftArg)) {
-          shifts = Array.from(shiftArg.data).map(s => Math.round(s));
-        } else {
-          const scalarShift = Math.round(toNumber(shiftArg));
-          let dimIdx = 0;
-          if (shape[0] === 1 && shape.length === 2) dimIdx = 1;
-          shifts = new Array(shape.length).fill(0);
-          shifts[dimIdx] = scalarShift;
-        }
+    const k = shiftAmounts(args[1]);
+    let shifts: number[];
+    if (args.length === 3) {
+      const dimArg = args[2];
+      const dim = isRuntimeNumber(dimArg)
+        ? dimArg
+        : isRuntimeTensor(dimArg) && dimArg.data.length === 1 && !dimArg.imag
+          ? dimArg.data[0]
+          : NaN;
+      if (
+        k.length !== 1 ||
+        (isRuntimeTensor(dimArg) && dimArg.data.length !== 1)
+      )
+        throw builtinError(
+          "MATLAB:circshift:NonScalarDim",
+          "In CIRCSHIFT(X,K,DIM), K and DIM must be scalars."
+        );
+      if (!(Number.isInteger(dim) && dim >= 1))
+        throw builtinError(
+          "MATLAB:getdimarg:dimensionMustBePositiveInteger",
+          "Dimension argument must be a positive integer scalar within indexing range."
+        );
+      shifts = new Array(Math.max(shape.length, dim)).fill(0);
+      shifts[dim - 1] = k[0];
+    } else if (k.length === 1) {
+      // A scalar shift applies to the first non-singleton dimension.
+      let dimIdx = shape.findIndex(d => d !== 1);
+      if (dimIdx === -1) dimIdx = 0;
+      shifts = new Array(shape.length).fill(0);
+      shifts[dimIdx] = k[0];
+    } else {
+      shifts = k;
+    }
 
-        const totalElems = v.data.length;
-        const result = allocFloat64Array(totalElems);
-        const resultImag = v.imag ? allocFloat64Array(totalElems) : undefined;
-
-        const ndimCS = shape.length;
-        const strides = new Array(ndimCS);
-        strides[0] = 1;
-        for (let d = 1; d < ndimCS; d++)
-          strides[d] = strides[d - 1] * shape[d - 1];
-
-        const dimLookup: number[][] = new Array(ndimCS);
-        for (let d = 0; d < ndimCS; d++) {
-          const n = shape[d];
-          const s = d < shifts.length ? ((-shifts[d] % n) + n) % n : 0;
-          const lookup = new Array(n);
-          for (let k = 0; k < n; k++) {
-            lookup[k] = ((k + s) % n) * strides[d];
-          }
-          dimLookup[d] = lookup;
-        }
-
-        const subs = new Array(ndimCS).fill(0);
-        let srcIdx = 0;
-        for (let d = 0; d < ndimCS; d++) srcIdx += dimLookup[d][0];
-        for (let i = 0; i < totalElems; i++) {
-          result[i] = v.data[srcIdx];
-          if (resultImag) resultImag[i] = v.imag![srcIdx];
-          for (let d = 0; d < ndimCS; d++) {
-            const prev = subs[d];
-            subs[d]++;
-            if (subs[d] < shape[d]) {
-              srcIdx += dimLookup[d][subs[d]] - dimLookup[d][prev];
-              break;
-            }
-            srcIdx -= dimLookup[d][prev] - dimLookup[d][0];
-            subs[d] = 0;
-          }
-        }
-        return RTV.tensor(result, [...v.shape], resultImag);
-      },
-    },
-  ],
+    const src = circshiftSource(shape, shifts);
+    if (isRuntimeCell(t))
+      return RTV.cell(
+        Array.from(src, i => t.data[i]),
+        [...t.shape]
+      );
+    const total = src.length;
+    const result = allocFloat64Array(total);
+    const resultImag = t.imag ? allocFloat64Array(total) : undefined;
+    for (let i = 0; i < total; i++) {
+      result[i] = t.data[src[i]];
+      if (resultImag) resultImag[i] = t.imag![src[i]];
+    }
+    const out = RTV.tensor(result, [...t.shape], resultImag);
+    if (t._isLogical) out._isLogical = true;
+    return isRuntimeChar(v) ? numericTensorToChar(out) : out;
+  },
 });
 
 // ── permute / ipermute ───────────────────────────────────────────────
 
-defineBuiltin({
+builtin({
   name: "permute",
-  cases: [
-    {
-      match: varargMatch2,
-      apply: args => {
-        if (args.length !== 2)
-          throw new RuntimeError("permute requires 2 arguments");
-        const v = coerceToTensor(args[0], "permute");
-        const orderArg = args[1];
-        let order: number[];
-        if (isRuntimeTensor(orderArg)) {
-          order = Array.from(orderArg.data).map(x => Math.round(x));
-        } else if (isRuntimeNumber(orderArg)) {
-          order = [Math.round(orderArg as number)];
-        } else {
-          throw new RuntimeError("permute: second argument must be numeric");
-        }
-        const perm = order.map(x => x - 1);
-        const srcShape = v.shape;
-        const maxDim = Math.max(...perm) + 1;
-        const padShape = [...srcShape];
-        while (padShape.length < maxDim) padShape.push(1);
-        const newShape = perm.map(d => padShape[d]);
-        const totalElems = v.data.length;
-        const result = allocFloat64Array(totalElems);
-        const resultImag = v.imag ? allocFloat64Array(totalElems) : undefined;
+  nargin: 2,
+  apply: args => {
+    const v = scalarTensor(args[0], "permute");
+    const orderArg = args[1];
+    let order: number[];
+    if (isRuntimeTensor(orderArg)) {
+      order = Array.from(orderArg.data).map(x => Math.round(x));
+    } else if (isRuntimeNumber(orderArg)) {
+      order = [Math.round(orderArg as number)];
+    } else {
+      throw new RuntimeError("permute: second argument must be numeric");
+    }
+    const perm = order.map(x => x - 1);
+    const srcShape = v.shape;
+    const maxDim = Math.max(...perm) + 1;
+    const padShape = [...srcShape];
+    while (padShape.length < maxDim) padShape.push(1);
+    const newShape = perm.map(d => padShape[d]);
+    const totalElems = v.data.length;
+    const result = allocFloat64Array(totalElems);
+    const resultImag = v.imag ? allocFloat64Array(totalElems) : undefined;
 
-        const ndim = perm.length;
-        const srcStrides = new Array(padShape.length);
-        srcStrides[0] = 1;
-        for (let d = 1; d < padShape.length; d++)
-          srcStrides[d] = srcStrides[d - 1] * padShape[d - 1];
+    const ndim = perm.length;
+    const srcStrides = new Array(padShape.length);
+    srcStrides[0] = 1;
+    for (let d = 1; d < padShape.length; d++)
+      srcStrides[d] = srcStrides[d - 1] * padShape[d - 1];
 
-        const mappedStrides = new Array(ndim);
-        for (let d = 0; d < ndim; d++) mappedStrides[d] = srcStrides[perm[d]];
+    const mappedStrides = new Array(ndim);
+    for (let d = 0; d < ndim; d++) mappedStrides[d] = srcStrides[perm[d]];
 
-        const subs = new Array(ndim).fill(0);
-        let srcIdx = 0;
-        for (let i = 0; i < totalElems; i++) {
-          result[i] = v.data[srcIdx];
-          if (resultImag) resultImag[i] = v.imag![srcIdx];
-          for (let d = 0; d < ndim; d++) {
-            subs[d]++;
-            srcIdx += mappedStrides[d];
-            if (subs[d] < newShape[d]) break;
-            srcIdx -= subs[d] * mappedStrides[d];
-            subs[d] = 0;
-          }
-        }
-        return RTV.tensor(result, newShape, resultImag);
-      },
-    },
-  ],
+    const subs = new Array(ndim).fill(0);
+    let srcIdx = 0;
+    for (let i = 0; i < totalElems; i++) {
+      result[i] = v.data[srcIdx];
+      if (resultImag) resultImag[i] = v.imag![srcIdx];
+      for (let d = 0; d < ndim; d++) {
+        subs[d]++;
+        srcIdx += mappedStrides[d];
+        if (subs[d] < newShape[d]) break;
+        srcIdx -= subs[d] * mappedStrides[d];
+        subs[d] = 0;
+      }
+    }
+    const out = RTV.tensor(result, newShape, resultImag);
+    if (v._isLogical) out._isLogical = true;
+    return out;
+  },
 });
 
-defineBuiltin({
+builtin({
   name: "ipermute",
-  cases: [
-    {
-      match: varargMatch2,
-      apply: args => {
-        if (args.length !== 2)
-          throw new RuntimeError("ipermute requires 2 arguments");
-        const v = coerceToTensor(args[0], "ipermute");
-        const orderArg = args[1];
-        let order: number[];
-        if (isRuntimeTensor(orderArg)) {
-          order = Array.from(orderArg.data).map(x => Math.round(x));
-        } else if (isRuntimeNumber(orderArg)) {
-          order = [Math.round(orderArg as number)];
-        } else {
-          throw new RuntimeError("ipermute: second argument must be numeric");
-        }
-        const invPerm = new Array(order.length);
-        for (let i = 0; i < order.length; i++) {
-          invPerm[order[i] - 1] = i;
-        }
-        const srcShape = v.shape;
-        const maxDim = Math.max(...invPerm) + 1;
-        const padShape = [...srcShape];
-        while (padShape.length < maxDim) padShape.push(1);
-        const newShape = invPerm.map((d: number) => padShape[d]);
-        const totalElems = v.data.length;
-        const result = allocFloat64Array(totalElems);
-        const resultImag = v.imag ? allocFloat64Array(totalElems) : undefined;
+  nargin: 2,
+  mfile: true,
+  apply: args => {
+    const v = scalarTensor(args[0], "ipermute");
+    const orderArg = args[1];
+    let order: number[];
+    if (isRuntimeTensor(orderArg)) {
+      order = Array.from(orderArg.data).map(x => Math.round(x));
+    } else if (isRuntimeNumber(orderArg)) {
+      order = [Math.round(orderArg as number)];
+    } else {
+      throw new RuntimeError("ipermute: second argument must be numeric");
+    }
+    const invPerm = new Array(order.length);
+    for (let i = 0; i < order.length; i++) {
+      invPerm[order[i] - 1] = i;
+    }
+    const srcShape = v.shape;
+    const maxDim = Math.max(...invPerm) + 1;
+    const padShape = [...srcShape];
+    while (padShape.length < maxDim) padShape.push(1);
+    const newShape = invPerm.map((d: number) => padShape[d]);
+    const totalElems = v.data.length;
+    const result = allocFloat64Array(totalElems);
+    const resultImag = v.imag ? allocFloat64Array(totalElems) : undefined;
 
-        const ndim = invPerm.length;
-        const srcStrides = new Array(padShape.length);
-        srcStrides[0] = 1;
-        for (let d = 1; d < padShape.length; d++)
-          srcStrides[d] = srcStrides[d - 1] * padShape[d - 1];
-        const mappedStrides = new Array(ndim);
-        for (let d = 0; d < ndim; d++)
-          mappedStrides[d] = srcStrides[invPerm[d]];
+    const ndim = invPerm.length;
+    const srcStrides = new Array(padShape.length);
+    srcStrides[0] = 1;
+    for (let d = 1; d < padShape.length; d++)
+      srcStrides[d] = srcStrides[d - 1] * padShape[d - 1];
+    const mappedStrides = new Array(ndim);
+    for (let d = 0; d < ndim; d++) mappedStrides[d] = srcStrides[invPerm[d]];
 
-        const subs = new Array(ndim).fill(0);
-        let srcIdx = 0;
-        for (let i = 0; i < totalElems; i++) {
-          result[i] = v.data[srcIdx];
-          if (resultImag) resultImag[i] = v.imag![srcIdx];
-          for (let d = 0; d < ndim; d++) {
-            subs[d]++;
-            srcIdx += mappedStrides[d];
-            if (subs[d] < newShape[d]) break;
-            srcIdx -= subs[d] * mappedStrides[d];
-            subs[d] = 0;
-          }
-        }
-        return RTV.tensor(result, newShape, resultImag);
-      },
-    },
-  ],
+    const subs = new Array(ndim).fill(0);
+    let srcIdx = 0;
+    for (let i = 0; i < totalElems; i++) {
+      result[i] = v.data[srcIdx];
+      if (resultImag) resultImag[i] = v.imag![srcIdx];
+      for (let d = 0; d < ndim; d++) {
+        subs[d]++;
+        srcIdx += mappedStrides[d];
+        if (subs[d] < newShape[d]) break;
+        srcIdx -= subs[d] * mappedStrides[d];
+        subs[d] = 0;
+      }
+    }
+    const out = RTV.tensor(result, newShape, resultImag);
+    if (v._isLogical) out._isLogical = true;
+    return out;
+  },
 });
 
 // ── ndgrid ───────────────────────────────────────────────────────────
 
-defineBuiltin({
+/** A grid vector for ndgrid/meshgrid: real and imaginary parts plus
+ *  whether it is logical. */
+interface GridVec {
+  re: Float64Array;
+  im: Float64Array | undefined;
+  logical: boolean;
+}
+
+function gridVec(v: RuntimeValue, name: string): GridVec {
+  if (isScalarValue(v)) v = scalarTensor(v, name);
+  if (!isRuntimeTensor(v))
+    throw new RuntimeError(`${name}: arguments must be numeric vectors`);
+  return { re: v.data, im: v.imag, logical: !!v._isLogical };
+}
+
+/** The ndgrid outputs for `vecs` (one per output dimension). */
+function ndgridOutputs(vecs: GridVec[]): RuntimeTensor[] {
+  const n = vecs.length;
+  const shape = vecs.map(v => v.re.length);
+  if (shape.length === 1) shape.push(1);
+  const totalElems = shape.reduce((acc, s) => acc * s, 1);
+  const outputs: RuntimeTensor[] = [];
+  for (let k = 0; k < n; k++) {
+    const { re, im, logical } = vecs[k];
+    const data = allocFloat64Array(totalElems);
+    const imag = im ? allocFloat64Array(totalElems) : undefined;
+    let stride = 1;
+    for (let d = 0; d < k; d++) stride *= shape[d];
+    const period = stride * shape[k];
+    for (let i = 0; i < totalElems; i++) {
+      const j = Math.floor((i % period) / stride);
+      data[i] = re[j];
+      if (imag) imag[i] = im![j];
+    }
+    const out = RTV.tensor(data, [...shape], imag);
+    if (logical) out._isLogical = true;
+    outputs.push(out);
+  }
+  return outputs;
+}
+
+builtin({
   name: "ndgrid",
-  cases: [
-    {
-      match: varargMatch,
-      apply: (args, nargout) => {
-        if (args.length < 1)
-          throw new RuntimeError("ndgrid requires at least 1 argument");
-
-        const extractVec = (v: RuntimeValue): number[] => {
-          if (isRuntimeNumber(v)) return [v as number];
-          if (isRuntimeTensor(v)) return Array.from(v.data);
-          throw new RuntimeError("ndgrid: arguments must be numeric vectors");
-        };
-
-        const vecs: number[][] = [];
-        if (args.length === 1) {
-          const single = extractVec(args[0]);
-          for (let k = 0; k < nargout; k++) vecs.push(single);
-        } else {
-          for (const a of args) vecs.push(extractVec(a));
-          if (vecs.length < nargout)
-            throw new RuntimeError(
-              "ndgrid: not enough input vectors for requested outputs"
-            );
-        }
-
-        const n = nargout;
-        const shape = vecs.slice(0, n).map(v2 => v2.length);
-        const totalElems = shape.reduce((acc, s) => acc * s, 1);
-
-        const outputs = [];
-        for (let k = 0; k < n; k++) {
-          const data = allocFloat64Array(totalElems);
-          let stride = 1;
-          for (let d = 0; d < k; d++) stride *= shape[d];
-          const dimLen = shape[k];
-          const period = stride * dimLen;
-          for (let i = 0; i < totalElems; i++) {
-            data[i] = vecs[k][Math.floor((i % period) / stride)];
-          }
-          outputs.push(RTV.tensor(data, [...shape]));
-        }
-        return outputs;
-      },
-    },
-  ],
+  nargout: [0, Infinity],
+  mfile: true,
+  apply: (args, nargout) => {
+    if (args.length < 1)
+      throw builtinError(
+        "MATLAB:ndgrid:NotEnoughInputs",
+        "Not enough input arguments."
+      );
+    const n = Math.max(nargout, 1);
+    const vecs: GridVec[] = [];
+    if (args.length === 1) {
+      const single = gridVec(args[0], "ndgrid");
+      for (let k = 0; k < n; k++) vecs.push(single);
+    } else {
+      for (const a of args) vecs.push(gridVec(a, "ndgrid"));
+      if (vecs.length < n)
+        throw new RuntimeError(
+          "ndgrid: not enough input vectors for requested outputs"
+        );
+    }
+    const outputs = ndgridOutputs(vecs.slice(0, n));
+    return nargout <= 1 ? outputs[0] : outputs;
+  },
 });
 
 // ── meshgrid ─────────────────────────────────────────────────────────
 
-defineBuiltin({
+builtin({
   name: "meshgrid",
-  cases: [
-    {
-      match: varargMatch,
-      apply: (args, nargout) => {
-        if (args.length < 1)
-          throw new RuntimeError("meshgrid requires at least 1 argument");
-
-        const extractVec = (v: RuntimeValue): number[] => {
-          if (isRuntimeNumber(v)) return [v as number];
-          if (isRuntimeTensor(v)) return Array.from(v.data);
-          throw new RuntimeError("meshgrid: arguments must be numeric vectors");
-        };
-
-        const n = Math.max(nargout, 2);
-        let reordered: number[][];
-        if (args.length === 1) {
-          const single = extractVec(args[0]);
-          reordered = Array(n).fill(single);
-        } else {
-          const vecs = args.map(extractVec);
-          reordered = [vecs[1] ?? vecs[0], vecs[0], ...vecs.slice(2)];
-          while (reordered.length < n)
-            reordered.push(reordered[reordered.length - 1]);
-        }
-
-        const shape = reordered.slice(0, n).map(v2 => v2.length);
-        const totalElems = shape.reduce((acc, s) => acc * s, 1);
-
-        const ndgridOuts = [];
-        for (let k = 0; k < n; k++) {
-          const data = allocFloat64Array(totalElems);
-          let stride = 1;
-          for (let d = 0; d < k; d++) stride *= shape[d];
-          const dimLen = shape[k];
-          const period = stride * dimLen;
-          for (let idx = 0; idx < totalElems; idx++) {
-            data[idx] = reordered[k][Math.floor((idx % period) / stride)];
-          }
-          ndgridOuts.push(RTV.tensor(data, [...shape]));
-        }
-
-        const outputs = [...ndgridOuts];
-        if (outputs.length >= 2)
-          [outputs[0], outputs[1]] = [outputs[1], outputs[0]];
-
-        return outputs;
-      },
-    },
-  ],
+  nargin: [0, 3],
+  nargout: 3,
+  mfile: true,
+  apply: (args, nargout) => {
+    if (args.length < 1)
+      throw builtinError(
+        "MATLAB:meshgrid:NotEnoughInputs",
+        "Not enough input arguments."
+      );
+    const n = Math.max(nargout, 2);
+    let reordered: GridVec[];
+    if (args.length === 1) {
+      const single = gridVec(args[0], "meshgrid");
+      reordered = Array(n).fill(single);
+    } else {
+      const vecs = args.map(a => gridVec(a, "meshgrid"));
+      reordered = [vecs[1] ?? vecs[0], vecs[0], ...vecs.slice(2)];
+      while (reordered.length < n)
+        reordered.push(reordered[reordered.length - 1]);
+    }
+    const outputs = ndgridOutputs(reordered.slice(0, n));
+    [outputs[0], outputs[1]] = [outputs[1], outputs[0]];
+    return nargout <= 1 ? outputs[0] : outputs;
+  },
 });
 
 // ── sub2ind ──────────────────────────────────────────────────────────
 
-defineBuiltin({
+builtin({
   name: "sub2ind",
-  cases: [
-    {
-      match: varargMatch2,
-      apply: args => {
-        if (args.length < 2)
-          throw new RuntimeError("sub2ind requires at least 2 arguments");
-        const szArg = args[0];
-        if (!isRuntimeTensor(szArg) && !isRuntimeNumber(szArg))
-          throw new RuntimeError(
-            "sub2ind: first argument must be a size vector"
-          );
-        const shape = isRuntimeNumber(szArg)
-          ? [szArg as number]
-          : Array.from(szArg.data);
+  nargin: [2, Infinity],
+  mfile: true,
+  apply: args => {
+    for (let i = 1; i < args.length; i++)
+      rejectComplex(
+        args[i],
+        "MATLAB:sub2ind:RealSubscript",
+        "Subscript arguments must be real."
+      );
+    const szArg = args[0];
+    if (!isRuntimeTensor(szArg) && !isRuntimeNumber(szArg))
+      throw new RuntimeError("sub2ind: first argument must be a size vector");
+    const shape = isRuntimeNumber(szArg)
+      ? [szArg as number]
+      : Array.from(szArg.data);
 
-        const subscriptArgs = args.slice(1);
+    const subscriptArgs = args.slice(1);
 
-        const getValues = (v: RuntimeValue): number[] => {
-          if (isRuntimeNumber(v)) return [v as number];
-          if (isRuntimeLogical(v)) return [v ? 1 : 0];
-          if (isRuntimeTensor(v)) return Array.from(v.data);
-          throw new RuntimeError(
-            "sub2ind: subscript arguments must be numeric"
-          );
-        };
+    const getValues = (v: RuntimeValue): number[] => {
+      if (isRuntimeNumber(v)) return [v as number];
+      if (isRuntimeLogical(v)) return [v ? 1 : 0];
+      if (isRuntimeTensor(v)) return Array.from(v.data);
+      throw new RuntimeError("sub2ind: subscript arguments must be numeric");
+    };
 
-        const allSubs = subscriptArgs.map(getValues);
-        const n = allSubs[0].length;
+    const allSubs = subscriptArgs.map(getValues);
+    const n = allSubs[0].length;
 
-        const strides: number[] = [1];
-        for (let d = 1; d < shape.length; d++) {
-          strides[d] = strides[d - 1] * shape[d - 1];
+    const strides: number[] = [1];
+    for (let d = 1; d < shape.length; d++) {
+      strides[d] = strides[d - 1] * shape[d - 1];
+    }
+
+    const result = allocFloat64Array(n);
+    for (let i = 0; i < n; i++) {
+      let idx = 0;
+      for (let d = 0; d < subscriptArgs.length; d++) {
+        const s = allSubs[d][i];
+        if (!Number.isFinite(s) || s < 1 || s !== Math.floor(s))
+          throw new RuntimeError("Out of range subscript.");
+        if (d < shape.length) {
+          if (s > shape[d]) throw new RuntimeError("Out of range subscript.");
+        } else {
+          // MATLAB treats trailing dims as size 1, so only s==1 is valid.
+          if (s !== 1) throw new RuntimeError("Out of range subscript.");
         }
+        const stride = d < strides.length ? strides[d] : 0;
+        idx += (s - 1) * stride;
+      }
+      result[i] = idx + 1;
+    }
 
-        const result = allocFloat64Array(n);
-        for (let i = 0; i < n; i++) {
-          let idx = 0;
-          for (let d = 0; d < subscriptArgs.length; d++) {
-            const s = allSubs[d][i];
-            if (!Number.isFinite(s) || s < 1 || s !== Math.floor(s))
-              throw new RuntimeError("Out of range subscript.");
-            if (d < shape.length) {
-              if (s > shape[d])
-                throw new RuntimeError("Out of range subscript.");
-            } else {
-              // MATLAB treats trailing dims as size 1, so only s==1 is valid.
-              if (s !== 1) throw new RuntimeError("Out of range subscript.");
-            }
-            const stride = d < strides.length ? strides[d] : 0;
-            idx += (s - 1) * stride;
-          }
-          result[i] = idx + 1;
-        }
-
-        if (n === 1) return RTV.num(result[0]);
-        const firstArg = subscriptArgs[0];
-        const outShape = isRuntimeTensor(firstArg)
-          ? [...firstArg.shape]
-          : [1, n];
-        return RTV.tensor(result, outShape);
-      },
-    },
-  ],
+    if (n === 1) return RTV.num(result[0]);
+    const firstArg = subscriptArgs[0];
+    const outShape = isRuntimeTensor(firstArg) ? [...firstArg.shape] : [1, n];
+    return RTV.tensor(result, outShape);
+  },
 });
 
 // ── ind2sub ──────────────────────────────────────────────────────────
 
-defineBuiltin({
+builtin({
   name: "ind2sub",
-  cases: [
-    {
-      match: varargMatch2,
-      apply: (args, nargout) => {
-        if (args.length !== 2)
-          throw new RuntimeError("ind2sub requires 2 arguments");
-        const szArg = args[0];
-        if (!isRuntimeTensor(szArg) && !isRuntimeNumber(szArg))
-          throw new RuntimeError(
-            "ind2sub: first argument must be a size vector"
-          );
-        const shape = isRuntimeNumber(szArg)
-          ? [szArg as number]
-          : Array.from(szArg.data);
+  nargin: 2,
+  nargout: [0, Infinity],
+  mfile: true,
+  apply: (args, nargout) => {
+    rejectComplex(
+      args[1],
+      "MATLAB:ind2sub:RealSubscript",
+      "Subscript argument must be real."
+    );
+    const szArg = args[0];
+    if (!isRuntimeTensor(szArg) && !isRuntimeNumber(szArg))
+      throw new RuntimeError("ind2sub: first argument must be a size vector");
+    const shape = isRuntimeNumber(szArg)
+      ? [szArg as number]
+      : Array.from(szArg.data);
 
-        const indArg = args[1];
-        let indices: number[];
-        let indShape: number[];
-        if (isRuntimeNumber(indArg)) {
-          indices = [indArg as number];
-          indShape = [1, 1];
-        } else if (isRuntimeLogical(indArg)) {
-          indices = [indArg ? 1 : 0];
-          indShape = [1, 1];
-        } else if (isRuntimeTensor(indArg)) {
-          indices = Array.from(indArg.data);
-          indShape = [...indArg.shape];
+    const indArg = args[1];
+    let indices: number[];
+    let indShape: number[];
+    if (isRuntimeNumber(indArg)) {
+      indices = [indArg as number];
+      indShape = [1, 1];
+    } else if (isRuntimeLogical(indArg)) {
+      indices = [indArg ? 1 : 0];
+      indShape = [1, 1];
+    } else if (isRuntimeTensor(indArg)) {
+      indices = Array.from(indArg.data);
+      indShape = [...indArg.shape];
+    } else {
+      throw new RuntimeError("ind2sub: second argument must be numeric");
+    }
+
+    const n = indices.length;
+    const ndims = Math.max(nargout, 2);
+
+    const strides: number[] = [1];
+    for (let d = 1; d < shape.length; d++) {
+      strides[d] = strides[d - 1] * shape[d - 1];
+    }
+    while (strides.length < ndims) {
+      strides.push(
+        strides[strides.length - 1] * (shape[strides.length - 1] || 1)
+      );
+    }
+
+    const outputs: Float64Array[] = [];
+    for (let d = 0; d < ndims; d++) outputs.push(allocFloat64Array(n));
+
+    for (let i = 0; i < n; i++) {
+      let rem = indices[i] - 1;
+      for (let d = ndims - 1; d >= 0; d--) {
+        if (d === 0) {
+          outputs[d][i] = rem + 1;
         } else {
-          throw new RuntimeError("ind2sub: second argument must be numeric");
+          const q = Math.floor(rem / strides[d]);
+          outputs[d][i] = q + 1;
+          rem = rem - q * strides[d];
         }
+      }
+    }
 
-        const n = indices.length;
-        const ndims = Math.max(nargout, 2);
+    if (nargout <= 1) {
+      if (n === 1) return RTV.num(outputs[0][0]);
+      return RTV.tensor(outputs[0], indShape);
+    }
 
-        const strides: number[] = [1];
-        for (let d = 1; d < shape.length; d++) {
-          strides[d] = strides[d - 1] * shape[d - 1];
-        }
-        while (strides.length < ndims) {
-          strides.push(
-            strides[strides.length - 1] * (shape[strides.length - 1] || 1)
-          );
-        }
-
-        const outputs: Float64Array[] = [];
-        for (let d = 0; d < ndims; d++) outputs.push(allocFloat64Array(n));
-
-        for (let i = 0; i < n; i++) {
-          let rem = indices[i] - 1;
-          for (let d = ndims - 1; d >= 0; d--) {
-            if (d === 0) {
-              outputs[d][i] = rem + 1;
-            } else {
-              const q = Math.floor(rem / strides[d]);
-              outputs[d][i] = q + 1;
-              rem = rem - q * strides[d];
-            }
-          }
-        }
-
-        if (nargout <= 1) {
-          if (n === 1) return RTV.num(outputs[0][0]);
-          return RTV.tensor(outputs[0], indShape);
-        }
-
-        const result = [];
-        for (let d = 0; d < ndims; d++) {
-          if (n === 1) {
-            result.push(RTV.num(outputs[d][0]));
-          } else {
-            result.push(RTV.tensor(outputs[d], [...indShape]));
-          }
-        }
-        return result;
-      },
-    },
-  ],
+    const result = [];
+    for (let d = 0; d < ndims; d++) {
+      if (n === 1) {
+        result.push(RTV.num(outputs[d][0]));
+      } else {
+        result.push(RTV.tensor(outputs[d], [...indShape]));
+      }
+    }
+    return result;
+  },
 });
