@@ -4,10 +4,11 @@
  */
 
 import { isRuntimeChar, isRuntimeTensor } from "../../runtime/types.js";
-import type { RuntimeValue } from "../../runtime/types.js";
 import { RTV, RuntimeError } from "../../runtime/index.js";
 import { toString } from "../../runtime/convert.js";
-import { defineBuiltin, registerIBuiltin } from "./types.js";
+import { builtin } from "./builtin.js";
+import { builtinError } from "./args.js";
+import { isText, unsupportedFormError } from "./text-args.js";
 import { allocFloat64Array } from "../../runtime/alloc.js";
 
 // ── tic / toc ───────────────────────────────────────────────────────────
@@ -18,22 +19,16 @@ export function getTicTime(): number {
   return ticTime;
 }
 
-defineBuiltin({
+builtin({
   name: "tic",
-  cases: [
-    {
-      match: argTypes => (argTypes.length === 0 ? [{ kind: "number" }] : null),
-      apply: (_args, nargout) => {
-        ticTime = performance.now();
-        // Bare `tic;` starts the stopwatch and produces nothing: MATLAB does
-        // not set `ans`, and returning a value here would also stop the JIT
-        // from compiling any loop containing it (a bare non-void expression
-        // statement can't be modelled at the JIT boundary).
-        if (nargout === 0) return undefined as unknown as RuntimeValue;
-        return RTV.num(ticTime / 1000);
-      },
-    },
-  ],
+  nargin: 0,
+  apply: (_args, nargout) => {
+    ticTime = performance.now();
+    // Bare `tic;` starts the stopwatch and produces nothing: MATLAB does
+    // not set `ans`.
+    if (nargout === 0) return undefined;
+    return RTV.num(ticTime / 1000);
+  },
 });
 
 // toc is registered as a special builtin in specialBuiltins.ts
@@ -41,96 +36,86 @@ defineBuiltin({
 
 // ── clock ───────────────────────────────────────────────────────────────
 
-defineBuiltin({
+builtin({
   name: "clock",
-  cases: [
-    {
-      match: argTypes =>
-        argTypes.length === 0
-          ? [{ kind: "tensor", isComplex: false, shape: [1, 6] }]
-          : null,
-      apply: () => {
-        const now = new Date();
-        return RTV.tensor(
-          allocFloat64Array([
-            now.getFullYear(),
-            now.getMonth() + 1,
-            now.getDate(),
-            now.getHours(),
-            now.getMinutes(),
-            now.getSeconds() + now.getMilliseconds() / 1000,
-          ]),
-          [1, 6]
-        );
-      },
-    },
-  ],
+  nargin: 0,
+  apply: () => {
+    const now = new Date();
+    return RTV.tensor(
+      allocFloat64Array([
+        now.getFullYear(),
+        now.getMonth() + 1,
+        now.getDate(),
+        now.getHours(),
+        now.getMinutes(),
+        now.getSeconds() + now.getMilliseconds() / 1000,
+      ]),
+      [1, 6]
+    );
+  },
 });
 
 // ── etime ───────────────────────────────────────────────────────────────
 
-defineBuiltin({
+builtin({
   name: "etime",
-  cases: [
-    {
-      match: argTypes => (argTypes.length === 2 ? [{ kind: "number" }] : null),
-      apply: args => {
-        const t1 = args[0];
-        const t0 = args[1];
-        if (!isRuntimeTensor(t1) || !isRuntimeTensor(t0))
-          throw new RuntimeError("etime: arguments must be clock vectors");
-        const toMs = (t: typeof t1) => {
-          const d = new Date(
-            t.data[0],
-            t.data[1] - 1,
-            t.data[2],
-            t.data[3],
-            t.data[4],
-            Math.floor(t.data[5]),
-            (t.data[5] % 1) * 1000
-          );
-          return d.getTime();
-        };
-        return RTV.num((toMs(t1) - toMs(t0)) / 1000);
-      },
-    },
-  ],
+  nargin: 2,
+  mfile: true,
+  apply: args => {
+    const t1 = args[0];
+    const t0 = args[1];
+    if (!isRuntimeTensor(t1) || !isRuntimeTensor(t0))
+      throw new RuntimeError("etime: arguments must be clock vectors");
+    const toMs = (t: typeof t1) => {
+      const d = new Date(
+        t.data[0],
+        t.data[1] - 1,
+        t.data[2],
+        t.data[3],
+        t.data[4],
+        Math.floor(t.data[5]),
+        (t.data[5] % 1) * 1000
+      );
+      return d.getTime();
+    };
+    return RTV.num((toMs(t1) - toMs(t0)) / 1000);
+  },
 });
 
 // ── version / computer ──────────────────────────────────────────────────
 
-defineBuiltin({
+builtin({
   name: "version",
-  cases: [
-    {
-      match: argTypes => (argTypes.length === 0 ? [{ kind: "char" }] : null),
-      apply: () => RTV.char("9.14.0"),
-    },
-  ],
+  nargin: [0, 1],
+  apply: args => {
+    if (args.length === 1) {
+      const opt = isText(args[0]) ? toString(args[0]) : "";
+      if (opt === "-release") return RTV.char("2023a");
+      throw unsupportedFormError("version", `option '${opt}'`);
+    }
+    return RTV.char("9.14.0");
+  },
 });
 
 // `ver` / `ver('product')` — version information. MATLAB returns a struct with
 // fields Name, Version, Release, Date (a struct array for the no-argument
 // form). numbl reports a single product struct matching `version` (9.14.0,
 // R2023a); the named-product form just echoes the requested name.
-registerIBuiltin({
+builtin({
   name: "ver",
-  resolve: () => ({
-    outputTypes: [{ kind: "unknown" }],
-    apply: (args, nargout) => {
-      const name =
-        args.length >= 1 && isRuntimeChar(args[0])
-          ? toString(args[0])
-          : "MATLAB";
-      if (nargout < 1) return undefined as unknown as RuntimeValue;
-      return RTV.struct({
-        Name: RTV.char(name),
-        Version: RTV.char("9.14"),
-        Release: RTV.char("(R2023a)"),
-        Date: RTV.char("2023-02-09"),
-      });
-    },
-  }),
+  nargin: [0, 1],
+  mfile: true,
+  apply: (args, nargout) => {
+    const name =
+      args.length >= 1 && isRuntimeChar(args[0]) ? toString(args[0]) : "MATLAB";
+    if (nargout < 1) return undefined;
+    return RTV.struct({
+      Name: RTV.char(name),
+      Version: RTV.char("9.14"),
+      Release: RTV.char("(R2023a)"),
+      Date: RTV.char("2023-02-09"),
+    });
+  },
 });
 
 function getComputerStrings(): { str: string; arch: string } {
@@ -147,24 +132,23 @@ function getComputerStrings(): { str: string; arch: string } {
   return { str: "GLNXA64", arch: "glnxa64" };
 }
 
-registerIBuiltin({
+builtin({
   name: "computer",
-  resolve: () => ({
-    outputTypes: [{ kind: "unknown" }],
-    apply: (args, nargout) => {
-      const info = getComputerStrings();
-      if (args.length >= 1 && isRuntimeChar(args[0])) {
-        const arg = toString(args[0]);
-        if (arg === "arch") return RTV.char(info.arch);
-        throw new RuntimeError(`computer: unknown argument '${arg}'`);
-      }
-      const maxsize = 2 ** 48 - 1;
-      const endian = RTV.char("L");
-      if (nargout <= 1) return RTV.char(info.str);
-      if (nargout === 2) return [RTV.char(info.str), RTV.num(maxsize)];
-      return [RTV.char(info.str), RTV.num(maxsize), endian];
-    },
-  }),
+  nargin: [0, 1],
+  nargout: 3,
+  apply: (args, nargout) => {
+    const info = getComputerStrings();
+    if (args.length === 1) {
+      if (isText(args[0]) && toString(args[0]) === "arch")
+        return RTV.char(info.arch);
+      throw builtinError("MATLAB:badopt", "Unknown command option.");
+    }
+    const maxsize = 2 ** 48 - 1;
+    const endian = RTV.char("L");
+    if (nargout <= 1) return RTV.char(info.str);
+    if (nargout === 2) return [RTV.char(info.str), RTV.num(maxsize)];
+    return [RTV.char(info.str), RTV.num(maxsize), endian];
+  },
 });
 
 function getMexExt(): string {
@@ -178,15 +162,14 @@ function getMexExt(): string {
   // return "mexa64";
 }
 
-defineBuiltin({
+builtin({
   name: "mexext",
-  cases: [
-    {
-      match: argTypes =>
-        argTypes.length === 0 ? [{ kind: "char" as const }] : null,
-      apply: () => RTV.char(getMexExt()),
-    },
-  ],
+  nargin: [0, 1],
+  apply: args => {
+    if (args.length === 1)
+      throw unsupportedFormError("mexext", "mexext('all')");
+    return RTV.char(getMexExt());
+  },
 });
 
 // ── Platform predicates ─────────────────────────────────────────────────
@@ -197,16 +180,7 @@ for (const [name, val] of [
   ["ispc", _platform === "win32"],
   ["isunix", _platform !== "win32"],
 ] as [string, boolean][]) {
-  defineBuiltin({
-    name,
-    cases: [
-      {
-        match: argTypes =>
-          argTypes.length === 0 ? [{ kind: "boolean" }] : null,
-        apply: () => RTV.logical(val),
-      },
-    ],
-  });
+  builtin({ name, nargin: 0, apply: () => RTV.logical(val) });
 }
 
 // getenv / setenv are implemented as special builtins in

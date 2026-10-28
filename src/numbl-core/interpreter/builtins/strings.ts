@@ -1,8 +1,7 @@
 /**
- * Interpreter IBuiltins for string/char operations.
+ * Interpreter builtins for string/char operations.
  *
- * Functions that involve cell arrays (strsplit, strjoin, symvar, regexp/regexpi)
- * or the parser (symvar) are left to legacy builtins since JitType has no cell kind.
+ * strsplit, strjoin, regexp/regexpi, and symvar live in string-extras.ts.
  */
 
 import type { RuntimeValue } from "../../runtime/types.js";
@@ -17,6 +16,7 @@ import {
   isRuntimeString,
   isRuntimeTensor,
   isRuntimeComplexNumber,
+  isRuntimeSparseMatrix,
   isRuntimeStringArray,
   stringArrayValue,
 } from "../../runtime/types.js";
@@ -29,25 +29,22 @@ import {
   displayValue,
   formatDatetimeOrDuration,
 } from "../../runtime/index.js";
-import type { JitType } from "../../jitTypes.js";
-import { registerIBuiltin } from "./types.js";
+import { builtin, type BuiltinApply } from "./builtin.js";
+import { builtinError, numericArg, realScalarArg } from "./args.js";
+import {
+  className,
+  isText,
+  isTextOrCell,
+  mustBeTextError,
+  unsupportedClassError,
+  unsupportedFormError,
+} from "./text-args.js";
 import { sprintfFormat } from "../../helpers/string.js";
 import { scanFormat } from "../../helpers/scanFormat.js";
 import { matlabNumToString } from "../../runtime/utils.js";
 import { allocFloat64Array } from "../../runtime/alloc.js";
 
-// ── Type helpers ──────────────────────────────────────────────────────
-
-function isTextType(t: JitType): boolean {
-  return t.kind === "char" || t.kind === "string";
-}
-
-/** Return the same text kind as input, or null if not text. */
-function preserveTextType(t: JitType): JitType | null {
-  if (t.kind === "char") return { kind: "char" };
-  if (t.kind === "string") return { kind: "string" };
-  return null;
-}
+// ── Argument helpers ──────────────────────────────────────────────────
 
 /** Apply a string function to a value, recursing into cells and mapping
  *  element-wise over string arrays. */
@@ -74,254 +71,283 @@ function applyTextFn(v: RuntimeValue, fn: (s: string) => string): RuntimeValue {
   return v;
 }
 
-/** Resolve for a simple 1-arg text→text function that preserves char/string,
- *  and maps element-wise over cell arrays of text and string arrays. */
-function textPreserveResolve(fn: (s: string) => string): (
-  argTypes: JitType[],
-  nargout: number
-) => {
-  outputTypes: JitType[];
-  apply: (args: RuntimeValue[]) => RuntimeValue;
-} | null {
-  return argTypes => {
-    if (argTypes.length !== 1) return null;
-    const t = argTypes[0];
-    if (t.kind === "cell") {
-      return {
-        outputTypes: [{ kind: "cell" }],
-        apply: args => applyTextFn(args[0], fn),
-      };
-    }
-    // String arrays infer as "unknown" — accept and verify at runtime.
-    if (t.kind === "unknown") {
-      return {
-        outputTypes: [{ kind: "unknown" }],
-        apply: args => {
-          if (!isRuntimeStringArray(args[0]))
-            throw new RuntimeError("Expected a text input");
-          return applyTextFn(args[0], fn);
-        },
-      };
-    }
-    const out = preserveTextType(t);
-    if (!out) return null;
-    return {
-      outputTypes: [out],
-      apply: args => applyTextFn(args[0], fn),
-    };
+/** A text result of the same kind (char or string) as the input `v`. */
+function sameTextKind(v: RuntimeValue, s: string): RuntimeValue {
+  return isRuntimeChar(v) ? RTV.char(s) : RTV.string(s);
+}
+
+/** The text of a char or string-scalar subject (first) argument. String
+ *  arrays and cell arrays are not implemented for these functions. */
+function scalarTextSubject(name: string, v: RuntimeValue): string {
+  if (isText(v)) return toString(v);
+  if (isRuntimeStringArray(v) || isRuntimeCell(v))
+    throw unsupportedClassError(name, v);
+  throw mustBeTextError();
+}
+
+/** The text of a char or string-scalar argument other than the subject. */
+function textArg(name: string, v: RuntimeValue): string {
+  if (isText(v)) return toString(v);
+  throw unsupportedClassError(name, v);
+}
+
+/** A 1-arg text→text function that preserves char/string and maps
+ *  element-wise over cell arrays of text and string arrays. */
+function textMap(
+  fn: (s: string) => string,
+  badInput: (v: RuntimeValue) => RuntimeError
+): BuiltinApply {
+  return args => {
+    if (!isTextOrCell(args[0])) throw badInput(args[0]);
+    return applyTextFn(args[0], fn);
   };
 }
 
 // ── Text→text (type-preserving) ───────────────────────────────────────
 
-registerIBuiltin({
+// MATLAB's lower/upper return non-text input unchanged.
+builtin({
   name: "lower",
-  resolve: textPreserveResolve(s => s.toLowerCase()),
+  nargin: 1,
+  apply: args => applyTextFn(args[0], s => s.toLowerCase()),
 });
 
-registerIBuiltin({
+builtin({
   name: "upper",
-  resolve: textPreserveResolve(s => s.toUpperCase()),
+  nargin: 1,
+  apply: args => applyTextFn(args[0], s => s.toUpperCase()),
 });
 
-registerIBuiltin({
+builtin({
   name: "strtrim",
-  resolve: textPreserveResolve(s => s.trim()),
+  nargin: 1,
+  apply: textMap(
+    s => s.trim(),
+    () =>
+      builtinError(
+        "MATLAB:strtrim:InputClass",
+        "Input should be a string, character array, or a cell array of character arrays."
+      )
+  ),
 });
 
-registerIBuiltin({
+builtin({
   name: "deblank",
-  resolve: textPreserveResolve(s => s.replace(/\s+$/, "")),
+  nargin: 1,
+  apply: textMap(
+    s => s.replace(/\s+$/, ""),
+    v => unsupportedClassError("deblank", v)
+  ),
 });
 
-registerIBuiltin({
+builtin({
   name: "reverse",
-  resolve: textPreserveResolve(s => s.split("").reverse().join("")),
+  nargin: 1,
+  mfile: true,
+  apply: textMap(s => s.split("").reverse().join(""), mustBeTextError),
 });
 
-// ── strip (1-2 args) ─────────────────────────────────────────────────
+// ── strip ─────────────────────────────────────────────────────────────
 
-registerIBuiltin({
+/** Remove leading (side 'left'), trailing ('right') or both runs of
+ *  characters satisfying `test`. */
+function stripSides(
+  s: string,
+  side: string,
+  test: (c: string) => boolean
+): string {
+  let a = 0;
+  let b = s.length;
+  if (side !== "right") while (a < b && test(s[a])) a++;
+  if (side !== "left") while (b > a && test(s[b - 1])) b--;
+  return s.slice(a, b);
+}
+
+// strip(str), strip(str, side), strip(str, stripCharacter),
+// strip(str, side, stripCharacter)
+builtin({
   name: "strip",
-  resolve: argTypes => {
-    if (argTypes.length < 1 || argTypes.length > 2) return null;
-    const out = preserveTextType(argTypes[0]);
-    if (!out) return null;
-    if (argTypes.length === 2 && !isTextType(argTypes[1])) return null;
-    return {
-      outputTypes: [out],
-      apply: args => {
-        const v = args[0];
-        const s = toString(v);
-        let side = "both";
-        if (args.length >= 2) side = toString(args[1]).toLowerCase();
-        let result: string;
-        if (side === "left") result = s.replace(/^\s+/, "");
-        else if (side === "right") result = s.replace(/\s+$/, "");
-        else result = s.trim();
-        return isRuntimeChar(v) ? RTV.char(result) : RTV.string(result);
-      },
-    };
+  nargin: [1, 3],
+  mfile: true,
+  apply: args => {
+    const v = args[0];
+    if (!isTextOrCell(v)) throw mustBeTextError();
+    let side = "both";
+    let ch: string | null = null;
+    for (let i = 1; i < args.length; i++) {
+      const opt = isText(args[i]) ? toString(args[i]) : null;
+      const lc = opt?.toLowerCase();
+      if (i === 1 && (lc === "left" || lc === "right" || lc === "both"))
+        side = lc;
+      else if (opt !== null && opt.length === 1) ch = opt;
+      else
+        throw builtinError(
+          "MATLAB:string:OptionMustBeOneOf",
+          "Option must be 'left', 'right', or 'both', or it must be exactly one character."
+        );
+    }
+    const test =
+      ch === null ? (c: string) => /\s/.test(c) : (c: string) => c === ch;
+    return applyTextFn(v, s => stripSides(s, side, test));
   },
 });
 
 // ── pad ───────────────────────────────────────────────────────────────
 
-registerIBuiltin({
+// pad(str), pad(str, numberOfCharacters), pad(..., side),
+// pad(..., padCharacter)
+builtin({
   name: "pad",
-  resolve: argTypes => {
-    if (argTypes.length < 2 || argTypes.length > 3) return null;
-    const out = preserveTextType(argTypes[0]);
-    if (!out) return null;
-    if (argTypes[1].kind !== "number" && argTypes[1].kind !== "boolean")
-      return null;
-    return {
-      outputTypes: [out],
-      apply: args => {
-        const v = args[0];
-        const s = toString(v);
-        const n = Math.round(toNumber(args[1]));
-        let side = "right";
-        if (args.length >= 3) side = toString(args[2]).toLowerCase();
-        if (s.length >= n)
-          return isRuntimeChar(v) ? RTV.char(s) : RTV.string(s);
-        const total = n - s.length;
-        let result: string;
-        if (side === "both") {
-          const left = Math.floor(total / 2);
-          const right = total - left;
-          result = " ".repeat(left) + s + " ".repeat(right);
-        } else if (side === "left") {
-          result = " ".repeat(total) + s;
-        } else {
-          result = s + " ".repeat(total);
-        }
-        return isRuntimeChar(v) ? RTV.char(result) : RTV.string(result);
-      },
-    };
+  nargin: [1, 4],
+  mfile: true,
+  apply: args => {
+    const v = args[0];
+    const s = scalarTextSubject("pad", v);
+    let i = 1;
+    let n = s.length;
+    if (i < args.length && !isText(args[i])) {
+      n = Math.round(realScalarArg(args[i], "Number of characters"));
+      i++;
+    }
+    let side = "right";
+    if (i < args.length) {
+      const lc = textArg("pad", args[i]).toLowerCase();
+      if (lc === "left" || lc === "right" || lc === "both") {
+        side = lc;
+        i++;
+      }
+    }
+    let ch = " ";
+    if (i < args.length) {
+      const c = textArg("pad", args[i]);
+      if (c.length !== 1)
+        throw new RuntimeError("pad: padCharacter must be a single character");
+      ch = c;
+      i++;
+    }
+    if (i < args.length)
+      throw new RuntimeError(`pad: invalid argument at position ${i + 1}`);
+    if (s.length >= n) return sameTextKind(v, s);
+    const total = n - s.length;
+    let result: string;
+    if (side === "both") {
+      const left = Math.floor(total / 2);
+      const right = total - left;
+      result = ch.repeat(left) + s + ch.repeat(right);
+    } else if (side === "left") {
+      result = ch.repeat(total) + s;
+    } else {
+      result = s + ch.repeat(total);
+    }
+    return sameTextKind(v, result);
   },
 });
 
 // ── erase ─────────────────────────────────────────────────────────────
 
-registerIBuiltin({
+builtin({
   name: "erase",
-  resolve: argTypes => {
-    if (argTypes.length !== 2) return null;
-    const out =
-      argTypes[0].kind === "unknown"
-        ? { kind: "unknown" as const }
-        : preserveTextType(argTypes[0]);
-    if (!out) return null;
-    if (!isTextType(argTypes[1])) return null;
-    return {
-      outputTypes: [out],
-      apply: args => {
-        const pat = toString(args[1]);
-        return applyTextFn(args[0], s => s.split(pat).join(""));
-      },
-    };
+  nargin: 2,
+  mfile: true,
+  apply: args => {
+    if (!isTextOrCell(args[0])) throw mustBeTextError();
+    const p = args[1];
+    if (!isText(p)) {
+      if (isRuntimeStringArray(p) || isRuntimeCell(p))
+        throw unsupportedFormError("erase", "a pattern list");
+      throw builtinError(
+        "MATLAB:string:MatchMustBeStringCharOrCellArrayOfChars",
+        "Text to replace must be a text or pattern array."
+      );
+    }
+    const pat = toString(p);
+    return applyTextFn(args[0], s => s.split(pat).join(""));
   },
 });
 
 // ── strrep / replace ──────────────────────────────────────────────────
 
-function strreplaceResolve(): (
-  argTypes: JitType[],
-  nargout: number
-) => {
-  outputTypes: JitType[];
-  apply: (args: RuntimeValue[]) => RuntimeValue;
-} | null {
-  return argTypes => {
-    if (argTypes.length !== 3) return null;
-    const out =
-      argTypes[0].kind === "unknown" || argTypes[0].kind === "cell"
-        ? ({ kind: argTypes[0].kind } as JitType)
-        : preserveTextType(argTypes[0]);
-    if (!out) return null;
-    if (!isTextType(argTypes[1]) || !isTextType(argTypes[2])) return null;
-    return {
-      outputTypes: [out],
-      apply: args => {
-        const old = toString(args[1]);
-        const rep = toString(args[2]);
-        return applyTextFn(args[0], s => s.split(old).join(rep));
-      },
-    };
+function strreplaceApply(
+  name: string,
+  badSubject: (v: RuntimeValue) => RuntimeError
+): BuiltinApply {
+  return args => {
+    if (!isTextOrCell(args[0])) throw badSubject(args[0]);
+    const old = textArg(name, args[1]);
+    const rep = textArg(name, args[2]);
+    return applyTextFn(args[0], s => s.split(old).join(rep));
   };
 }
 
-registerIBuiltin({ name: "strrep", resolve: strreplaceResolve() });
-registerIBuiltin({ name: "replace", resolve: strreplaceResolve() });
+builtin({
+  name: "strrep",
+  nargin: 3,
+  apply: strreplaceApply("strrep", v => unsupportedClassError("strrep", v)),
+});
+
+builtin({
+  name: "replace",
+  nargin: 3,
+  mfile: true,
+  apply: strreplaceApply("replace", mustBeTextError),
+});
 
 // ── regexprep ─────────────────────────────────────────────────────────
 
-registerIBuiltin({
+builtin({
   name: "regexprep",
-  resolve: argTypes => {
-    if (argTypes.length < 3) return null;
-    const out = preserveTextType(argTypes[0]);
-    if (!out) return null;
-    if (!isTextType(argTypes[1]) || !isTextType(argTypes[2])) return null;
-    return {
-      outputTypes: [out],
-      apply: args => {
-        const str = toString(args[0]);
-        const pat = toString(args[1]);
-        const rep = toString(args[2]);
-        // `s` (dotAll): MATLAB's `.` matches newline by default, unlike JS.
-        let flags = "gs";
-        for (let i = 3; i < args.length; i++) {
-          const opt = toString(args[i]).toLowerCase();
-          if (opt === "ignorecase") flags += "i";
-        }
-        const result = str.replace(new RegExp(pat, flags), rep);
-        return isRuntimeChar(args[0]) ? RTV.char(result) : RTV.string(result);
-      },
-    };
+  nargin: [3, Infinity],
+  apply: args => {
+    if (!isTextOrCell(args[0]))
+      throw builtinError(
+        "MATLAB:REGEXP:invalidInputs",
+        "The 'STRING' input must be either a char row vector, a cell array of char row vectors, or a string array."
+      );
+    const pat = textArg("regexprep", args[1]);
+    const rep = textArg("regexprep", args[2]);
+    // `s` (dotAll): MATLAB's `.` matches newline by default, unlike JS.
+    let flags = "gs";
+    for (let i = 3; i < args.length; i++) {
+      const opt = toString(args[i]).toLowerCase();
+      if (opt === "ignorecase") flags += "i";
+    }
+    const re = new RegExp(pat, flags);
+    return applyTextFn(args[0], s => s.replace(re, rep));
   },
 });
 
 // ── extractBefore / extractAfter ──────────────────────────────────────
 
-function extractResolve(extractFn: (s: string, arg: RuntimeValue) => string): (
-  argTypes: JitType[],
-  nargout: number
-) => {
-  outputTypes: JitType[];
-  apply: (args: RuntimeValue[]) => RuntimeValue;
-} | null {
-  return argTypes => {
-    if (argTypes.length !== 2) return null;
-    const out = preserveTextType(argTypes[0]);
-    if (!out) return null;
-    const a1 = argTypes[1];
-    if (!isTextType(a1) && a1.kind !== "number" && a1.kind !== "tensor")
-      return null;
-    return {
-      outputTypes: [out],
-      apply: args => {
-        const v = args[0];
-        const s = toString(v);
-        const result = extractFn(s, args[1]);
-        return isRuntimeChar(v) ? RTV.char(result) : RTV.string(result);
-      },
-    };
+/** A position (numeric scalar) argument, or null for a text pattern. */
+function positionArg(name: string, arg: RuntimeValue): number | null {
+  if (isRuntimeNumber(arg) || (isRuntimeTensor(arg) && arg.data.length === 1))
+    return Math.round(toNumber(arg));
+  if (isText(arg)) return null;
+  throw unsupportedClassError(name, arg);
+}
+
+function extractApply(
+  name: string,
+  extractFn: (s: string, pos: number | null, pat: string) => string
+): BuiltinApply {
+  return args => {
+    const v = args[0];
+    const s = scalarTextSubject(name, v);
+    const pos = positionArg(name, args[1]);
+    const pat = pos === null ? toString(args[1]) : "";
+    return sameTextKind(v, extractFn(s, pos, pat));
   };
 }
 
-registerIBuiltin({
+builtin({
   name: "extractBefore",
-  resolve: extractResolve((s, arg) => {
+  nargin: 2,
+  mfile: true,
+  apply: extractApply("extractBefore", (s, p, pat) => {
     let pos: number;
-    if (
-      isRuntimeNumber(arg) ||
-      (isRuntimeTensor(arg) && arg.data.length === 1)
-    ) {
-      pos = Math.round(toNumber(arg)) - 1;
+    if (p !== null) {
+      pos = p - 1;
     } else {
-      const pat = toString(arg);
       pos = s.indexOf(pat);
       if (pos === -1)
         throw new RuntimeError("extractBefore: pattern not found");
@@ -330,17 +356,15 @@ registerIBuiltin({
   }),
 });
 
-registerIBuiltin({
+builtin({
   name: "extractAfter",
-  resolve: extractResolve((s, arg) => {
+  nargin: 2,
+  mfile: true,
+  apply: extractApply("extractAfter", (s, p, pat) => {
     let pos: number;
-    if (
-      isRuntimeNumber(arg) ||
-      (isRuntimeTensor(arg) && arg.data.length === 1)
-    ) {
-      pos = Math.round(toNumber(arg));
+    if (p !== null) {
+      pos = p;
     } else {
-      const pat = toString(arg);
       const idx = s.indexOf(pat);
       if (idx === -1) throw new RuntimeError("extractAfter: pattern not found");
       pos = idx + pat.length;
@@ -351,77 +375,60 @@ registerIBuiltin({
 
 // ── extractBetween ────────────────────────────────────────────────────
 
-registerIBuiltin({
+builtin({
   name: "extractBetween",
-  resolve: argTypes => {
-    if (argTypes.length !== 3) return null;
-    const out = preserveTextType(argTypes[0]);
-    if (!out) return null;
-    return {
-      outputTypes: [out],
-      apply: args => {
-        const v = args[0];
-        const s = toString(v);
-        const a = args[1];
-        const b = args[2];
-        let startPos: number;
-        let endPos: number;
-        if (isRuntimeNumber(a) || (isRuntimeTensor(a) && a.data.length === 1)) {
-          startPos = Math.round(toNumber(a)) - 1;
-        } else {
-          const pat = toString(a);
-          const idx = s.indexOf(pat);
-          if (idx === -1)
-            throw new RuntimeError("extractBetween: start pattern not found");
-          startPos = idx + pat.length;
-        }
-        if (isRuntimeNumber(b) || (isRuntimeTensor(b) && b.data.length === 1)) {
-          endPos = Math.round(toNumber(b));
-        } else {
-          const pat = toString(b);
-          const idx = s.indexOf(pat, startPos);
-          if (idx === -1)
-            throw new RuntimeError("extractBetween: end pattern not found");
-          endPos = idx;
-        }
-        const result = s.substring(startPos, endPos);
-        return isRuntimeChar(v) ? RTV.char(result) : RTV.string(result);
-      },
-    };
+  nargin: [3, Infinity],
+  mfile: true,
+  apply: args => {
+    if (args.length > 3)
+      throw unsupportedFormError("extractBetween", "name-value options");
+    const v = args[0];
+    const s = scalarTextSubject("extractBetween", v);
+    const a = args[1];
+    const b = args[2];
+    let startPos: number;
+    let endPos: number;
+    if (isRuntimeNumber(a) || (isRuntimeTensor(a) && a.data.length === 1)) {
+      startPos = Math.round(toNumber(a)) - 1;
+    } else {
+      const pat = toString(a);
+      const idx = s.indexOf(pat);
+      if (idx === -1)
+        throw new RuntimeError("extractBetween: start pattern not found");
+      startPos = idx + pat.length;
+    }
+    if (isRuntimeNumber(b) || (isRuntimeTensor(b) && b.data.length === 1)) {
+      endPos = Math.round(toNumber(b));
+    } else {
+      const pat = toString(b);
+      const idx = s.indexOf(pat, startPos);
+      if (idx === -1)
+        throw new RuntimeError("extractBetween: end pattern not found");
+      endPos = idx;
+    }
+    return sameTextKind(v, s.substring(startPos, endPos));
   },
 });
 
 // ── insertBefore / insertAfter ────────────────────────────────────────
 
-function insertResolve(
+function insertApply(
+  name: string,
   insertFn: (s: string, arg: RuntimeValue, ins: string) => string
-): (
-  argTypes: JitType[],
-  nargout: number
-) => {
-  outputTypes: JitType[];
-  apply: (args: RuntimeValue[]) => RuntimeValue;
-} | null {
-  return argTypes => {
-    if (argTypes.length !== 3) return null;
-    const out = preserveTextType(argTypes[0]);
-    if (!out) return null;
-    return {
-      outputTypes: [out],
-      apply: args => {
-        const v = args[0];
-        const s = toString(v);
-        const ins = toString(args[2]);
-        const result = insertFn(s, args[1], ins);
-        return isRuntimeChar(v) ? RTV.char(result) : RTV.string(result);
-      },
-    };
+): BuiltinApply {
+  return args => {
+    const v = args[0];
+    const s = scalarTextSubject(name, v);
+    const ins = toString(args[2]);
+    return sameTextKind(v, insertFn(s, args[1], ins));
   };
 }
 
-registerIBuiltin({
+builtin({
   name: "insertBefore",
-  resolve: insertResolve((s, arg, ins) => {
+  nargin: 3,
+  mfile: true,
+  apply: insertApply("insertBefore", (s, arg, ins) => {
     let pos: number;
     if (
       isRuntimeNumber(arg) ||
@@ -437,9 +444,11 @@ registerIBuiltin({
   }),
 });
 
-registerIBuiltin({
+builtin({
   name: "insertAfter",
-  resolve: insertResolve((s, arg, ins) => {
+  nargin: 3,
+  mfile: true,
+  apply: insertApply("insertAfter", (s, arg, ins) => {
     let pos: number;
     if (
       isRuntimeNumber(arg) ||
@@ -458,11 +467,6 @@ registerIBuiltin({
 
 // ── Text→boolean functions ────────────────────────────────────────────
 
-function isText(v: RuntimeValue): boolean {
-  return isRuntimeChar(v) || isRuntimeString(v);
-}
-
-/** Element-wise strcmp helper supporting cell arrays. */
 /** View a string array as a cell of strings (for elementwise text ops). */
 function stringArrayToCell(v: RuntimeValue): RuntimeValue {
   if (!isRuntimeStringArray(v)) return v;
@@ -519,60 +523,40 @@ function strcmpApply(
   return new RuntimeTensor(result, cell.shape.slice(), undefined, true);
 }
 
-registerIBuiltin({
+builtin({
   name: "strcmp",
-  resolve: argTypes => {
-    if (argTypes.length !== 2) return null;
-    return {
-      outputTypes: [{ kind: "boolean" }],
-      apply: args => strcmpApply(args, (a, b) => a === b),
-    };
-  },
+  nargin: 2,
+  apply: args => strcmpApply(args, (a, b) => a === b),
 });
 
-registerIBuiltin({
+builtin({
   name: "strcmpi",
-  resolve: argTypes => {
-    if (argTypes.length !== 2) return null;
-    return {
-      outputTypes: [{ kind: "boolean" }],
-      apply: args =>
-        strcmpApply(args, (a, b) => a.toLowerCase() === b.toLowerCase()),
-    };
-  },
+  nargin: 2,
+  apply: args =>
+    strcmpApply(args, (a, b) => a.toLowerCase() === b.toLowerCase()),
 });
 
-registerIBuiltin({
+builtin({
   name: "strncmp",
-  resolve: argTypes => {
-    if (argTypes.length !== 3) return null;
-    return {
-      outputTypes: [{ kind: "boolean" }],
-      apply: args => {
-        if (!isText(args[0]) || !isText(args[1])) return RTV.logical(false);
-        const n = Math.round(toNumber(args[2]));
-        const s1 = toString(args[0]);
-        const s2 = toString(args[1]);
-        return RTV.logical(s1.substring(0, n) === s2.substring(0, n));
-      },
-    };
+  nargin: 3,
+  apply: args => {
+    if (!isText(args[0]) || !isText(args[1])) return RTV.logical(false);
+    const n = Math.round(toNumber(args[2]));
+    const s1 = toString(args[0]);
+    const s2 = toString(args[1]);
+    return RTV.logical(s1.substring(0, n) === s2.substring(0, n));
   },
 });
 
-registerIBuiltin({
+builtin({
   name: "strncmpi",
-  resolve: argTypes => {
-    if (argTypes.length !== 3) return null;
-    return {
-      outputTypes: [{ kind: "boolean" }],
-      apply: args => {
-        if (!isText(args[0]) || !isText(args[1])) return RTV.logical(false);
-        const n = Math.round(toNumber(args[2]));
-        const s1 = toString(args[0]).toLowerCase();
-        const s2 = toString(args[1]).toLowerCase();
-        return RTV.logical(s1.substring(0, n) === s2.substring(0, n));
-      },
-    };
+  nargin: 3,
+  apply: args => {
+    if (!isText(args[0]) || !isText(args[1])) return RTV.logical(false);
+    const n = Math.round(toNumber(args[2]));
+    const s1 = toString(args[0]).toLowerCase();
+    const s2 = toString(args[1]).toLowerCase();
+    return RTV.logical(s1.substring(0, n) === s2.substring(0, n));
   },
 });
 
@@ -656,6 +640,11 @@ function logicalFromNumericTensor(
 
 function isstrpropApply(args: RuntimeValue[]): RuntimeValue {
   const v = args[0];
+  if (!isText(args[1]))
+    throw builtinError(
+      "MATLAB:isstrprop:InvalidQualifierType",
+      "Invalid data type in second argument."
+    );
   const category = toString(args[1]);
   const pred = isstrpropPredicate(category);
   if (!pred) {
@@ -690,11 +679,10 @@ function isstrpropApply(args: RuntimeValue[]): RuntimeValue {
   if (isRuntimeString(v)) {
     result = logicalRowFromString(toString(v), pred);
   } else if (isRuntimeChar(v)) {
-    const c = v as import("../../runtime/types.js").RuntimeChar;
     result = logicalRowFromString(
-      c.value,
+      v.value,
       pred,
-      c.shape ? [...c.shape] : undefined
+      v.shape ? [...v.shape] : undefined
     );
   } else if (isRuntimeTensor(v)) {
     result = logicalFromNumericTensor(v.data, v.shape, pred);
@@ -704,14 +692,14 @@ function isstrpropApply(args: RuntimeValue[]): RuntimeValue {
     data[0] = pred(cp) ? 1 : 0;
     result = new RuntimeTensor(data, [1, 1], undefined, true);
   } else {
-    throw new RuntimeError("isstrprop: unsupported input type");
+    throw unsupportedClassError("isstrprop", v);
   }
 
   if (forceCell) return RTV.cell([result], [1, 1]);
   return result;
 }
 
-registerIBuiltin({
+builtin({
   name: "isstrprop",
   help: {
     signatures: [
@@ -721,73 +709,34 @@ registerIBuiltin({
     description:
       "Test which characters in str belong to a category (alpha, alphanum, cntrl, digit, graphic, lower, print, punct, upper, wspace, xdigit). Returns a logical array, or a cell of logical vectors when str is a cell array or ForceCellOutput is true. Numeric input is treated as Unicode code points.",
   },
-  resolve: argTypes => {
-    if (argTypes.length < 2 || argTypes.length > 4) return null;
-    if (!isTextType(argTypes[1])) return null;
-    if (argTypes.length >= 3 && !isTextType(argTypes[2])) return null;
-    if (argTypes.length === 4) {
-      const k = argTypes[3].kind;
-      if (k !== "number" && k !== "boolean") return null;
-    }
-    const t0 = argTypes[0];
-    if (
-      t0.kind !== "char" &&
-      t0.kind !== "string" &&
-      t0.kind !== "number" &&
-      t0.kind !== "boolean" &&
-      t0.kind !== "tensor" &&
-      t0.kind !== "cell"
-    ) {
-      return null;
-    }
-    const isCell = t0.kind === "cell";
-    return {
-      outputTypes: isCell
-        ? [{ kind: "cell" }]
-        : [{ kind: "tensor", isComplex: false, isLogical: true }],
-      apply: args => isstrpropApply(args),
-    };
-  },
+  nargin: [2, 4],
+  apply: args => isstrpropApply(args),
 });
 
-registerIBuiltin({
+builtin({
   name: "isspace",
   help: {
     signatures: ["TF = isspace(str)"],
     description:
       "Return a logical array the same size as str, true where the character is whitespace. Numeric input is treated as Unicode code points.",
   },
-  resolve: argTypes => {
-    if (argTypes.length !== 1) return null;
-    const k = argTypes[0].kind;
-    if (
-      k !== "char" &&
-      k !== "string" &&
-      k !== "number" &&
-      k !== "boolean" &&
-      k !== "tensor"
-    ) {
-      return null;
-    }
+  nargin: 1,
+  apply: args => {
     const pred = (cp: number) => RE_WSPACE.test(String.fromCodePoint(cp));
-    return {
-      outputTypes: [{ kind: "tensor", isComplex: false, isLogical: true }],
-      apply: args => {
-        const v = args[0];
-        if (isRuntimeChar(v)) {
-          return logicalRowFromString(
-            v.value,
-            pred,
-            v.shape ? [...v.shape] : undefined
-          );
-        }
-        if (isRuntimeString(v)) return logicalRowFromString(toString(v), pred);
-        if (isRuntimeTensor(v))
-          return logicalFromNumericTensor(v.data, v.shape, pred);
-        // scalar number / boolean → code point
-        return logicalFromNumericTensor([toNumber(v)], [1, 1], pred);
-      },
-    };
+    const v = args[0];
+    if (isRuntimeChar(v)) {
+      return logicalRowFromString(
+        v.value,
+        pred,
+        v.shape ? [...v.shape] : undefined
+      );
+    }
+    if (isRuntimeString(v)) return logicalRowFromString(toString(v), pred);
+    if (isRuntimeTensor(v))
+      return logicalFromNumericTensor(v.data, v.shape, pred);
+    if (isRuntimeNumber(v) || isRuntimeLogical(v))
+      return logicalFromNumericTensor([toNumber(v)], [1, 1], pred);
+    throw unsupportedClassError("isspace", v);
   },
 });
 
@@ -824,80 +773,60 @@ function textSubjectApply(
   return RTV.logical(perElem(toString(subject)));
 }
 
-function subjectTypeOk(t: JitType): boolean {
-  return isTextType(t) || t.kind === "cell" || t.kind === "unknown";
+/** The 'IgnoreCase' value from trailing name-value pairs (other names are
+ *  ignored). */
+function ignoreCaseOption(args: RuntimeValue[], start: number): boolean {
+  let ic = false;
+  for (let i = start; i + 1 < args.length; i += 2) {
+    if (toString(args[i]).toLowerCase() === "ignorecase") {
+      ic = !!toNumber(args[i + 1]);
+    }
+  }
+  return ic;
 }
 
-registerIBuiltin({
-  name: "contains",
-  resolve: argTypes => {
-    if (argTypes.length < 2) return null;
-    if (!subjectTypeOk(argTypes[0])) return null;
-    return {
-      outputTypes: [{ kind: "boolean" }],
-      apply: args => {
-        const pats = patternList(args[1]);
-        return textSubjectApply(args[0], s => pats.some(p => s.includes(p)));
-      },
-    };
-  },
-});
-
-function resolveStartsEndsWith(
+// contains / startsWith / endsWith (str, pat, 'IgnoreCase', tf)
+function defineTextMatch(
   name: string,
   testFn: (s: string, pat: string) => boolean
-) {
-  registerIBuiltin({
+): void {
+  builtin({
     name,
-    resolve: argTypes => {
-      if (argTypes.length < 2) return null;
-      if (!subjectTypeOk(argTypes[0])) return null;
-      return {
-        outputTypes: [{ kind: "boolean" }],
-        apply: args => {
-          let ic = false;
-          for (let i = 2; i + 1 < args.length; i += 2) {
-            if (toString(args[i]).toLowerCase() === "ignorecase") {
-              ic = !!toNumber(args[i + 1]);
-            }
-          }
-          let pats = patternList(args[1]);
-          if (ic) pats = pats.map(p => p.toLowerCase());
-          return textSubjectApply(args[0], s0 => {
-            const s = ic ? s0.toLowerCase() : s0;
-            return pats.some(p => testFn(s, p));
-          });
-        },
-      };
+    nargin: [2, Infinity],
+    apply: args => {
+      if (!isTextOrCell(args[0])) throw mustBeTextError();
+      const ic = ignoreCaseOption(args, 2);
+      let pats = patternList(args[1]);
+      if (ic) pats = pats.map(p => p.toLowerCase());
+      return textSubjectApply(args[0], s0 => {
+        const s = ic ? s0.toLowerCase() : s0;
+        return pats.some(p => testFn(s, p));
+      });
     },
   });
 }
 
-resolveStartsEndsWith("startsWith", (s, p) => s.startsWith(p));
-resolveStartsEndsWith("endsWith", (s, p) => s.endsWith(p));
+defineTextMatch("contains", (s, p) => s.includes(p));
+defineTextMatch("startsWith", (s, p) => s.startsWith(p));
+defineTextMatch("endsWith", (s, p) => s.endsWith(p));
 
 // ── Text→number functions ─────────────────────────────────────────────
 
-registerIBuiltin({
+builtin({
   name: "strlength",
-  resolve: argTypes => {
-    if (argTypes.length !== 1) return null;
-    if (!isTextType(argTypes[0]) && argTypes[0].kind !== "unknown") return null;
-    return {
-      outputTypes: [{ kind: "number", sign: "nonneg" }],
-      apply: args => {
-        const v = args[0];
-        if (isRuntimeString(v)) return RTV.num(v.length);
-        if (isRuntimeChar(v)) return RTV.num(v.value.length);
-        if (isRuntimeStringArray(v)) {
-          return RTV.tensor(allocFloat64Array(v.data.map(s => s.length)), [
-            v.shape[0],
-            v.shape[1],
-          ]);
-        }
-        throw new RuntimeError("strlength: argument must be a string or char");
-      },
-    };
+  nargin: 1,
+  apply: args => {
+    const v = args[0];
+    if (isRuntimeString(v)) return RTV.num(v.length);
+    if (isRuntimeChar(v)) return RTV.num(v.value.length);
+    if (isRuntimeStringArray(v)) {
+      return RTV.tensor(allocFloat64Array(v.data.map(s => s.length)), [
+        v.shape[0],
+        v.shape[1],
+      ]);
+    }
+    if (isRuntimeCell(v)) throw unsupportedClassError("strlength", v);
+    throw mustBeTextError();
   },
 });
 
@@ -932,260 +861,271 @@ function str2doubleScalar(s: string): number {
   return isNaN(n) ? NaN : n;
 }
 
-registerIBuiltin({
+builtin({
   name: "str2double",
-  resolve: argTypes => {
-    if (argTypes.length !== 1) return null;
-    const t = argTypes[0];
-    // Accept text or cell array
-    if (isTextType(t)) {
-      return {
-        outputTypes: [{ kind: "number" }],
-        apply: args => RTV.num(str2doubleScalar(toString(args[0]))),
-      };
+  nargin: 1,
+  mfile: true,
+  apply: args => {
+    const v = args[0];
+    if (isText(v)) return RTV.num(str2doubleScalar(toString(v)));
+    if (isRuntimeCell(v)) {
+      const data = allocFloat64Array(v.data.length);
+      for (let i = 0; i < v.data.length; i++) {
+        const el = v.data[i];
+        data[i] = isText(el) ? str2doubleScalar(toString(el)) : NaN;
+      }
+      return RTV.tensor(data, v.shape.slice());
     }
-    if (t.kind === "cell") {
-      return {
-        outputTypes: [{ kind: "tensor", isComplex: false }],
-        apply: args => {
-          const cell = args[0];
-          if (
-            typeof cell !== "object" ||
-            cell === null ||
-            (cell as { kind?: string }).kind !== "cell"
-          )
-            throw new RuntimeError("str2double: expected cell array");
-          const c = cell as import("../../runtime/types.js").RuntimeCell;
-          const data = allocFloat64Array(c.data.length);
-          for (let i = 0; i < c.data.length; i++) {
-            const el = c.data[i];
-            if (isRuntimeString(el) || isRuntimeChar(el)) {
-              data[i] = str2doubleScalar(toString(el));
-            } else {
-              data[i] = NaN;
-            }
-          }
-          return RTV.tensor(data, c.shape.slice());
-        },
-      };
+    if (isRuntimeStringArray(v)) {
+      return RTV.tensor(
+        allocFloat64Array(v.data.map(s => str2doubleScalar(s))),
+        [v.shape[0], v.shape[1]]
+      );
     }
-    if (t.kind === "unknown") {
-      return {
-        outputTypes: [{ kind: "tensor", isComplex: false }],
-        apply: args => {
-          const v = args[0];
-          if (!isRuntimeStringArray(v))
-            throw new RuntimeError("str2double: expected text input");
-          return RTV.tensor(
-            allocFloat64Array(v.data.map(s => str2doubleScalar(s))),
-            [v.shape[0], v.shape[1]]
-          );
-        },
-      };
-    }
-    return null;
+    throw unsupportedClassError("str2double", v);
   },
 });
 
 // NOTE: the real str2num is the special builtin in
 // interpreterSpecialBuiltins.ts, which evaluates the text as `[<text>]`
 // (handling vectors / matrices / arithmetic). It intercepts before this
-// IBuiltin, which only stays registered for builtin-listing/type presence
+// builtin, which only stays registered for builtin-listing/type presence
 // and the degenerate fallback.
-registerIBuiltin({
+builtin({
   name: "str2num",
-  resolve: argTypes => {
-    if (argTypes.length !== 1) return null;
-    if (!isTextType(argTypes[0])) return null;
-    // Output can be number or empty tensor — conservatively say number
-    return {
-      outputTypes: [{ kind: "number" }],
-      apply: args => {
-        const s = toString(args[0]);
-        const n = Number(s);
-        return Number.isNaN(n)
-          ? RTV.tensor(allocFloat64Array(0), [0, 0])
-          : RTV.num(n);
-      },
-    };
+  nargin: [1, 3],
+  nargout: 2,
+  mfile: true,
+  apply: (args, nargout) => {
+    if (args.length > 1)
+      throw unsupportedFormError("str2num", "the 'Evaluation' option");
+    if (!isText(args[0]))
+      throw builtinError(
+        "MATLAB:str2num:InvalidArgument",
+        "Input must be a character vector or string scalar."
+      );
+    const n = Number(toString(args[0]));
+    const ok = !Number.isNaN(n);
+    const x = ok ? RTV.num(n) : RTV.tensor(allocFloat64Array(0), [0, 0]);
+    return nargout >= 2 ? [x, RTV.logical(ok)] : x;
   },
 });
 
-registerIBuiltin({
+builtin({
   name: "count",
-  resolve: argTypes => {
-    if (argTypes.length < 2) return null;
-    if (!isTextType(argTypes[0]) || !isTextType(argTypes[1])) return null;
-    return {
-      outputTypes: [{ kind: "number", sign: "nonneg" }],
-      apply: args => {
-        const s = toString(args[0]);
-        const pat = toString(args[1]);
-        if (pat.length === 0) return RTV.num(s.length + 1);
-        let n = 0;
-        let idx = 0;
-        while ((idx = s.indexOf(pat, idx)) !== -1) {
-          n++;
-          idx += pat.length;
-        }
-        return RTV.num(n);
-      },
-    };
+  nargin: [2, Infinity],
+  apply: args => {
+    const s0 = scalarTextSubject("count", args[0]);
+    const p = args[1];
+    if (!isText(p)) {
+      if (isRuntimeStringArray(p) || isRuntimeCell(p))
+        throw unsupportedFormError("count", "a pattern list");
+      throw builtinError(
+        "MATLAB:string:MustBeTextOrPattern",
+        "Search term must be a text or pattern array."
+      );
+    }
+    const ic = ignoreCaseOption(args, 2);
+    const s = ic ? s0.toLowerCase() : s0;
+    const pat = ic ? toString(p).toLowerCase() : toString(p);
+    if (pat.length === 0) return RTV.num(s.length + 1);
+    let n = 0;
+    let idx = 0;
+    while ((idx = s.indexOf(pat, idx)) !== -1) {
+      n++;
+      idx += pat.length;
+    }
+    return RTV.num(n);
   },
 });
 
-registerIBuiltin({
+builtin({
   name: "hex2dec",
-  resolve: argTypes => {
-    if (argTypes.length !== 1) return null;
-    if (!isTextType(argTypes[0])) return null;
-    return {
-      outputTypes: [{ kind: "number" }],
-      apply: args => RTV.num(parseInt(toString(args[0]), 16)),
-    };
+  nargin: 1,
+  apply: args => {
+    const v = args[0];
+    if (!isText(v)) {
+      if (isRuntimeStringArray(v) || isRuntimeCell(v))
+        throw unsupportedClassError("hex2dec", v);
+      throw builtinError(
+        "MATLAB:hex2dec:InvalidCharacters",
+        "Hexadecimal text must consist of characters 0-9 and A-F."
+      );
+    }
+    return RTV.num(parseInt(toString(v), 16));
   },
 });
 
-registerIBuiltin({
+builtin({
   name: "bin2dec",
-  resolve: argTypes => {
-    if (argTypes.length !== 1) return null;
-    if (!isTextType(argTypes[0])) return null;
-    return {
-      outputTypes: [{ kind: "number" }],
-      apply: args => RTV.num(parseInt(toString(args[0]), 2)),
-    };
+  nargin: 1,
+  apply: args => {
+    const v = args[0];
+    if (!isText(v)) {
+      if (isRuntimeStringArray(v) || isRuntimeCell(v))
+        throw unsupportedClassError("bin2dec", v);
+      throw builtinError(
+        "MATLAB:bin2dec:InputMustBeString",
+        "Input argument must be a character vector, string, or cell array of character vectors."
+      );
+    }
+    return RTV.num(parseInt(toString(v), 2));
   },
 });
 
-registerIBuiltin({
+builtin({
   name: "strfind",
-  resolve: argTypes => {
-    if (argTypes.length !== 2) return null;
-    if (!isTextType(argTypes[0]) || !isTextType(argTypes[1])) return null;
-    return {
-      outputTypes: [{ kind: "tensor", isComplex: false, ndim: 2 }],
-      apply: args => {
-        const s = toString(args[0]);
-        const pattern = toString(args[1]);
-        const indices: number[] = [];
-        let pos = 0;
-        while (pos <= s.length - pattern.length) {
-          const idx = s.indexOf(pattern, pos);
-          if (idx === -1) break;
-          indices.push(idx + 1);
-          pos = idx + 1;
-        }
-        if (indices.length === 0) {
-          return RTV.tensor(allocFloat64Array(0), [1, 0]);
-        }
-        const data = allocFloat64Array(indices.length);
-        indices.forEach((v, i) => (data[i] = v));
-        return RTV.tensor(data, [1, indices.length]);
-      },
-    };
+  nargin: [2, 4],
+  apply: args => {
+    if (args.length > 2)
+      throw unsupportedFormError("strfind", "the 'ForceCellOutput' option");
+    const s = textArg("strfind", args[0]);
+    const pattern = textArg("strfind", args[1]);
+    const indices: number[] = [];
+    let pos = 0;
+    while (pos <= s.length - pattern.length) {
+      const idx = s.indexOf(pattern, pos);
+      if (idx === -1) break;
+      indices.push(idx + 1);
+      pos = idx + 1;
+    }
+    if (indices.length === 0) {
+      return RTV.tensor(allocFloat64Array(0), [1, 0]);
+    }
+    const data = allocFloat64Array(indices.length);
+    indices.forEach((v, i) => (data[i] = v));
+    return RTV.tensor(data, [1, indices.length]);
   },
 });
 
 // ── Number/tensor→char functions ──────────────────────────────────────
 
-registerIBuiltin({
+function isNumericValue(v: RuntimeValue): boolean {
+  return (
+    isRuntimeNumber(v) ||
+    isRuntimeLogical(v) ||
+    isRuntimeTensor(v) ||
+    isRuntimeComplexNumber(v) ||
+    isRuntimeSparseMatrix(v)
+  );
+}
+
+builtin({
   name: "blanks",
-  resolve: argTypes => {
-    if (argTypes.length !== 1) return null;
-    if (argTypes[0].kind !== "number" && argTypes[0].kind !== "boolean")
-      return null;
-    return {
-      outputTypes: [{ kind: "char" }],
-      apply: args => {
-        const n = Math.round(toNumber(args[0]));
-        return RTV.char(" ".repeat(Math.max(0, n)));
-      },
-    };
+  nargin: 1,
+  mfile: true,
+  apply: args => {
+    const a = args[0];
+    if (!isNumericValue(a))
+      throw builtinError(
+        "MATLAB:repmat:nonNumericReplications",
+        "Replication factors must be numeric."
+      );
+    if (isRuntimeTensor(a) && a.data.length !== 1)
+      throw builtinError(
+        "MATLAB:NonScalarInput",
+        "Size inputs must be scalar."
+      );
+    const n = Math.round(realScalarArg(a));
+    return RTV.char(" ".repeat(Math.max(0, n)));
   },
 });
 
-registerIBuiltin({
+/** The scalar decimal input of dec2hex / dec2bin. */
+function decimalArg(
+  name: string,
+  v: RuntimeValue,
+  badType: () => RuntimeError
+): number {
+  if (isRuntimeNumber(v) || isRuntimeLogical(v)) return toNumber(v);
+  if (isRuntimeTensor(v) && !v.imag) {
+    if (v.data.length === 1) return v.data[0];
+    throw unsupportedFormError(name, "array input");
+  }
+  if (isRuntimeChar(v)) throw unsupportedClassError(name, v);
+  if (isNumericValue(v))
+    throw unsupportedFormError(name, "complex or sparse input");
+  throw badType();
+}
+
+builtin({
   name: "dec2hex",
-  resolve: argTypes => {
-    if (argTypes.length < 1 || argTypes.length > 2) return null;
-    if (argTypes[0].kind !== "number" && argTypes[0].kind !== "boolean")
-      return null;
-    return {
-      outputTypes: [{ kind: "char" }],
-      apply: args => {
-        let n = Math.round(toNumber(args[0]));
-        if (n < 0) {
-          // Two's complement: find smallest byte-aligned width
-          let bits = 8;
-          while (bits <= 52 && -(1 << (bits - 1)) > n) bits += 8;
-          n = (1 << bits) + n;
-        }
-        let hex = n.toString(16).toUpperCase();
-        if (args.length === 2) {
-          const minDigits = Math.round(toNumber(args[1]));
-          while (hex.length < minDigits) hex = "0" + hex;
-        }
-        return RTV.char(hex);
-      },
-    };
+  nargin: [1, 2],
+  apply: args => {
+    let n = Math.round(
+      decimalArg("dec2hex", args[0], () =>
+        builtinError(
+          "MATLAB:dec2hex:FirstArgIsInvalid",
+          "First argument must contain finite integers."
+        )
+      )
+    );
+    if (n < 0) {
+      // Two's complement: find smallest byte-aligned width
+      let bits = 8;
+      while (bits <= 52 && -(1 << (bits - 1)) > n) bits += 8;
+      n = (1 << bits) + n;
+    }
+    let hex = n.toString(16).toUpperCase();
+    if (args.length === 2) {
+      const minDigits = Math.round(toNumber(args[1]));
+      while (hex.length < minDigits) hex = "0" + hex;
+    }
+    return RTV.char(hex);
   },
 });
 
-registerIBuiltin({
+builtin({
   name: "dec2bin",
-  resolve: argTypes => {
-    if (argTypes.length < 1 || argTypes.length > 2) return null;
-    if (argTypes[0].kind !== "number" && argTypes[0].kind !== "boolean")
-      return null;
-    return {
-      outputTypes: [{ kind: "char" }],
-      apply: args => {
-        let n = Math.round(toNumber(args[0]));
-        if (n < 0) {
-          let bits = 8;
-          while (bits <= 52 && -(1 << (bits - 1)) > n) bits += 8;
-          n = (1 << bits) + n;
-        }
-        let bin = n.toString(2);
-        if (args.length === 2) {
-          const minDigits = Math.round(toNumber(args[1]));
-          while (bin.length < minDigits) bin = "0" + bin;
-        }
-        return RTV.char(bin);
-      },
-    };
+  nargin: [1, 2],
+  apply: args => {
+    let n = Math.round(
+      decimalArg("dec2bin", args[0], () =>
+        builtinError("MATLAB:dec2bin:InvalidDecimalArg", "D must be numeric.")
+      )
+    );
+    if (n < 0) {
+      let bits = 8;
+      while (bits <= 52 && -(1 << (bits - 1)) > n) bits += 8;
+      n = (1 << bits) + n;
+    }
+    let bin = n.toString(2);
+    if (args.length === 2) {
+      const minDigits = Math.round(toNumber(args[1]));
+      while (bin.length < minDigits) bin = "0" + bin;
+    }
+    return RTV.char(bin);
   },
 });
 
-registerIBuiltin({
+builtin({
   name: "int2str",
-  resolve: argTypes => {
-    if (argTypes.length !== 1) return null;
-    const a = argTypes[0];
-    if (a.kind !== "number" && a.kind !== "boolean" && a.kind !== "tensor")
-      return null;
-    return {
-      outputTypes: [{ kind: "char" }],
-      apply: args => {
-        const v = args[0];
-        const roundInt = (x: number) => Math.sign(x) * Math.round(Math.abs(x));
-        if (isRuntimeTensor(v)) {
-          const rows = v.shape[0] || 1;
-          const cols = v.shape.length >= 2 ? v.shape[1] : v.data.length;
-          const rowStrs: string[] = [];
-          for (let r = 0; r < rows; r++) {
-            const vals: string[] = [];
-            for (let c = 0; c < cols; c++) {
-              vals.push(String(roundInt(v.data[r + c * rows])));
-            }
-            rowStrs.push(vals.join("  "));
-          }
-          return RTV.char(rowStrs.join("\n"));
+  nargin: 1,
+  mfile: true,
+  apply: args => {
+    // char input is converted to its character codes, as in MATLAB.
+    const v = numericArg(args[0]);
+    if (
+      isRuntimeComplexNumber(v) ||
+      isRuntimeSparseMatrix(v) ||
+      (isRuntimeTensor(v) && v.imag)
+    )
+      throw unsupportedFormError("int2str", "complex or sparse input");
+    const roundInt = (x: number) => Math.sign(x) * Math.round(Math.abs(x));
+    if (isRuntimeTensor(v)) {
+      const rows = v.shape[0] || 1;
+      const cols = v.shape.length >= 2 ? v.shape[1] : v.data.length;
+      const rowStrs: string[] = [];
+      for (let r = 0; r < rows; r++) {
+        const vals: string[] = [];
+        for (let c = 0; c < cols; c++) {
+          vals.push(String(roundInt(v.data[r + c * rows])));
         }
-        return RTV.char(String(roundInt(toNumber(v))));
-      },
-    };
+        rowStrs.push(vals.join("  "));
+      }
+      return RTV.char(rowStrs.join("\n"));
+    }
+    return RTV.char(String(roundInt(v)));
   },
 });
 
@@ -1193,143 +1133,146 @@ registerIBuiltin({
 
 const numStr = matlabNumToString;
 
-registerIBuiltin({
+builtin({
   name: "num2str",
-  resolve: argTypes => {
-    if (argTypes.length < 1 || argTypes.length > 2) return null;
-    const a = argTypes[0];
-    if (a.kind !== "number" && a.kind !== "boolean" && a.kind !== "tensor")
-      return null;
-    // Second arg can be format string or precision number
+  nargin: [1, 2],
+  mfile: true,
+  apply: args => {
+    const v = args[0];
+    // MATLAB returns char input unchanged.
+    if (isRuntimeChar(v)) return v;
     if (
-      argTypes.length === 2 &&
-      !isTextType(argTypes[1]) &&
-      argTypes[1].kind !== "number"
+      isRuntimeComplexNumber(v) ||
+      isRuntimeSparseMatrix(v) ||
+      (isRuntimeTensor(v) && v.imag)
     )
-      return null;
-    return {
-      outputTypes: [{ kind: "char" }],
-      apply: args => {
-        const v = args[0];
-        if (
-          args.length >= 2 &&
-          (isRuntimeString(args[1]) || isRuntimeChar(args[1]))
-        ) {
-          return RTV.char(
-            sprintfFormat(isRuntimeString(args[1]) ? args[1] : args[1].value, [
-              v,
-            ])
-          );
-        }
-        const precision =
-          args.length >= 2 && isRuntimeNumber(args[1])
-            ? (args[1] as number)
-            : undefined;
-        const fmtNum = (x: number): string => {
-          if (precision !== undefined) {
-            let s = x.toPrecision(precision);
-            if (s.includes(".")) {
-              const eIdx = s.search(/[eE]/);
-              if (eIdx === -1) {
-                s = s.replace(/\.?0+$/, "");
-              } else {
-                const mantissa = s.slice(0, eIdx).replace(/\.?0+$/, "");
-                let expPart = s.slice(eIdx);
-                expPart = expPart.replace(/([eE][+-])(\d)$/, "$1" + "0$2");
-                s = mantissa + expPart;
-              }
-            }
-            return s;
+      throw unsupportedFormError("num2str", "complex or sparse input");
+    if (!isRuntimeNumber(v) && !isRuntimeLogical(v) && !isRuntimeTensor(v))
+      throw builtinError(
+        "MATLAB:num2str:nonNumericInput",
+        "Input to num2str must be numeric."
+      );
+    let precision: number | undefined;
+    if (args.length >= 2) {
+      const a1 = args[1];
+      if (isText(a1)) return RTV.char(sprintfFormat(toString(a1), [v]));
+      if (
+        !isRuntimeNumber(a1) &&
+        !(isRuntimeTensor(a1) && a1.data.length === 1 && !a1._isLogical)
+      )
+        throw builtinError(
+          "MATLAB:num2str:invalidSecondArgument",
+          "Second argument to num2str must be a character vector, string scalar, or numeric."
+        );
+      precision = toNumber(a1);
+    }
+    const fmtNum = (x: number): string => {
+      if (precision !== undefined) {
+        let s = x.toPrecision(precision);
+        if (s.includes(".")) {
+          const eIdx = s.search(/[eE]/);
+          if (eIdx === -1) {
+            s = s.replace(/\.?0+$/, "");
+          } else {
+            const mantissa = s.slice(0, eIdx).replace(/\.?0+$/, "");
+            let expPart = s.slice(eIdx);
+            expPart = expPart.replace(/([eE][+-])(\d)$/, "$1" + "0$2");
+            s = mantissa + expPart;
           }
-          return numStr(x);
-        };
-        if (isRuntimeNumber(v) || isRuntimeLogical(v)) {
-          return RTV.char(fmtNum(toNumber(v)));
         }
-        if (isRuntimeTensor(v)) {
-          const nRows = v.shape[0] || 1;
-          const nCols = v.data.length / nRows;
-          const strs: string[][] = [];
-          for (let r = 0; r < nRows; r++) {
-            const row: string[] = [];
-            for (let c = 0; c < nCols; c++) {
-              row.push(fmtNum(v.data[c * nRows + r]));
-            }
-            strs.push(row);
-          }
-          const colWidths: number[] = [];
-          for (let c = 0; c < nCols; c++) {
-            let maxW = 0;
-            for (let r = 0; r < nRows; r++) {
-              if (strs[r][c].length > maxW) maxW = strs[r][c].length;
-            }
-            colWidths.push(maxW);
-          }
-          const rowStrs = strs.map(row =>
-            row.map((s, c) => s.padStart(colWidths[c])).join("  ")
-          );
-          if (nRows === 1) return RTV.char(rowStrs[0]);
-          const rowWidth = rowStrs[0].length;
-          const paddedRows = rowStrs.map(r => r.padEnd(rowWidth));
-          return new RuntimeChar(paddedRows.join(""), [nRows, rowWidth]);
-        }
-        return RTV.char(String(toNumber(v)));
-      },
+        return s;
+      }
+      return numStr(x);
     };
+    if (isRuntimeNumber(v) || isRuntimeLogical(v)) {
+      return RTV.char(fmtNum(toNumber(v)));
+    }
+    const nRows = v.shape[0] || 1;
+    const nCols = v.data.length / nRows;
+    const strs: string[][] = [];
+    for (let r = 0; r < nRows; r++) {
+      const row: string[] = [];
+      for (let c = 0; c < nCols; c++) {
+        row.push(fmtNum(v.data[c * nRows + r]));
+      }
+      strs.push(row);
+    }
+    const colWidths: number[] = [];
+    for (let c = 0; c < nCols; c++) {
+      let maxW = 0;
+      for (let r = 0; r < nRows; r++) {
+        if (strs[r][c].length > maxW) maxW = strs[r][c].length;
+      }
+      colWidths.push(maxW);
+    }
+    const rowStrs = strs.map(row =>
+      row.map((s, c) => s.padStart(colWidths[c])).join("  ")
+    );
+    if (nRows === 1) return RTV.char(rowStrs[0]);
+    const rowWidth = rowStrs[0].length;
+    const paddedRows = rowStrs.map(r => r.padEnd(rowWidth));
+    return new RuntimeChar(paddedRows.join(""), [nRows, rowWidth]);
   },
 });
 
 // ── mat2str ───────────────────────────────────────────────────────────
 
-registerIBuiltin({
+builtin({
   name: "mat2str",
-  resolve: argTypes => {
-    if (argTypes.length < 1 || argTypes.length > 2) return null;
-    const a = argTypes[0];
+  nargin: [1, 3],
+  mfile: true,
+  apply: args => {
+    if (args.length > 2)
+      throw unsupportedFormError("mat2str", "the 'class' option");
+    const v = args[0];
+    if (isText(v) || isRuntimeStringArray(v))
+      throw unsupportedClassError("mat2str", v);
+    if (isRuntimeSparseMatrix(v))
+      throw unsupportedFormError("mat2str", "sparse input");
     if (
-      a.kind !== "number" &&
-      a.kind !== "boolean" &&
-      a.kind !== "tensor" &&
-      a.kind !== "complex_or_number"
+      !isRuntimeNumber(v) &&
+      !isRuntimeLogical(v) &&
+      !isRuntimeTensor(v) &&
+      !isRuntimeComplexNumber(v)
     )
-      return null;
-    return {
-      outputTypes: [{ kind: "char" }],
-      apply: args => {
-        const v = args[0];
-        const prec = args.length >= 2 ? Math.round(toNumber(args[1])) : -1;
-        const fmt = (n: number): string => {
-          // MATLAB spells these Inf / -Inf / NaN (not JS's "Infinity").
-          if (!Number.isFinite(n))
-            return Number.isNaN(n) ? "NaN" : n > 0 ? "Inf" : "-Inf";
-          return prec >= 0 ? Number(n.toPrecision(prec)).toString() : String(n);
-        };
-        // Complex element: MATLAB writes `re+imi` / `re-imi` (always an
-        // explicit imaginary part for a complex-typed value, e.g. `0+1i`).
-        const fmtC = (re: number, im: number): string =>
-          fmt(re) + (im < 0 ? "-" : "+") + fmt(Math.abs(im)) + "i";
-        if (isRuntimeComplexNumber(v)) return RTV.char(fmtC(v.re, v.im));
-        if (isRuntimeNumber(v)) return RTV.char(fmt(v));
-        if (isRuntimeTensor(v)) {
-          const im = v.imag;
-          const cell = (k: number): string =>
-            im !== undefined ? fmtC(v.data[k], im[k]) : fmt(v.data[k]);
-          const nRows = v.shape[0] || 1;
-          const nCols = v.data.length / nRows;
-          if (nRows === 1 && nCols === 1) return RTV.char(cell(0));
-          const rows: string[] = [];
-          for (let r = 0; r < nRows; r++) {
-            const elems: string[] = [];
-            for (let c = 0; c < nCols; c++) {
-              elems.push(cell(c * nRows + r));
-            }
-            rows.push(elems.join(" "));
-          }
-          return RTV.char("[" + rows.join(";") + "]");
-        }
-        return RTV.char(String(toNumber(v)));
-      },
+      throw builtinError(
+        "MATLAB:mat2str:NumericInput",
+        "Input matrix must be a numeric array, character array, or string array."
+      );
+    const prec = args.length >= 2 ? Math.round(toNumber(args[1])) : -1;
+    const fmt = (n: number): string => {
+      // MATLAB spells these Inf / -Inf / NaN (not JS's "Infinity").
+      if (!Number.isFinite(n))
+        return Number.isNaN(n) ? "NaN" : n > 0 ? "Inf" : "-Inf";
+      return prec >= 0 ? Number(n.toPrecision(prec)).toString() : String(n);
     };
+    // Complex element: MATLAB writes `re+imi` / `re-imi` (always an
+    // explicit imaginary part for a complex-typed value, e.g. `0+1i`).
+    const fmtC = (re: number, im: number): string =>
+      fmt(re) + (im < 0 ? "-" : "+") + fmt(Math.abs(im)) + "i";
+    const fmtL = (x: number): string => (x ? "true" : "false");
+    if (isRuntimeComplexNumber(v)) return RTV.char(fmtC(v.re, v.im));
+    if (isRuntimeNumber(v)) return RTV.char(fmt(v));
+    if (isRuntimeLogical(v)) return RTV.char(fmtL(v ? 1 : 0));
+    const im = v.imag;
+    const cell = (k: number): string =>
+      im !== undefined
+        ? fmtC(v.data[k], im[k])
+        : v._isLogical
+          ? fmtL(v.data[k])
+          : fmt(v.data[k]);
+    const nRows = v.shape[0] || 1;
+    const nCols = v.data.length / nRows;
+    if (nRows === 1 && nCols === 1) return RTV.char(cell(0));
+    const rows: string[] = [];
+    for (let r = 0; r < nRows; r++) {
+      const elems: string[] = [];
+      for (let c = 0; c < nCols; c++) {
+        elems.push(cell(c * nRows + r));
+      }
+      rows.push(elems.join(" "));
+    }
+    return RTV.char("[" + rows.join(";") + "]");
   },
 });
 
@@ -1348,7 +1291,7 @@ function collectRows(v: RuntimeValue): string[] {
 
 // strmatch (legacy): find rows of a text array that begin with (or, with
 // 'exact', equal) a pattern. Ported from MATLAB's strmatch.m.
-registerIBuiltin({
+builtin({
   name: "strmatch",
   help: {
     signatures: [
@@ -1358,46 +1301,40 @@ registerIBuiltin({
     description:
       "(Legacy) Find rows of STRARRAY that begin with STR, or that equal STR when 'exact' is given. Returns a column vector of matching row indices.",
   },
-  resolve: argTypes => {
-    if (argTypes.length < 2 || argTypes.length > 3) return null;
-    if (!isTextType(argTypes[0])) return null;
-    const sa = argTypes[1];
-    if (sa.kind !== "char" && sa.kind !== "string" && sa.kind !== "cell")
-      return null;
-    return {
-      outputTypes: [{ kind: "tensor", isComplex: false }],
-      apply: args => {
-        const str = toString(args[0]);
-        let rows = collectRows(args[1]);
-        const n = rows.length === 0 ? 0 : Math.max(...rows.map(r => r.length));
-        rows = rows.map(r => r.padEnd(n, " "));
-        const exactMatch = args.length === 3;
-        let s = str;
-        let len = s.length;
-        if (len > n) {
-          return RTV.tensor(allocFloat64Array(0), [0, 1]);
+  nargin: [2, 3],
+  mfile: true,
+  apply: args => {
+    const str = textArg("strmatch", args[0]);
+    if (!isText(args[1]) && !isRuntimeCell(args[1]))
+      throw unsupportedClassError("strmatch", args[1]);
+    let rows = collectRows(args[1]);
+    const n = rows.length === 0 ? 0 : Math.max(...rows.map(r => r.length));
+    rows = rows.map(r => r.padEnd(n, " "));
+    const exactMatch = args.length === 3;
+    let s = str;
+    let len = s.length;
+    if (len > n) {
+      return RTV.tensor(allocFloat64Array(0), [0, 1]);
+    }
+    if (exactMatch && len < n) {
+      // Pad pattern with nulls if the last column holds a null, else
+      // spaces (matches MATLAB's strmatch.m).
+      const useNull = rows.some(r => r.charCodeAt(n - 1) === 0);
+      s = s.padEnd(n, useNull ? "\0" : " ");
+      len = n;
+    }
+    const matches: number[] = [];
+    for (let r = 0; r < rows.length; r++) {
+      let ok = true;
+      for (let i = 0; i < len; i++) {
+        if (rows[r][i] !== s[i]) {
+          ok = false;
+          break;
         }
-        if (exactMatch && len < n) {
-          // Pad pattern with nulls if the last column holds a null, else
-          // spaces (matches MATLAB's strmatch.m).
-          const useNull = rows.some(r => r.charCodeAt(n - 1) === 0);
-          s = s.padEnd(n, useNull ? "\0" : " ");
-          len = n;
-        }
-        const matches: number[] = [];
-        for (let r = 0; r < rows.length; r++) {
-          let ok = true;
-          for (let i = 0; i < len; i++) {
-            if (rows[r][i] !== s[i]) {
-              ok = false;
-              break;
-            }
-          }
-          if (ok) matches.push(r + 1);
-        }
-        return RTV.tensor(allocFloat64Array(matches), [matches.length, 1]);
-      },
-    };
+      }
+      if (ok) matches.push(r + 1);
+    }
+    return RTV.tensor(allocFloat64Array(matches), [matches.length, 1]);
   },
 });
 
@@ -1441,180 +1378,165 @@ function charRowsToMatrix(rows: string[]): RuntimeChar {
   return new RuntimeChar(padded.join(""), [rows.length, width]);
 }
 
-registerIBuiltin({
+function charConversionError(v: RuntimeValue): RuntimeError {
+  return builtinError(
+    "MATLAB:invalidConversion",
+    `Conversion to char from ${className(v)} is not possible.`
+  );
+}
+
+// char(), char(A), char(A1, ..., An)
+builtin({
   name: "char",
-  resolve: argTypes => {
-    if (argTypes.length !== 1) return null;
-    const a = argTypes[0];
-    if (
-      a.kind !== "char" &&
-      a.kind !== "string" &&
-      a.kind !== "number" &&
-      a.kind !== "tensor" &&
-      a.kind !== "cell" &&
-      a.kind !== "unknown" &&
-      // datetime/duration only — other classes keep their own char methods
-      // (or the generic "does not support these argument types" error).
-      !(
-        a.kind === "class_instance" &&
-        (a.className === "datetime" || a.className === "duration")
-      )
-    )
-      return null;
-    return {
-      outputTypes: [{ kind: "char" }],
-      apply: args => {
-        const v = args[0];
-        if (isRuntimeChar(v)) return v;
-        // char(datetime) / char(duration): the display text (honoring a
-        // datetime's Format property).
-        if (isRuntimeClassInstance(v)) {
-          const s = formatDatetimeOrDuration(v);
-          if (s !== null) return RTV.char(s);
-        }
-        if (isRuntimeString(v)) return RTV.char(v);
-        if (isRuntimeNumber(v))
-          return RTV.char(String.fromCharCode(Math.round(v)));
-        if (isRuntimeTensor(v)) {
-          const chars: string[] = [];
-          for (let i = 0; i < v.data.length; i++) {
-            chars.push(String.fromCharCode(Math.round(v.data[i])));
-          }
-          return RTV.char(chars.join(""));
-        }
-        // char(cellArray): each element becomes one or more rows, all
-        // right-padded with spaces to the widest row. Matches MATLAB's
-        // conversion of a cellstr to a padded char matrix.
-        if (isRuntimeCell(v)) {
-          const rows: string[] = [];
-          for (const el of v.data) rows.push(...valueToCharRows(el));
-          return charRowsToMatrix(rows);
-        }
-        // char(stringArray): one row per element (column-major order),
-        // right-padded to the widest element.
-        if (isRuntimeStringArray(v)) {
-          return charRowsToMatrix(v.data.slice());
-        }
-        throw new RuntimeError("char: unsupported arguments");
-      },
-    };
+  apply: args => {
+    if (args.length === 0) return RTV.char("");
+    if (args.length > 1) {
+      // Each argument becomes one or more rows (an empty one a blank row),
+      // right-padded to the widest row.
+      const rows: string[] = [];
+      for (const a of args) {
+        if (isRuntimeCell(a))
+          throw builtinError(
+            "MATLAB:character:InvalidInput",
+            "Inputs must be character arrays."
+          );
+        if (isRuntimeStringArray(a)) rows.push(...a.data);
+        else if (
+          isText(a) ||
+          isRuntimeNumber(a) ||
+          (isRuntimeTensor(a) && !a.imag)
+        )
+          rows.push(...valueToCharRows(a));
+        else throw charConversionError(a);
+      }
+      return charRowsToMatrix(rows);
+    }
+    const v = args[0];
+    if (isRuntimeChar(v)) return v;
+    // char(datetime) / char(duration): the display text (honoring a
+    // datetime's Format property).
+    if (isRuntimeClassInstance(v)) {
+      const s = formatDatetimeOrDuration(v);
+      if (s !== null) return RTV.char(s);
+    }
+    if (isRuntimeString(v)) return RTV.char(v);
+    if (isRuntimeNumber(v)) return RTV.char(String.fromCharCode(Math.round(v)));
+    if (isRuntimeTensor(v)) {
+      const chars: string[] = [];
+      for (let i = 0; i < v.data.length; i++) {
+        chars.push(String.fromCharCode(Math.round(v.data[i])));
+      }
+      return RTV.char(chars.join(""));
+    }
+    // char(cellArray): each element becomes one or more rows, all
+    // right-padded with spaces to the widest row. Matches MATLAB's
+    // conversion of a cellstr to a padded char matrix.
+    if (isRuntimeCell(v)) {
+      const rows: string[] = [];
+      for (const el of v.data) rows.push(...valueToCharRows(el));
+      return charRowsToMatrix(rows);
+    }
+    // char(stringArray): one row per element (column-major order),
+    // right-padded to the widest element.
+    if (isRuntimeStringArray(v)) {
+      return charRowsToMatrix(v.data.slice());
+    }
+    throw charConversionError(v);
   },
 });
 
-registerIBuiltin({
+builtin({
   name: "string",
-  resolve: argTypes => {
-    if (argTypes.length !== 1) return null;
-    const a = argTypes[0];
-    const scalarText =
-      a.kind === "char" ||
-      a.kind === "string" ||
-      a.kind === "number" ||
-      a.kind === "boolean";
-    return {
-      outputTypes: [scalarText ? { kind: "string" } : { kind: "unknown" }],
-      apply: args => {
-        const v = args[0];
-        if (isRuntimeString(v) || isRuntimeStringArray(v)) return v;
-        if (isRuntimeChar(v)) {
-          const rows = v.shape ? v.shape[0] : 1;
-          if (rows <= 1) return RTV.string(v.value);
-          // Char matrix: one string per row (m x 1), pad spaces preserved.
-          const width = v.shape![1];
-          const out: string[] = [];
-          for (let r = 0; r < rows; r++) {
-            out.push(v.value.slice(r * width, (r + 1) * width));
-          }
-          return RTV.stringArray(out, [rows, 1]);
-        }
-        if (isRuntimeNumber(v)) return RTV.string(numStr(v));
-        if (isRuntimeLogical(v)) return RTV.string(v ? "true" : "false");
-        if (isRuntimeTensor(v)) {
-          // Elementwise conversion, same shape ([] -> 0x0 empty string array).
-          const rows = v.shape.length >= 2 ? v.shape[0] : 1;
-          const cols =
-            v.data.length === 0
-              ? (v.shape[1] ?? 0)
-              : v.data.length / (rows || 1);
-          const out: string[] = [];
-          for (let i = 0; i < v.data.length; i++) {
-            out.push(
-              v._isLogical ? (v.data[i] ? "true" : "false") : numStr(v.data[i])
-            );
-          }
-          return stringArrayValue(out, [rows, cols]);
-        }
-        if (isRuntimeCell(v)) {
-          const rows = v.shape.length >= 2 ? v.shape[0] : 1;
-          const cols = v.data.length / (rows || 1);
-          const out = v.data.map(el => {
-            const rv = ensureRuntimeValue(el);
-            if (isRuntimeChar(rv)) return rv.value;
-            if (isRuntimeString(rv)) return rv;
-            if (isRuntimeNumber(rv)) return numStr(rv);
-            if (isRuntimeLogical(rv)) return rv ? "true" : "false";
-            throw new RuntimeError(
-              "string: cell elements must be text or numbers"
-            );
-          });
-          return stringArrayValue(out, [rows, cols]);
-        }
-        return RTV.string(displayValue(v));
-      },
-    };
+  nargin: [0, 1],
+  apply: args => {
+    if (args.length === 0) return RTV.string("");
+    const v = args[0];
+    if (isRuntimeString(v) || isRuntimeStringArray(v)) return v;
+    if (isRuntimeChar(v)) {
+      const rows = v.shape ? v.shape[0] : 1;
+      if (rows <= 1) return RTV.string(v.value);
+      // Char matrix: one string per row (m x 1), pad spaces preserved.
+      const width = v.shape![1];
+      const out: string[] = [];
+      for (let r = 0; r < rows; r++) {
+        out.push(v.value.slice(r * width, (r + 1) * width));
+      }
+      return RTV.stringArray(out, [rows, 1]);
+    }
+    if (isRuntimeNumber(v)) return RTV.string(numStr(v));
+    if (isRuntimeLogical(v)) return RTV.string(v ? "true" : "false");
+    if (isRuntimeTensor(v)) {
+      // Elementwise conversion, same shape ([] -> 0x0 empty string array).
+      const rows = v.shape.length >= 2 ? v.shape[0] : 1;
+      const cols =
+        v.data.length === 0 ? (v.shape[1] ?? 0) : v.data.length / (rows || 1);
+      const out: string[] = [];
+      for (let i = 0; i < v.data.length; i++) {
+        out.push(
+          v._isLogical ? (v.data[i] ? "true" : "false") : numStr(v.data[i])
+        );
+      }
+      return stringArrayValue(out, [rows, cols]);
+    }
+    if (isRuntimeCell(v)) {
+      const rows = v.shape.length >= 2 ? v.shape[0] : 1;
+      const cols = v.data.length / (rows || 1);
+      const out = v.data.map(el => {
+        const rv = ensureRuntimeValue(el);
+        if (isRuntimeChar(rv)) return rv.value;
+        if (isRuntimeString(rv)) return rv;
+        if (isRuntimeNumber(rv)) return numStr(rv);
+        if (isRuntimeLogical(rv)) return rv ? "true" : "false";
+        throw new RuntimeError("string: cell elements must be text or numbers");
+      });
+      return stringArrayValue(out, [rows, cols]);
+    }
+    return RTV.string(displayValue(v));
   },
 });
 
-registerIBuiltin({
+builtin({
   name: "strings",
   help: {
     signatures: ["strings", "strings(n)", "strings(m,n)", "strings([m n])"],
     description:
       'Create a string array with every element set to "" (empty string).',
   },
-  resolve: argTypes => {
-    if (argTypes.some(t => t.kind !== "number" && t.kind !== "tensor"))
-      return null;
-    return {
-      outputTypes: [{ kind: "unknown" }],
-      apply: args => {
-        const dims: number[] = [];
-        for (const a of args) {
-          const rv = ensureRuntimeValue(a);
-          if (isRuntimeTensor(rv)) {
-            for (const d of rv.data) dims.push(Math.max(0, Math.round(d)));
-          } else {
-            dims.push(Math.max(0, Math.round(toNumber(rv))));
-          }
-        }
-        if (dims.length === 0) dims.push(1, 1);
-        if (dims.length === 1) dims.push(dims[0]);
-        const m = dims[0];
-        const n = dims.slice(1).reduce((a, b) => a * b, 1);
-        return stringArrayValue(new Array<string>(m * n).fill(""), [m, n]);
-      },
-    };
+  apply: args => {
+    const dims: number[] = [];
+    for (const rv of args) {
+      if (isRuntimeTensor(rv)) {
+        for (const d of rv.data) dims.push(Math.max(0, Math.round(d)));
+      } else if (isRuntimeNumber(rv) || isRuntimeLogical(rv)) {
+        dims.push(Math.max(0, Math.round(toNumber(rv))));
+      } else {
+        throw builtinError(
+          "MATLAB:class:MustBeNumeric",
+          "Array must be numeric or logical."
+        );
+      }
+    }
+    if (dims.length === 0) dims.push(1, 1);
+    if (dims.length === 1) dims.push(dims[0]);
+    const m = dims[0];
+    const n = dims.slice(1).reduce((a, b) => a * b, 1);
+    return stringArrayValue(new Array<string>(m * n).fill(""), [m, n]);
   },
 });
 
-registerIBuiltin({
+builtin({
   name: "newline",
   help: {
     signatures: ["newline"],
     description: "Newline character, char(10).",
   },
-  resolve: argTypes => {
-    if (argTypes.length !== 0) return null;
-    return {
-      outputTypes: [{ kind: "char" }],
-      apply: () => RTV.char("\n"),
-    };
-  },
+  nargin: 0,
+  apply: () => RTV.char("\n"),
 });
 
 // ── split / join (string arrays) ──────────────────────────────────────
 
-registerIBuiltin({
+builtin({
   name: "split",
   help: {
     signatures: ["split(str)", "split(str, delimiter)"],
@@ -1622,56 +1544,54 @@ registerIBuiltin({
       "Split text at whitespace (or the given delimiter(s)) into a string array. " +
       "A scalar input yields a column of parts.",
   },
-  resolve: argTypes => {
-    if (argTypes.length < 1 || argTypes.length > 2) return null;
-    const a = argTypes[0];
-    if (!isTextType(a) && a.kind !== "cell" && a.kind !== "unknown")
-      return null;
-    return {
-      outputTypes: [{ kind: "unknown" }],
-      apply: args => {
-        const delims = args.length >= 2 ? patternList(args[1]) : null;
-        const splitOne = (s: string): string[] => {
-          if (delims === null) {
-            const trimmed = s.trim();
-            return trimmed.length === 0 ? [""] : trimmed.split(/\s+/);
-          }
-          const escaped = delims
-            .map(d => d.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
-            .join("|");
-          return s.split(new RegExp(escaped));
-        };
-        const v = args[0];
-        const subjects: string[] = isRuntimeStringArray(v)
-          ? v.data.slice()
-          : isRuntimeCell(v)
-            ? v.data.map(e => toString(e))
-            : [toString(v)];
-        const partsPer = subjects.map(splitOne);
-        const nParts = partsPer[0].length;
-        if (partsPer.some(p => p.length !== nParts)) {
-          throw new RuntimeError(
-            "split: all elements must split into the same number of parts"
-          );
-        }
-        if (subjects.length === 1) {
-          return stringArrayValue(partsPer[0], [nParts, 1]);
-        }
-        // Vector input of m elements -> m x nParts (column-major storage).
-        const m = subjects.length;
-        const out: string[] = new Array(m * nParts);
-        for (let i = 0; i < m; i++) {
-          for (let j = 0; j < nParts; j++) {
-            out[j * m + i] = partsPer[i][j];
-          }
-        }
-        return stringArrayValue(out, [m, nParts]);
-      },
+  nargin: [1, 3],
+  nargout: 2,
+  mfile: true,
+  apply: (args, nargout) => {
+    if (!isTextOrCell(args[0])) throw mustBeTextError();
+    if (args.length > 2)
+      throw unsupportedFormError("split", "the dim argument");
+    if (nargout > 1) throw unsupportedFormError("split", "the matches output");
+    const delims = args.length >= 2 ? patternList(args[1]) : null;
+    const splitOne = (s: string): string[] => {
+      if (delims === null) {
+        const trimmed = s.trim();
+        return trimmed.length === 0 ? [""] : trimmed.split(/\s+/);
+      }
+      const escaped = delims
+        .map(d => d.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+        .join("|");
+      return s.split(new RegExp(escaped));
     };
+    const v = args[0];
+    const subjects: string[] = isRuntimeStringArray(v)
+      ? v.data.slice()
+      : isRuntimeCell(v)
+        ? v.data.map(e => toString(e))
+        : [toString(v)];
+    const partsPer = subjects.map(splitOne);
+    const nParts = partsPer[0].length;
+    if (partsPer.some(p => p.length !== nParts)) {
+      throw new RuntimeError(
+        "split: all elements must split into the same number of parts"
+      );
+    }
+    if (subjects.length === 1) {
+      return stringArrayValue(partsPer[0], [nParts, 1]);
+    }
+    // Vector input of m elements -> m x nParts (column-major storage).
+    const m = subjects.length;
+    const out: string[] = new Array(m * nParts);
+    for (let i = 0; i < m; i++) {
+      for (let j = 0; j < nParts; j++) {
+        out[j * m + i] = partsPer[i][j];
+      }
+    }
+    return stringArrayValue(out, [m, nParts]);
   },
 });
 
-registerIBuiltin({
+builtin({
   name: "join",
   help: {
     signatures: ["join(str)", "join(str, delimiter)"],
@@ -1679,44 +1599,39 @@ registerIBuiltin({
       "Combine the elements of a string array into single strings, " +
       "separated by a space (or the given delimiter).",
   },
-  resolve: argTypes => {
-    if (argTypes.length < 1 || argTypes.length > 2) return null;
-    const a = argTypes[0];
-    if (!isTextType(a) && a.kind !== "cell" && a.kind !== "unknown")
-      return null;
-    return {
-      outputTypes: [{ kind: "unknown" }],
-      apply: args => {
-        const delim = args.length >= 2 ? toString(args[1]) : " ";
-        const v = args[0];
-        if (isRuntimeString(v)) return v;
-        if (isRuntimeChar(v)) return RTV.string(v.value);
-        const elems: string[] = isRuntimeStringArray(v)
-          ? v.data
-          : isRuntimeCell(v)
-            ? v.data.map(e => toString(e))
-            : [toString(v)];
-        const shape: [number, number] = isRuntimeStringArray(v)
-          ? v.shape
-          : [1, elems.length];
-        const [m, n] = shape;
-        if (m === 1 || n === 1) {
-          return RTV.string(elems.join(delim));
-        }
-        // Matrix: join along dim 2 -> m x 1 column.
-        const out: string[] = [];
-        for (let r = 0; r < m; r++) {
-          const parts: string[] = [];
-          for (let c = 0; c < n; c++) parts.push(elems[c * m + r]);
-          out.push(parts.join(delim));
-        }
-        return stringArrayValue(out, [m, 1]);
-      },
-    };
+  nargin: [1, 3],
+  mfile: true,
+  apply: args => {
+    if (!isTextOrCell(args[0])) throw mustBeTextError();
+    if (args.length > 2) throw unsupportedFormError("join", "the dim argument");
+    const delim = args.length >= 2 ? toString(args[1]) : " ";
+    const v = args[0];
+    if (isRuntimeString(v)) return v;
+    if (isRuntimeChar(v)) return RTV.string(v.value);
+    const elems: string[] = isRuntimeStringArray(v)
+      ? v.data
+      : isRuntimeCell(v)
+        ? v.data.map(e => toString(e))
+        : [toString(v)];
+    const shape: [number, number] = isRuntimeStringArray(v)
+      ? v.shape
+      : [1, elems.length];
+    const [m, n] = shape;
+    if (m === 1 || n === 1) {
+      return RTV.string(elems.join(delim));
+    }
+    // Matrix: join along dim 2 -> m x 1 column.
+    const out: string[] = [];
+    for (let r = 0; r < m; r++) {
+      const parts: string[] = [];
+      for (let c = 0; c < n; c++) parts.push(elems[c * m + r]);
+      out.push(parts.join(delim));
+    }
+    return stringArrayValue(out, [m, 1]);
   },
 });
 
-registerIBuiltin({
+builtin({
   name: "cellstr",
   help: {
     signatures: ["cellstr(A)"],
@@ -1724,52 +1639,48 @@ registerIBuiltin({
       "Convert a string array, char array, or cell array of text to a " +
       "cell array of character vectors.",
   },
-  resolve: argTypes => {
-    if (argTypes.length !== 1) return null;
-    const a = argTypes[0];
-    if (!isTextType(a) && a.kind !== "cell" && a.kind !== "unknown")
-      return null;
-    return {
-      outputTypes: [{ kind: "cell" }],
-      apply: args => {
-        const v = args[0];
-        if (isRuntimeCell(v)) {
-          return RTV.cell(
-            v.data.map(e => RTV.char(toString(e))),
-            [...v.shape]
-          );
-        }
-        if (isRuntimeStringArray(v)) {
-          return RTV.cell(
-            v.data.map(s => RTV.char(s)),
-            [v.shape[0], v.shape[1]]
-          );
-        }
-        if (isRuntimeString(v)) return RTV.cell([RTV.char(v)], [1, 1]);
-        if (isRuntimeChar(v)) {
-          const rows = v.shape ? v.shape[0] : 1;
-          if (rows <= 1) {
-            // MATLAB deblanks each row when converting char to cellstr.
-            return RTV.cell([RTV.char(v.value.replace(/\s+$/, ""))], [1, 1]);
-          }
-          const width = v.shape![1];
-          const out: RuntimeValue[] = [];
-          for (let r = 0; r < rows; r++) {
-            out.push(
-              RTV.char(
-                v.value.slice(r * width, (r + 1) * width).replace(/\s+$/, "")
-              )
-            );
-          }
-          return RTV.cell(out, [rows, 1]);
-        }
-        throw new RuntimeError("cellstr: unsupported argument");
-      },
-    };
+  nargin: 1,
+  mfile: true,
+  apply: args => {
+    const v = args[0];
+    if (isRuntimeCell(v)) {
+      return RTV.cell(
+        v.data.map(e => RTV.char(toString(e))),
+        [...v.shape]
+      );
+    }
+    if (isRuntimeStringArray(v)) {
+      return RTV.cell(
+        v.data.map(s => RTV.char(s)),
+        [v.shape[0], v.shape[1]]
+      );
+    }
+    if (isRuntimeString(v)) return RTV.cell([RTV.char(v)], [1, 1]);
+    if (isRuntimeChar(v)) {
+      const rows = v.shape ? v.shape[0] : 1;
+      if (rows <= 1) {
+        // MATLAB deblanks each row when converting char to cellstr.
+        return RTV.cell([RTV.char(v.value.replace(/\s+$/, ""))], [1, 1]);
+      }
+      const width = v.shape![1];
+      const out: RuntimeValue[] = [];
+      for (let r = 0; r < rows; r++) {
+        out.push(
+          RTV.char(
+            v.value.slice(r * width, (r + 1) * width).replace(/\s+$/, "")
+          )
+        );
+      }
+      return RTV.cell(out, [rows, 1]);
+    }
+    throw builtinError(
+      "MATLAB:invalidConversion",
+      `Conversion to cellstr from ${className(v)} is not possible.`
+    );
   },
 });
 
-registerIBuiltin({
+builtin({
   name: "ismissing",
   help: {
     signatures: ["ismissing(A)"],
@@ -1777,165 +1688,143 @@ registerIBuiltin({
       "Logical array marking missing elements. numbl has no <missing> " +
       "value, so string inputs return all-false.",
   },
-  resolve: argTypes => {
-    if (argTypes.length !== 1) return null;
-    return {
-      outputTypes: [{ kind: "boolean" }],
-      apply: args => {
-        const v = args[0];
-        if (isRuntimeStringArray(v)) {
-          const t = RTV.tensor(allocFloat64Array(v.data.length), [
-            v.shape[0],
-            v.shape[1],
-          ]);
-          t._isLogical = true;
-          return t;
-        }
-        if (isRuntimeTensor(v)) {
-          const t = RTV.tensor(
-            allocFloat64Array(v.data.map(x => (isNaN(x) ? 1 : 0))),
-            [...v.shape]
-          );
-          t._isLogical = true;
-          return t;
-        }
-        if (isRuntimeNumber(v)) return RTV.logical(isNaN(v));
-        return RTV.logical(false);
-      },
-    };
+  nargin: [1, 2],
+  mfile: true,
+  apply: args => {
+    if (args.length > 1)
+      throw unsupportedFormError("ismissing", "the indicator argument");
+    const v = args[0];
+    if (isRuntimeStringArray(v)) {
+      const t = RTV.tensor(allocFloat64Array(v.data.length), [
+        v.shape[0],
+        v.shape[1],
+      ]);
+      t._isLogical = true;
+      return t;
+    }
+    if (isRuntimeTensor(v)) {
+      const t = RTV.tensor(
+        allocFloat64Array(v.data.map(x => (isNaN(x) ? 1 : 0))),
+        [...v.shape]
+      );
+      t._isLogical = true;
+      return t;
+    }
+    if (isRuntimeNumber(v)) return RTV.logical(isNaN(v));
+    return RTV.logical(false);
   },
 });
 
 // ── strcat ────────────────────────────────────────────────────────────
 
-registerIBuiltin({
+builtin({
   name: "strcat",
-  resolve: argTypes => {
-    if (argTypes.length < 1) return null;
-    // Fall back for any unknown/cell args
-    if (argTypes.some(t => t.kind === "unknown")) return null;
-    // Must have at least one text arg
-    if (!argTypes.some(t => isTextType(t))) return null;
-    // If any string arg, output is string; otherwise char
-    const hasString = argTypes.some(t => t.kind === "string");
-    const outType: JitType = hasString ? { kind: "string" } : { kind: "char" };
-    return {
-      outputTypes: [outType],
-      apply: args => {
-        const anyString = args.some(a => isRuntimeString(a));
-        if (anyString) {
-          return RTV.string(args.map(a => toString(a)).join(""));
-        }
-        const parts = args.map(a => toString(a).replace(/[ \t\v\n\r\f]+$/, ""));
-        return RTV.char(parts.join(""));
-      },
-    };
+  nargin: [1, Infinity],
+  mfile: true,
+  apply: args => {
+    if (args.some(a => isRuntimeCell(a) || isRuntimeStringArray(a)))
+      throw unsupportedFormError("strcat", "cell array or string array input");
+    if (!args.some(isText))
+      throw unsupportedFormError("strcat", "input without text arguments");
+    const anyString = args.some(a => isRuntimeString(a));
+    if (anyString) {
+      return RTV.string(args.map(a => toString(a)).join(""));
+    }
+    const parts = args.map(a => toString(a).replace(/[ \t\v\n\r\f]+$/, ""));
+    return RTV.char(parts.join(""));
   },
 });
 
 // ── sprintf ───────────────────────────────────────────────────────────
 
-registerIBuiltin({
+builtin({
   name: "sprintf",
-  resolve: argTypes => {
-    if (argTypes.length < 1) return null;
-    if (!isTextType(argTypes[0])) return null;
-    // Output type matches format arg type
-    const isChar = argTypes[0].kind === "char";
-    const outType: JitType = isChar ? { kind: "char" } : { kind: "string" };
-    return {
-      outputTypes: [outType],
-      apply: args => {
-        const fmt = toString(args[0]);
-        // A string-array argument supplies one text arg per element
-        // (the format cycles over them, like numeric arrays).
-        const rest = args
-          .slice(1)
-          .flatMap(a =>
-            isRuntimeStringArray(a) ? a.data.map(s => RTV.string(s)) : [a]
-          );
-        const result = sprintfFormat(fmt, rest);
-        return isChar ? RTV.char(result) : RTV.string(result);
-      },
-    };
+  nargin: [1, Infinity],
+  nargout: 2,
+  apply: (args, nargout) => {
+    const f = args[0];
+    if (!isText(f))
+      throw builtinError("MATLAB:badformat_mx", "Invalid format.");
+    const fmt = toString(f);
+    // A string-array argument supplies one text arg per element
+    // (the format cycles over them, like numeric arrays).
+    const rest = args
+      .slice(1)
+      .flatMap(a =>
+        isRuntimeStringArray(a) ? a.data.map(s => RTV.string(s)) : [a]
+      );
+    const result = sprintfFormat(fmt, rest);
+    const out = isRuntimeChar(f) ? RTV.char(result) : RTV.string(result);
+    // The second output (errmsg) is empty: formatting errors throw.
+    return nargout >= 2 ? [out, RTV.char("")] : out;
   },
 });
 
 // ── sscanf ────────────────────────────────────────────────────────────
 
-registerIBuiltin({
+builtin({
   name: "sscanf",
-  resolve: (argTypes, nargout) => {
-    if (argTypes.length < 2) return null;
-    if (!isTextType(argTypes[0]) || !isTextType(argTypes[1])) return null;
-    const outputTypes: JitType[] = [{ kind: "number" }];
-    if (nargout >= 2) outputTypes.push({ kind: "number" });
-    if (nargout >= 3) outputTypes.push({ kind: "char" }); // errmsg
-    if (nargout >= 4) outputTypes.push({ kind: "number" }); // nextindex
-    return {
-      outputTypes,
-      apply: (args, nout) => {
-        const str = toString(args[0]);
-        const fmt = toString(args[1]);
-        const maxCount = args.length >= 3 ? toNumber(args[2]) : Infinity;
-        const {
-          results,
-          consumed: strPos,
-          matchFailure,
-        } = scanFormat(str, fmt, maxCount);
+  nargin: [2, 3],
+  nargout: 4,
+  apply: (args, nout) => {
+    if (!isText(args[0]))
+      throw builtinError(
+        "MATLAB:badstringarg1_mx",
+        "First argument must be a text scalar."
+      );
+    if (!isText(args[1]))
+      throw builtinError("MATLAB:badformat_mx", "Invalid format.");
+    const str = toString(args[0]);
+    const fmt = toString(args[1]);
+    const maxCount = args.length >= 3 ? toNumber(args[2]) : Infinity;
+    const {
+      results,
+      consumed: strPos,
+      matchFailure,
+    } = scanFormat(str, fmt, maxCount);
 
-        const vals =
-          results.length === 1
-            ? RTV.num(results[0])
-            : RTV.tensor(allocFloat64Array(results), [results.length, 1]);
-        if (nout >= 2) {
-          const out: RuntimeValue[] = [vals, RTV.num(results.length)];
-          if (nout >= 3) {
-            // errmsg: empty on success, non-empty when scanning stopped on a
-            // matching failure (MATLAB semantics).
-            out.push(
-              RTV.char(matchFailure ? "Matching failure in format." : "")
-            );
-          }
-          if (nout >= 4) {
-            // nextindex: 1-based position of the next unscanned character.
-            out.push(RTV.num(strPos + 1));
-          }
-          return out;
-        }
-        return vals;
-      },
-    };
+    const vals =
+      results.length === 1
+        ? RTV.num(results[0])
+        : RTV.tensor(allocFloat64Array(results), [results.length, 1]);
+    if (nout >= 2) {
+      const out: RuntimeValue[] = [vals, RTV.num(results.length)];
+      if (nout >= 3) {
+        // errmsg: empty on success, non-empty when scanning stopped on a
+        // matching failure (MATLAB semantics).
+        out.push(RTV.char(matchFailure ? "Matching failure in format." : ""));
+      }
+      if (nout >= 4) {
+        // nextindex: 1-based position of the next unscanned character.
+        out.push(RTV.num(strPos + 1));
+      }
+      return out;
+    }
+    return vals;
   },
 });
 
 // ── strtok ────────────────────────────────────────────────────────────
 
-registerIBuiltin({
+builtin({
   name: "strtok",
-  resolve: (argTypes, nargout) => {
-    if (argTypes.length < 1 || argTypes.length > 2) return null;
-    if (!isTextType(argTypes[0])) return null;
-    if (argTypes.length === 2 && !isTextType(argTypes[1])) return null;
-    const outputTypes: JitType[] = [{ kind: "char" }];
-    if (nargout >= 2) outputTypes.push({ kind: "char" });
-    return {
-      outputTypes,
-      apply: (args, nout) => {
-        const s = toString(args[0]);
-        const delims = args.length >= 2 ? toString(args[1]) : " \t\n\r\f\v";
-        let start = 0;
-        while (start < s.length && delims.includes(s[start])) start++;
-        if (start >= s.length) {
-          if (nout <= 1) return RTV.char("");
-          return [RTV.char(""), RTV.char("")];
-        }
-        let end = start;
-        while (end < s.length && !delims.includes(s[end])) end++;
-        const token = s.substring(start, end);
-        if (nout <= 1) return RTV.char(token);
-        return [RTV.char(token), RTV.char(s.substring(end))];
-      },
-    };
+  nargin: [1, 2],
+  nargout: 2,
+  mfile: true,
+  apply: (args, nout) => {
+    const s = textArg("strtok", args[0]);
+    const delims =
+      args.length >= 2 ? textArg("strtok", args[1]) : " \t\n\r\f\v";
+    let start = 0;
+    while (start < s.length && delims.includes(s[start])) start++;
+    if (start >= s.length) {
+      if (nout <= 1) return RTV.char("");
+      return [RTV.char(""), RTV.char("")];
+    }
+    let end = start;
+    while (end < s.length && !delims.includes(s[end])) end++;
+    const token = s.substring(start, end);
+    if (nout <= 1) return RTV.char(token);
+    return [RTV.char(token), RTV.char(s.substring(end))];
   },
 });

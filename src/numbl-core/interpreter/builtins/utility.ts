@@ -16,7 +16,8 @@ import {
   isRuntimeStringArray,
 } from "../../runtime/types.js";
 import type { RuntimeValue, RuntimeTensor } from "../../runtime/types.js";
-import { defineBuiltin } from "./types.js";
+import { builtin } from "./builtin.js";
+import { builtinError } from "./args.js";
 import { RuntimeError } from "../../runtime/error.js";
 import { isEnumInstance, enumScalarEquals } from "../../runtime/runtimeEnum.js";
 import { sprintfFormat } from "../../helpers/string.js";
@@ -123,120 +124,90 @@ function tensorsEqual(a: RuntimeTensor, b: RuntimeTensor): boolean {
   return true;
 }
 
-defineBuiltin({
+builtin({
   name: "isequal",
-  cases: [
-    {
-      match: argTypes => {
-        if (argTypes.length < 2) return null;
-        return [{ kind: "boolean" }];
-      },
-      apply: args => {
-        for (let i = 1; i < args.length; i++) {
-          if (!valuesEqualSimple(args[0], args[i])) return false;
-        }
-        return true;
-      },
-    },
-  ],
+  nargin: [2, Infinity],
+  apply: args => {
+    for (let i = 1; i < args.length; i++) {
+      if (!valuesEqualSimple(args[0], args[i])) return false;
+    }
+    return true;
+  },
 });
 
 // ── assert ───────────────────────────────────────────────────────────────
 
-defineBuiltin({
+builtin({
   name: "assert",
-  cases: [
-    {
-      match: argTypes => {
-        if (argTypes.length < 1) return null;
-        return [];
-      },
-      apply: args => {
-        const v = args[0];
-        let pass = false;
-        if (typeof v === "boolean") pass = v;
-        else if (typeof v === "number") pass = v !== 0 && !isNaN(v);
-        else if (isRuntimeLogical(v)) pass = v;
-        else if (isRuntimeTensor(v)) {
-          pass = v.data.length > 0;
-          for (let i = 0; i < v.data.length; i++) {
-            if (v.data[i] === 0 || isNaN(v.data[i])) {
-              pass = false;
-              break;
-            }
-          }
+  nargin: [1, Infinity],
+  nargout: 0,
+  apply: args => {
+    const v = args[0];
+    let pass = false;
+    if (typeof v === "boolean") pass = v;
+    else if (typeof v === "number") pass = v !== 0 && !isNaN(v);
+    else if (isRuntimeLogical(v)) pass = v;
+    else if (isRuntimeTensor(v)) {
+      pass = v.data.length > 0;
+      for (let i = 0; i < v.data.length; i++) {
+        if (v.data[i] === 0 || isNaN(v.data[i])) {
+          pass = false;
+          break;
         }
-        if (!pass) {
-          const msg =
-            args.length > 1
-              ? (textValue(args[1]) ?? String(args[1]))
-              : "Assertion failed";
-          throw new Error(msg);
-        }
-        return undefined as unknown as RuntimeValue;
-      },
-    },
-  ],
+      }
+    }
+    if (!pass) {
+      const msg =
+        args.length > 1
+          ? (textValue(args[1]) ?? String(args[1]))
+          : "Assertion failed";
+      throw new Error(msg);
+    }
+  },
 });
 
 // ── error ────────────────────────────────────────────────────────────────
 
-defineBuiltin({
+builtin({
   name: "error",
-  cases: [
-    {
-      match: argTypes => {
-        if (argTypes.length === 0) return null;
-        return []; // throws; never returns
-      },
-      apply: args => {
-        const first = textValue(args[0]) ?? String(args[0]);
-        // error(id, fmt, ...) form: first arg is a valid MATLAB error identifier
-        // Identifiers are component:mnemonic with only word chars and colons (e.g. 'MATLAB:badInput')
-        if (args.length >= 2 && /^[A-Za-z]\w*(:[A-Za-z]\w*)+$/.test(first)) {
-          const msg =
-            args.length === 2
-              ? (textValue(args[1]) ?? String(args[1]))
-              : sprintfFormat(
-                  textValue(args[1]) ?? String(args[1]),
-                  args.slice(2)
-                );
-          const err = new RuntimeError(msg);
-          err.identifier = first;
-          throw err;
-        }
-        const msg =
-          args.length === 1 ? first : sprintfFormat(first, args.slice(1));
-        throw new RuntimeError(msg);
-      },
-    },
-  ],
+  nargin: [1, Infinity],
+  nargout: 0,
+  apply: args => {
+    const first = textValue(args[0]) ?? String(args[0]);
+    // error(id, fmt, ...) form: first arg is a valid MATLAB error identifier
+    // Identifiers are component:mnemonic with only word chars and colons (e.g. 'MATLAB:badInput')
+    if (args.length >= 2 && /^[A-Za-z]\w*(:[A-Za-z]\w*)+$/.test(first)) {
+      const msg =
+        args.length === 2
+          ? (textValue(args[1]) ?? String(args[1]))
+          : sprintfFormat(textValue(args[1]) ?? String(args[1]), args.slice(2));
+      const err = new RuntimeError(msg);
+      err.identifier = first;
+      throw err;
+    }
+    const msg = args.length === 1 ? first : sprintfFormat(first, args.slice(1));
+    throw new RuntimeError(msg);
+  },
 });
 
 // ── rethrow ─────────────────────────────────────────────────────────────
 
-defineBuiltin({
+builtin({
   name: "rethrow",
-  cases: [
-    {
-      match: argTypes => {
-        if (argTypes.length !== 1) return null;
-        return [{ kind: "number" }]; // never returns
-      },
-      apply: args => {
-        const me = args[0];
-        if (isRuntimeStruct(me)) {
-          const msgVal = me.fields.get("message");
-          const idVal = me.fields.get("identifier");
-          const msg = msgVal ? (textValue(msgVal) ?? String(msgVal)) : "";
-          const err = new RuntimeError(msg);
-          if (idVal) err.identifier = textValue(idVal) ?? "";
-          throw err;
-        }
-        throw new RuntimeError(String(me));
-      },
-    },
-  ],
+  nargin: 1,
+  nargout: 0,
+  apply: args => {
+    const me = args[0];
+    if (isRuntimeStruct(me)) {
+      const msgVal = me.fields.get("message");
+      const idVal = me.fields.get("identifier");
+      const msg = msgVal ? (textValue(msgVal) ?? String(msgVal)) : "";
+      const err = new RuntimeError(msg);
+      if (idVal) err.identifier = textValue(idVal) ?? "";
+      throw err;
+    }
+    throw new RuntimeError(String(me));
+  },
 });
 
 // ── MException ──────────────────────────────────────────────────────────
@@ -254,7 +225,7 @@ function makeMException(identifier: string, message: string): RuntimeValue {
   );
 }
 
-defineBuiltin({
+builtin({
   name: "MException",
   help: {
     signatures: [
@@ -264,24 +235,23 @@ defineBuiltin({
     description:
       "Construct an exception object with an error identifier and message. Extra arguments format the message with sprintf-style conversion specifiers. In numbl the result is a struct with fields identifier, message, cause, and stack.",
   },
-  cases: [
-    {
-      match: argTypes => {
-        if (argTypes.length < 2) return null;
-        const k0 = argTypes[0].kind;
-        const k1 = argTypes[1].kind;
-        if (k0 !== "string" && k0 !== "char") return null;
-        if (k1 !== "string" && k1 !== "char") return null;
-        return [{ kind: "struct", fields: {} }];
-      },
-      apply: args => {
-        const errID = textValue(args[0]) ?? String(args[0]);
-        const fmt = textValue(args[1]) ?? String(args[1]);
-        const msg = args.length === 2 ? fmt : sprintfFormat(fmt, args.slice(2));
-        return makeMException(errID, msg);
-      },
-    },
-  ],
+  nargin: [2, Infinity],
+  apply: args => {
+    const errID = textValue(args[0]);
+    if (errID === null)
+      throw builtinError(
+        "MATLAB:dispatcher:noMatchingConstructor",
+        "No constructor 'MException' with matching signature found."
+      );
+    const fmt = textValue(args[1]);
+    if (fmt === null)
+      throw builtinError(
+        "MATLAB:MException:MessageMustBeChar",
+        "MESSAGE input must be a character vector or string scalar."
+      );
+    const msg = args.length === 2 ? fmt : sprintfFormat(fmt, args.slice(2));
+    return makeMException(errID, msg);
+  },
 });
 
 // ── throw / throwAsCaller ────────────────────────────────────────────────
@@ -298,90 +268,71 @@ function throwException(me: RuntimeValue): never {
   throw new RuntimeError(String(me));
 }
 
-defineBuiltin({
+builtin({
   name: "throw",
   help: {
     signatures: ["throw(ME)"],
     description:
       "Throw an exception. ME is an MException-shaped struct with identifier and message fields.",
   },
-  cases: [
-    {
-      match: argTypes => {
-        if (argTypes.length !== 1) return null;
-        return []; // never returns
-      },
-      apply: args => throwException(args[0]),
-    },
-  ],
+  nargin: 1,
+  nargout: 0,
+  apply: args => throwException(args[0]),
 });
 
-defineBuiltin({
+builtin({
   name: "throwAsCaller",
   help: {
     signatures: ["throwAsCaller(ME)"],
     description:
       "Throw an exception as if from the calling function. In numbl this is equivalent to throw(ME) — the throw site is not hidden from the stack.",
   },
-  cases: [
-    {
-      match: argTypes => {
-        if (argTypes.length !== 1) return null;
-        return []; // never returns
-      },
-      apply: args => throwException(args[0]),
-    },
-  ],
+  nargin: 1,
+  nargout: 0,
+  apply: args => throwException(args[0]),
 });
 
 // ── getReport ────────────────────────────────────────────────────────────
 
-defineBuiltin({
+builtin({
   name: "getReport",
   help: {
     signatures: ["S = getReport(ME)", "S = getReport(ME, TYPE)"],
     description:
       "Return a formatted error report for an MException-shaped struct as a char string. TYPE is 'basic' or 'extended' (default 'extended'). The 'extended' form appends stack frames if present.",
   },
-  cases: [
-    {
-      match: argTypes => {
-        if (argTypes.length < 1 || argTypes.length > 4) return null;
-        return [{ kind: "char" }];
-      },
-      apply: args => {
-        const me = args[0];
-        if (!isRuntimeStruct(me)) {
-          return RTV.char(String(me));
-        }
-        const msgVal = me.fields.get("message");
-        const message = msgVal ? (textValue(msgVal) ?? String(msgVal)) : "";
-        let type = "extended";
-        if (args.length >= 2) {
-          const t = textValue(args[1]);
-          if (t === "basic" || t === "extended") type = t;
-        }
-        if (type === "basic") return RTV.char(message);
-        // Extended: append stack frames if present.
-        const stackVal = me.fields.get("stack");
-        const lines: string[] = [message];
-        const appendFrame = (frame: RuntimeValue) => {
-          if (!isRuntimeStruct(frame)) return;
-          const nameVal = frame.fields.get("name");
-          const lineVal = frame.fields.get("line");
-          const name = nameVal ? (textValue(nameVal) ?? "") : "";
-          const lineNum = typeof lineVal === "number" ? lineVal : 0;
-          if (name) lines.push(`Error in ${name} (line ${lineNum})`);
-        };
-        if (stackVal) {
-          if (isRuntimeStructArray(stackVal)) {
-            for (const el of stackVal.elements) appendFrame(el);
-          } else if (isRuntimeStruct(stackVal)) {
-            appendFrame(stackVal);
-          }
-        }
-        return RTV.char(lines.join("\n"));
-      },
-    },
-  ],
+  nargin: [1, 4],
+  apply: args => {
+    const me = args[0];
+    if (!isRuntimeStruct(me)) {
+      return RTV.char(String(me));
+    }
+    const msgVal = me.fields.get("message");
+    const message = msgVal ? (textValue(msgVal) ?? String(msgVal)) : "";
+    let type = "extended";
+    if (args.length >= 2) {
+      const t = textValue(args[1]);
+      if (t === "basic" || t === "extended") type = t;
+    }
+    if (type === "basic") return RTV.char(message);
+    // Extended: append stack frames if present.
+    const stackVal = me.fields.get("stack");
+    const lines: string[] = [message];
+    const appendFrame = (frame: RuntimeValue) => {
+      if (!isRuntimeStruct(frame)) return;
+      const nameVal = frame.fields.get("name");
+      const lineVal = frame.fields.get("line");
+      const name = nameVal ? (textValue(nameVal) ?? "") : "";
+      const lineNum = typeof lineVal === "number" ? lineVal : 0;
+      if (name) lines.push(`Error in ${name} (line ${lineNum})`);
+    };
+    if (stackVal) {
+      if (isRuntimeStructArray(stackVal)) {
+        for (const el of stackVal.elements) appendFrame(el);
+      } else if (isRuntimeStruct(stackVal)) {
+        appendFrame(stackVal);
+      }
+    }
+    return RTV.char(lines.join("\n"));
+  },
 });

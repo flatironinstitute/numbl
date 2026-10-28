@@ -13,8 +13,8 @@ import type { RuntimeValue } from "../../runtime/types.js";
 import { RTV, RuntimeError } from "../../runtime/index.js";
 import { toString } from "../../runtime/convert.js";
 import { toNumber } from "../../runtime/convert.js";
-import type { JitType } from "../../jitTypes.js";
-import { registerIBuiltin } from "./types.js";
+import { builtin } from "./builtin.js";
+import { unsupportedFormError } from "./text-args.js";
 import { parseMFile, type Stmt, type Expr } from "../../parser/index.js";
 import { getIBuiltin } from "./types.js";
 import { allocFloat64Array } from "../../runtime/alloc.js";
@@ -38,71 +38,68 @@ const BUILTIN_CONSTANTS = new Set([
 
 // ── strsplit ────────────────────────────────────────────────────────────
 
-registerIBuiltin({
+builtin({
   name: "strsplit",
-  resolve: argTypes => {
-    if (argTypes.length < 1 || argTypes.length > 2) return null;
-    return {
-      outputTypes: [{ kind: "unknown" }],
-      apply: args => {
-        const s = toString(args[0]);
-        let parts: string[];
-        if (args.length < 2) {
-          const trimmed = s.trim();
-          parts = trimmed.length === 0 ? [""] : trimmed.split(/[ \f\n\r\t\v]+/);
-        } else {
-          let delims: string[];
-          if (isRuntimeCell(args[1])) {
-            delims = args[1].data.map(d => toString(d));
-          } else if (isRuntimeStringArray(args[1])) {
-            delims = args[1].data.slice();
-          } else {
-            delims = [toString(args[1])];
-          }
-          const escaped = delims
-            .map(d => d.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
-            .join("|");
-          parts = s.split(new RegExp("(?:" + escaped + ")+"));
-        }
-        // MATLAB: string input yields a string array; char input a cellstr
-        // (cell of CHAR vectors, so downstream [a '/' b] concat stays char).
-        if (isRuntimeString(args[0]) || isRuntimeStringArray(args[0])) {
-          return stringArrayValue(parts, [1, parts.length]);
-        }
-        return RTV.cell(
-          parts.map(p => RTV.char(p)),
-          [1, parts.length]
-        );
-      },
-    };
+  nargin: [1, Infinity],
+  nargout: 2,
+  mfile: true,
+  apply: (args, nargout) => {
+    if (nargout > 1)
+      throw unsupportedFormError("strsplit", "the matches output");
+    if (args.length > 2)
+      throw unsupportedFormError("strsplit", "name-value options");
+    const s = toString(args[0]);
+    let parts: string[];
+    if (args.length < 2) {
+      const trimmed = s.trim();
+      parts = trimmed.length === 0 ? [""] : trimmed.split(/[ \f\n\r\t\v]+/);
+    } else {
+      let delims: string[];
+      if (isRuntimeCell(args[1])) {
+        delims = args[1].data.map(d => toString(d));
+      } else if (isRuntimeStringArray(args[1])) {
+        delims = args[1].data.slice();
+      } else {
+        delims = [toString(args[1])];
+      }
+      const escaped = delims
+        .map(d => d.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+        .join("|");
+      parts = s.split(new RegExp("(?:" + escaped + ")+"));
+    }
+    // MATLAB: string input yields a string array; char input a cellstr
+    // (cell of CHAR vectors, so downstream [a '/' b] concat stays char).
+    if (isRuntimeString(args[0]) || isRuntimeStringArray(args[0])) {
+      return stringArrayValue(parts, [1, parts.length]);
+    }
+    return RTV.cell(
+      parts.map(p => RTV.char(p)),
+      [1, parts.length]
+    );
   },
 });
 
 // ── strjoin ─────────────────────────────────────────────────────────────
 
-registerIBuiltin({
+builtin({
   name: "strjoin",
-  resolve: argTypes => {
-    if (argTypes.length < 1 || argTypes.length > 2) return null;
-    return {
-      outputTypes: [{ kind: "string" }],
-      apply: args => {
-        let elements: string[];
-        if (isRuntimeCell(args[0])) {
-          elements = args[0].data.map(v => toString(v));
-        } else if (isRuntimeStringArray(args[0])) {
-          elements = args[0].data.slice();
-        } else if (isRuntimeString(args[0])) {
-          elements = [args[0]];
-        } else {
-          throw new RuntimeError(
-            "strjoin: first argument must be a cell array or string array"
-          );
-        }
-        const delim = args.length >= 2 ? toString(args[1]) : " ";
-        return RTV.string(elements.join(delim));
-      },
-    };
+  nargin: [1, 2],
+  mfile: true,
+  apply: args => {
+    let elements: string[];
+    if (isRuntimeCell(args[0])) {
+      elements = args[0].data.map(v => toString(v));
+    } else if (isRuntimeStringArray(args[0])) {
+      elements = args[0].data.slice();
+    } else if (isRuntimeString(args[0])) {
+      elements = [args[0]];
+    } else {
+      throw new RuntimeError(
+        "strjoin: first argument must be a cell array or string array"
+      );
+    }
+    const delim = args.length >= 2 ? toString(args[1]) : " ";
+    return RTV.string(elements.join(delim));
   },
 });
 
@@ -110,12 +107,9 @@ registerIBuiltin({
 
 function regexpImpl(
   caseSensitive: boolean,
-  name: string,
   args: RuntimeValue[],
   nargout: number
 ): RuntimeValue | RuntimeValue[] {
-  if (args.length < 2)
-    throw new RuntimeError(`${name} requires at least 2 arguments`);
   const str = toString(args[0]);
   const pat = toString(args[1]);
 
@@ -128,7 +122,15 @@ function regexpImpl(
   }
   if (outModes.length === 0 && nargout <= 1) outModes.push("start");
   if (outModes.length === 0) {
-    outModes.push("start", "end", "tokenextents", "match", "tokens", "names");
+    outModes.push(
+      "start",
+      "end",
+      "tokenextents",
+      "match",
+      "tokens",
+      "names",
+      "split"
+    );
   }
 
   // MATLAB's `.` matches newline by default (the 'dotall' option), unlike
@@ -246,32 +248,18 @@ function regexpImpl(
   return outModes.map(m => buildOutput(m)).slice(0, nargout);
 }
 
-registerIBuiltin({
+builtin({
   name: "regexp",
-  resolve: (argTypes, nargout) => {
-    if (argTypes.length < 2) return null;
-    const outTypes: JitType[] = [];
-    for (let i = 0; i < Math.max(nargout, 1); i++)
-      outTypes.push({ kind: "unknown" });
-    return {
-      outputTypes: outTypes,
-      apply: (args, nargout) => regexpImpl(true, "regexp", args, nargout),
-    };
-  },
+  nargin: [2, Infinity],
+  nargout: 7,
+  apply: (args, nargout) => regexpImpl(true, args, nargout),
 });
 
-registerIBuiltin({
+builtin({
   name: "regexpi",
-  resolve: (argTypes, nargout) => {
-    if (argTypes.length < 2) return null;
-    const outTypes: JitType[] = [];
-    for (let i = 0; i < Math.max(nargout, 1); i++)
-      outTypes.push({ kind: "unknown" });
-    return {
-      outputTypes: outTypes,
-      apply: (args, nargout) => regexpImpl(false, "regexpi", args, nargout),
-    };
-  },
+  nargin: [2, Infinity],
+  nargout: 7,
+  apply: (args, nargout) => regexpImpl(false, args, nargout),
 });
 
 // ── symvar ──────────────────────────────────────────────────────────────
@@ -337,52 +325,48 @@ function walkStmt(s: Stmt, found: Set<string>): void {
   }
 }
 
-registerIBuiltin({
+builtin({
   name: "symvar",
-  resolve: argTypes => {
-    if (argTypes.length < 1 || argTypes.length > 2) return null;
-    return {
-      outputTypes: [{ kind: "unknown" }],
-      apply: args => {
-        const expr = toString(args[0]);
-        let ast;
-        try {
-          ast = parseMFile(`__symvar_out__ = ${expr};`, "__symvar__.m");
-        } catch {
-          return RTV.cell([], [1, 0]);
-        }
-        const found = new Set<string>();
-        for (const stmt of ast.body) walkStmt(stmt, found);
-        found.delete("__symvar_out__");
-        for (const name of found) {
-          if (BUILTIN_CONSTANTS.has(name) || getIBuiltin(name)) {
-            found.delete(name);
-          }
-        }
-        const sorted = [...found].sort((a, b) => {
-          const aUpper = a[0] >= "A" && a[0] <= "Z";
-          const bUpper = b[0] >= "A" && b[0] <= "Z";
-          if (aUpper && !bUpper) return -1;
-          if (!aUpper && bUpper) return 1;
-          return a < b ? -1 : a > b ? 1 : 0;
-        });
-        let result = sorted;
-        if (args.length === 2) {
-          const n = Math.round(toNumber(args[1]));
-          const byDist = [...sorted].sort((a, b) => {
-            const distA = Math.abs(a.charCodeAt(0) - "x".charCodeAt(0));
-            const distB = Math.abs(b.charCodeAt(0) - "x".charCodeAt(0));
-            if (distA !== distB) return distA - distB;
-            return a < b ? -1 : a > b ? 1 : 0;
-          });
-          const selected = new Set(byDist.slice(0, n));
-          result = sorted.filter(v => selected.has(v));
-        }
-        return RTV.cell(
-          result.map(v => RTV.char(v)),
-          [1, result.length]
-        );
-      },
-    };
+  nargin: [1, 2],
+  mfile: true,
+  apply: args => {
+    const expr = toString(args[0]);
+    let ast;
+    try {
+      ast = parseMFile(`__symvar_out__ = ${expr};`, "__symvar__.m");
+    } catch {
+      return RTV.cell([], [1, 0]);
+    }
+    const found = new Set<string>();
+    for (const stmt of ast.body) walkStmt(stmt, found);
+    found.delete("__symvar_out__");
+    for (const name of found) {
+      if (BUILTIN_CONSTANTS.has(name) || getIBuiltin(name)) {
+        found.delete(name);
+      }
+    }
+    const sorted = [...found].sort((a, b) => {
+      const aUpper = a[0] >= "A" && a[0] <= "Z";
+      const bUpper = b[0] >= "A" && b[0] <= "Z";
+      if (aUpper && !bUpper) return -1;
+      if (!aUpper && bUpper) return 1;
+      return a < b ? -1 : a > b ? 1 : 0;
+    });
+    let result = sorted;
+    if (args.length === 2) {
+      const n = Math.round(toNumber(args[1]));
+      const byDist = [...sorted].sort((a, b) => {
+        const distA = Math.abs(a.charCodeAt(0) - "x".charCodeAt(0));
+        const distB = Math.abs(b.charCodeAt(0) - "x".charCodeAt(0));
+        if (distA !== distB) return distA - distB;
+        return a < b ? -1 : a > b ? 1 : 0;
+      });
+      const selected = new Set(byDist.slice(0, n));
+      result = sorted.filter(v => selected.has(v));
+    }
+    return RTV.cell(
+      result.map(v => RTV.char(v)),
+      [1, result.length]
+    );
   },
 });
