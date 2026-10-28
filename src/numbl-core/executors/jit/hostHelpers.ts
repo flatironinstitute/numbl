@@ -28,6 +28,7 @@
 import type { Runtime } from "../../runtime/runtime.js";
 import type { RuntimeValue } from "../../runtime/types.js";
 import { dispatchPlotBuiltin } from "../../plotting/dispatch.js";
+import { RTV } from "../../runtime/constructors.js";
 import { rngRandom } from "../../helpers/prng.js";
 import { jitToNumbl } from "./valueAdapter.js";
 import { tensorOps } from "../../ops/dispatch.js";
@@ -137,4 +138,75 @@ export function buildHostHelpers(rt: Runtime): JitHostHelpers {
       }
     },
   };
+}
+
+/** Prefix of a plot record that compiled C writes to its output (see
+ *  `runtime/plot/plot_dispatch.h`). */
+const PLOT_RECORD_PREFIX = "\x1emtoc2:plot\t";
+
+/** Decode one argument of a C plot record. */
+function decodePlotArg(a: unknown): RuntimeValue {
+  if (a === null) return NaN;
+  if (typeof a === "number") return a;
+  const rec = a as { kind: string; data: unknown; dims?: number[] };
+  if (rec.kind === "text") return RTV.char(rec.data as string);
+  if (rec.kind === "tensor") {
+    const data = Float64Array.from(rec.data as (number | null)[], x =>
+      x === null ? NaN : x
+    );
+    return RTV.tensor(data, rec.dims ?? [1, data.length]);
+  }
+  throw new Error(`mtoc2 plot bridge: unknown argument kind '${rec.kind}'`);
+}
+
+/** The output sink for a compiled C call: passes program output to
+ *  `rt.output` and turns plot records into plot instructions. A record may
+ *  arrive in several chunks; it ends at a newline. Call `flush` after the C
+ *  call returns. */
+export function cOutputSink(rt: Runtime): {
+  write: (s: string) => void;
+  flush: () => void;
+} {
+  let pending: string | null = null;
+  const write = (s: string): void => {
+    while (s.length > 0) {
+      if (pending === null) {
+        const rs = s.indexOf("\x1e");
+        if (rs < 0) {
+          rt.output(s);
+          return;
+        }
+        if (rs > 0) rt.output(s.slice(0, rs));
+        pending = "";
+        s = s.slice(rs);
+      }
+      const nl = s.indexOf("\n");
+      if (nl < 0) {
+        pending += s;
+        return;
+      }
+      const line = pending + s.slice(0, nl);
+      pending = null;
+      s = s.slice(nl + 1);
+      if (!line.startsWith(PLOT_RECORD_PREFIX)) {
+        rt.output(line + "\n");
+        continue;
+      }
+      const rec = JSON.parse(line.slice(PLOT_RECORD_PREFIX.length)) as {
+        call: string;
+        args: unknown[];
+      };
+      dispatchPlotBuiltin(
+        rec.call,
+        rec.args.map(decodePlotArg),
+        rt.plotInstructions,
+        rt
+      );
+    }
+  };
+  const flush = (): void => {
+    if (pending !== null) rt.output(pending);
+    pending = null;
+  };
+  return { write, flush };
 }

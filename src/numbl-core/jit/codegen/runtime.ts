@@ -846,7 +846,10 @@ const REGISTRY: ReadonlyMap<string, RuntimeSnippet> = new Map<
   // per-builtin C surface.
   [
     "mtoc2_plot_dispatch",
-    loadSnippet("plot_dispatch.h", ["mtoc2_format_engine"]),
+    loadSnippet("plot_dispatch.h", [
+      "mtoc2_format_engine",
+      "mtoc2_host_output",
+    ]),
   ],
 ]);
 

@@ -32,6 +32,7 @@ import {
   type HostWriteBinding,
 } from "./valueAdapterC.js";
 import type { JitBackend } from "./backend.js";
+import { cOutputSink } from "./hostHelpers.js";
 
 // koffi ships no TS types for its declaration-string API.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -110,11 +111,12 @@ export const cBackend: JitBackend<CArtifact> = {
       }
       growBail.reset();
       let ret: unknown;
+      const sink = cOutputSink(interp.rt);
       try {
-        ret = art.hostWrite.run(
-          s => interp.rt.output(s),
-          () => art.compiled.fn(...inputs.args)
+        ret = art.hostWrite.run(sink.write, () =>
+          art.compiled.fn(...inputs.args)
         );
+        sink.flush();
       } catch (e) {
         // koffi rejected an argument before the call; the callee never
         // took ownership of the input buffers.

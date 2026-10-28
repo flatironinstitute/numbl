@@ -1,21 +1,13 @@
 /* mtoc2 runtime: plot dispatch — single helper for every plotting
  * builtin (`plot`, `surf`, `imagesc`, `bar`, `figure`, `hold`, …).
  *
- * Numbl handles plotting by accumulating an in-memory "instruction
- * stream" that a separate viewer renders; the CLI never writes plot
- * output to stdout. mtoc2 mirrors that data-shape on the wire: each
- * plotting call emits one line of JSON on stdout, prefixed by the
- * ASCII RS (`\x1e`) sentinel plus the literal tag `mtoc2:plot\t`.
- * A launcher / viewer process tees stdout, splits on the prefix,
- * and feeds the records into numbl's own plot module — no C
- * plotting code needed.
- *
- * Why RS as the sentinel: RS (0x1E, "record separator") is a C0
- * control character that practical numeric / text output never
- * contains, so the splitter can identify plot lines purely by
- * prefix without escaping user output. The cross-runner drops
- * these lines globally before the byte-for-byte stdout compare
- * (numbl produces no such lines, so the drop is a no-op there).
+ * Numbl plots by accumulating plot instructions in the runtime. Compiled
+ * C writes each plotting call as one line of JSON through the host
+ * output hook (`host_output.h`), prefixed by the ASCII RS (`\x1e`)
+ * sentinel plus the tag `mtoc2:plot\t`; the host (`cOutputSink` in
+ * executors/jit/hostHelpers.ts) turns each record into a plot
+ * instruction. RS never occurs in ordinary output, so records are found
+ * by prefix without escaping user output.
  *
  * The wire shape per call is:
  *
@@ -38,13 +30,16 @@
  * handle / Void / Unknown) happens at lowering — the dispatcher
  * itself never receives them.
  *
- * `fflush(stdout)` after every record makes plots stream live when
- * stdout is piped to a viewer; cost is one syscall per call and
- * negligible compared to user-level disp output.
+ * Records go through the host output hook (`host_output.h`); the host
+ * turns them into plot instructions (`cOutputSink` in
+ * executors/jit/hostHelpers.ts).
  */
 
-static void mtoc2__plot_emit(const char *s, long n) {
-  if (n > 0) fwrite(s, 1, (size_t)n, stdout);
+static void mtoc2__plot_emit(const char *s, long n) { mtoc2_stdout(s, n); }
+
+static void mtoc2__plot_emit_char(int c) {
+  char ch = (char)c;
+  mtoc2_stdout(&ch, 1);
 }
 
 static void mtoc2__plot_emit_cstr(const char *s) {
@@ -67,7 +62,7 @@ static void mtoc2__plot_emit_double(double x) {
 }
 
 static void mtoc2__plot_emit_json_string(const char *data, long len) {
-  fputc('"', stdout);
+  mtoc2__plot_emit_char('"');
   for (long i = 0; i < len; i++) {
     unsigned char c = (unsigned char)data[i];
     if (c == '"' || c == '\\') {
@@ -90,10 +85,10 @@ static void mtoc2__plot_emit_json_string(const char *data, long len) {
     } else {
       /* Bytes ≥ 0x20 (including high-bit UTF-8 continuation) pass
        * through verbatim; JSON allows raw UTF-8 in string content. */
-      fputc((int)c, stdout);
+      mtoc2__plot_emit_char((int)c);
     }
   }
-  fputc('"', stdout);
+  mtoc2__plot_emit_char('"');
 }
 
 static void mtoc2__plot_emit_arg(const mtoc2_fprintf_arg_t *a) {
@@ -101,13 +96,14 @@ static void mtoc2__plot_emit_arg(const mtoc2_fprintf_arg_t *a) {
     case MTOC2_FA_DOUBLE:
       mtoc2__plot_emit_double(a->u.d);
       return;
-    case MTOC2_FA_TEXT: {
+    case MTOC2_FA_TEXT:
+    case MTOC2_FA_CHAR: {
       mtoc2_text_view_t tv = a->u.t;
       long n = tv.len > 0 ? tv.len : 0;
       const char *data = tv.data ? tv.data : "";
       mtoc2__plot_emit_cstr("{\"kind\":\"text\",\"data\":");
       mtoc2__plot_emit_json_string(data, n);
-      fputc('}', stdout);
+      mtoc2__plot_emit_char('}');
       return;
     }
     case MTOC2_FA_TENSOR: {
@@ -115,7 +111,7 @@ static void mtoc2__plot_emit_arg(const mtoc2_fprintf_arg_t *a) {
       mtoc2__plot_emit_cstr("{\"kind\":\"tensor\",\"dims\":[");
       long total = 1;
       for (int k = 0; k < t->ndim; k++) {
-        if (k > 0) fputc(',', stdout);
+        if (k > 0) mtoc2__plot_emit_char(',');
         char buf[24];
         long n = (long)snprintf(buf, sizeof(buf), "%ld", (long)t->dims[k]);
         mtoc2__plot_emit(buf, n);
@@ -123,7 +119,7 @@ static void mtoc2__plot_emit_arg(const mtoc2_fprintf_arg_t *a) {
       }
       mtoc2__plot_emit_cstr("],\"data\":[");
       for (long i = 0; i < total; i++) {
-        if (i > 0) fputc(',', stdout);
+        if (i > 0) mtoc2__plot_emit(",", 1);
         mtoc2__plot_emit_double(t->real[i]);
       }
       mtoc2__plot_emit_cstr("]}");
@@ -141,9 +137,8 @@ static void mtoc2_plot_dispatch(const char *name, int nargs,
   mtoc2__plot_emit_json_string(name, (long)strlen(name));
   mtoc2__plot_emit_cstr(",\"args\":[");
   for (int i = 0; i < nargs; i++) {
-    if (i > 0) fputc(',', stdout);
+    if (i > 0) mtoc2__plot_emit(",", 1);
     mtoc2__plot_emit_arg(&args[i]);
   }
   mtoc2__plot_emit_cstr("]}\n");
-  fflush(stdout);
 }
