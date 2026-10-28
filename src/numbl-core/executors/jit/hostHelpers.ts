@@ -12,6 +12,8 @@
  *    so `colorbar('off')` / `pcolor(...)` / etc. produce the same
  *    plot-instruction stream as the interpreter would.
  *
+ *  - `cancel` — the cancel flag the emitted loops poll (`$cancel`).
+ *
  *  - `elemwise` — the interpreter's element-wise tensor kernels (native
  *    addon when loaded). The JS runtime snippets use them for large
  *    tensors, so --opt 0 and --opt 1 compute the same bits and large
@@ -114,6 +116,9 @@ export interface JitHostHelpers {
    *  `rand` draw from one shared, `rng(seed)`-controllable stream. */
   rand: () => number;
   elemwise: JitElemwiseHost;
+  /** The cancel flag emitted loops poll: the runtime's (a
+   *  SharedArrayBuffer view), or a private zero word when it has none. */
+  cancel: Int32Array;
   /** Set by the emitted module's factory: reads its current statement
    *  location (`$loc`), so a raise can be attributed to a line. */
   loc?: () => number;
@@ -124,6 +129,7 @@ export function buildHostHelpers(rt: Runtime): JitHostHelpers {
     write: (s: string) => rt.output(s),
     rand: () => rngRandom(),
     elemwise: elemwiseHost,
+    cancel: rt.cancelFlag ?? new Int32Array(1),
     plotDispatch: (name: string, args: unknown[]) => {
       const runtimeArgs: RuntimeValue[] = args.map(a => jitToNumbl(a));
       const handled = dispatchPlotBuiltin(

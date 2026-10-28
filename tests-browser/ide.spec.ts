@@ -101,10 +101,9 @@ test.describe("IDE", () => {
       "hello.m": "disp('after stop')\n",
     });
     await runButton(page).click();
-    // Output from a JIT-compiled script only arrives when it finishes, so
-    // just give the loop time to start.
+    // Output from the JIT-compiled script streams while it runs.
+    await expect(output(page)).toContainText("looping");
     await expect(stopButton(page)).toBeVisible();
-    await page.waitForTimeout(500);
     await stopButton(page).click();
     await expect(output(page)).toContainText("--- Execution stopped ---");
     await page.getByText("hello.m", { exact: true }).click();
@@ -112,22 +111,34 @@ test.describe("IDE", () => {
     await expect(output(page)).toContainText("after stop");
   });
 
-  test("cancels cooperatively in persistent mode", async ({ page }) => {
-    await openIde(page, {
-      "loop.m": "disp('looping')\nk = 0;\nwhile true\n  k = k + 1;\nend\n",
+  for (const jit of [true, false]) {
+    test(`cancels cooperatively in persistent mode (${jit ? "JIT" : "interpreter"})`, async ({
+      page,
+    }) => {
+      await openIde(page, {
+        "loop.m": "disp('looping')\nk = 0;\nwhile true\n  k = k + 1;\nend\n",
+      });
+      await page.getByText("1x", { exact: true }).click();
+      await expect(page.getByText("persist", { exact: true })).toBeVisible();
+      if (!jit) {
+        await page.getByText("jit", { exact: true }).click();
+        await expect(page.getByText("no jit", { exact: true })).toBeVisible();
+      }
+      await runButton(page).click();
+      // Both the interpreter and JIT-compiled loops poll the cancel flag.
+      await expect(output(page)).toContainText("looping");
+      await expect(stopButton(page)).toBeVisible();
+      await page.waitForTimeout(300);
+      await stopButton(page).click();
+      await expect(output(page)).toContainText("Cancelling execution");
+      await expect(runButton(page)).toBeVisible({ timeout: 5_000 });
+      // The worker survived: the next run in the same session works.
+      await runButton(page).click();
+      await expect(output(page)).toContainText("looping");
+      await stopButton(page).click();
+      await expect(runButton(page)).toBeVisible({ timeout: 5_000 });
     });
-    await page.getByText("1x", { exact: true }).click();
-    await expect(page.getByText("persist", { exact: true })).toBeVisible();
-    // Only the interpreter polls the cancel flag; JIT-compiled loops do not.
-    await page.getByText("jit", { exact: true }).click();
-    await expect(page.getByText("no jit", { exact: true })).toBeVisible();
-    await runButton(page).click();
-    await expect(stopButton(page)).toBeVisible();
-    await page.waitForTimeout(500);
-    await stopButton(page).click();
-    await expect(output(page)).toContainText("Cancelling execution");
-    await expect(runButton(page)).toBeVisible();
-  });
+  }
 
   test("REPL keeps variables between commands", async ({ page }) => {
     await openIde(page, { "main.m": "disp(1)\n" });

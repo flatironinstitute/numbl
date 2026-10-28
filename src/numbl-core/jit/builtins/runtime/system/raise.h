@@ -15,6 +15,15 @@
  *   JIT_RAISE_ERROR  a MATLAB runtime error. `message` is the interpreter's
  *                    exact wording; NULL means the JIT does not reproduce it,
  *                    and the interpreter re-runs the unit to raise it.
+ *   JIT_RAISE_CANCEL the host's cancel flag was set (the IDE's Stop). The
+ *                    host raises numbl's CancellationError.
+ *
+ * Cancel. `jit__cancel` points at the host's cancel flag (a
+ * SharedArrayBuffer word another thread sets, installed by the host through
+ * `jit_set_cancel`), or at a constant zero. Emitted code polls it at the top
+ * of every loop iteration (once per chunk of a strip-mined loop, see
+ * codegen/cancelPoll.ts) and at the entry of functions that call other
+ * specs (`JIT_POLL_CANCEL`): one relaxed load and a never-taken branch.
  *
  * Location. Emitted code stores the current source statement in `jit__loc`
  * (`file index << 32 | offset`) at the start of each statement, mirroring
@@ -44,6 +53,7 @@
 #define JIT_RAISE_NONE 0
 #define JIT_RAISE_BAIL 1
 #define JIT_RAISE_ERROR 2
+#define JIT_RAISE_CANCEL 3
 
 /* ── Tracked allocator ─────────────────────────────────────────────── */
 
@@ -189,6 +199,30 @@ static void jit_raise_bailf(const char *fmt, ...) {
   va_end(ap);
   jit_raise(JIT_RAISE_BAIL, "", buf);
 }
+
+/* ── Cancel ────────────────────────────────────────────────────────── */
+
+static int32_t jit__cancel_none = 0;
+static int32_t *jit__cancel = &jit__cancel_none;
+
+/* Install the host's cancel flag (NULL: none). Exported. */
+void jit_set_cancel(int32_t *flag) {
+  jit__cancel = flag ? flag : &jit__cancel_none;
+}
+
+static void jit_raise_cancel(void) __attribute__((noreturn, cold));
+static void jit_raise_cancel(void) {
+  jit_raise(JIT_RAISE_CANCEL, "", NULL);
+}
+
+/* Raise a cancel if the host's flag is set. A relaxed atomic load: the
+ * flag is written by another thread, and the load must not be hoisted out
+ * of the loop that polls it. */
+#define JIT_POLL_CANCEL()                                                   \
+  do {                                                                      \
+    if (__builtin_expect(__atomic_load_n(jit__cancel, __ATOMIC_RELAXED), 0)) \
+      jit_raise_cancel();                                                   \
+  } while (0)
 
 /* A MATLAB error with the interpreter's exact message and identifier. */
 static void jit_raise_error(const char *id, const char *msg)

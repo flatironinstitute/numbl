@@ -23,6 +23,7 @@ import {
   registerTensorStruct,
 } from "./typeAdapterC.js";
 import {
+  bindCancel,
   bindHostWrite,
   bindRaise,
   makeCMarshalCtx,
@@ -31,7 +32,7 @@ import {
   unmarshalTensorOutput,
   type HostWriteBinding,
 } from "./valueAdapterC.js";
-import type { JitBackend } from "./backend.js";
+import { outputIsReproducible, type JitBackend } from "./backend.js";
 import { cOutputSink } from "./hostHelpers.js";
 import { JitRaise } from "./raise.js";
 import { decodeLoc } from "../../jit/codegen/runtime.js";
@@ -49,9 +50,14 @@ interface CArtifact {
   readonly ctx: ReturnType<typeof makeCMarshalCtx>;
   readonly hostWrite: HostWriteBinding;
   readonly raise: ReturnType<typeof bindRaise>;
+  readonly cancel: ReturnType<typeof bindCancel>;
   readonly locFiles: ReadonlyArray<string>;
   readonly recursive: boolean;
+  readonly streamsOutput: boolean;
 }
+
+/** `.so`s with a call in progress (see `invoke`). */
+const runningLibs = new Set<string>();
 
 export const cBackend: JitBackend<CArtifact> = {
   lang: "c",
@@ -69,15 +75,22 @@ export const cBackend: JitBackend<CArtifact> = {
     const bridge = interp.nativeBridge;
     if (!bridge?.koffi) return null;
     const { workspace, lowerer } = getOrCreateSession(interp);
-    const { source, signature, cName, assignedFlags, locFiles, recursive } =
-      compileSpecC({
-        workspace,
-        lowerer,
-        funcDecl: req.funcDecl,
-        argTypes: req.argTypes,
-        nargout: req.nargout,
-        entrySynthetic: req.synthetic,
-      });
+    const {
+      source,
+      signature,
+      cName,
+      assignedFlags,
+      locFiles,
+      recursive,
+      activatedSnippets,
+    } = compileSpecC({
+      workspace,
+      lowerer,
+      funcDecl: req.funcDecl,
+      argTypes: req.argTypes,
+      nargout: req.nargout,
+      entrySynthetic: req.synthetic,
+    });
     registerTensorStruct(bridge.koffi as Koffi);
     const declaration = buildCDeclaration(signature);
     if (declaration === null) return null;
@@ -92,17 +105,28 @@ export const cBackend: JitBackend<CArtifact> = {
       ctx: makeCMarshalCtx(koffi, compiled.lib),
       hostWrite: bindHostWrite(koffi, compiled.lib),
       raise: bindRaise(compiled.lib),
+      cancel: bindCancel(compiled.lib, compiled.libPath),
       locFiles,
       recursive,
+      streamsOutput: outputIsReproducible(activatedSnippets),
     };
   },
 
   recursive: art => art.recursive,
 
+  streamsOutput: art => art.streamsOutput,
+
   invoke(art, args, interp) {
     const koffi = interp.nativeBridge?.koffi as Koffi;
     if (!koffi) return null;
     const { ctx, signature: sig } = art;
+    // A `.so`'s raise guard and allocator list are file-scope state, so it
+    // cannot be re-entered, as it could be from an output callback (output
+    // streams while the call runs). Bail instead.
+    const libPath = art.compiled.libPath;
+    if (runningLibs.has(libPath)) return null;
+    // Point the compiled cancel polls at this runtime's flag.
+    art.cancel.install(interp.rt.cancelFlag);
     const inputs = marshalInputs(ctx, art.paramTypes, args);
     if (inputs === null) return null;
     // Multi-output specs take one `T *_jit_o<i>` out-pointer per
@@ -118,6 +142,7 @@ export const cBackend: JitBackend<CArtifact> = {
       }
       let ret: unknown;
       const sink = cOutputSink(interp.rt);
+      runningLibs.add(libPath);
       try {
         ret = art.hostWrite.run(sink.write, () =>
           art.compiled.fn(...inputs.args)
@@ -128,6 +153,8 @@ export const cBackend: JitBackend<CArtifact> = {
         // took ownership of the input buffers.
         inputs.release();
         throw e;
+      } finally {
+        runningLibs.delete(libPath);
       }
       // A raise `longjmp`ed back to the host-entry guard, which freed the
       // call's allocations (the input buffers included) and returned a
@@ -135,7 +162,7 @@ export const cBackend: JitBackend<CArtifact> = {
       const st = art.raise.status();
       if (st !== null) {
         throw new JitRaise(
-          st.kind === 1 ? "bail" : "error",
+          st.kind === 1 ? "bail" : st.kind === 3 ? "cancel" : "error",
           st.id,
           st.msg,
           decodeLoc(st.loc, art.locFiles)

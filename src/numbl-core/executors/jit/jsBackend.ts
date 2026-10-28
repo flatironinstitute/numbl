@@ -15,7 +15,7 @@ import { jitTypeToCompilerType } from "./typeAdapter.js";
 import { numblToJit, jitToNumbl } from "./valueAdapter.js";
 import { getOrCreateSession } from "./session.js";
 import { buildHostHelpers, type JitHostHelpers } from "./hostHelpers.js";
-import type { JitBackend } from "./backend.js";
+import { outputIsReproducible, type JitBackend } from "./backend.js";
 import { JitRaise, isTaggedJsRaise } from "./raise.js";
 
 interface JsArtifact {
@@ -28,6 +28,7 @@ interface JsArtifact {
   readonly loc: () => number;
   readonly locFiles: ReadonlyArray<string>;
   readonly recursive: boolean;
+  readonly streamsOutput: boolean;
   readonly where: string;
 }
 
@@ -41,7 +42,14 @@ export const jsBackend: JitBackend<JsArtifact> = {
 
   compile(req, interp) {
     const { workspace, lowerer } = getOrCreateSession(interp);
-    const { source, cName, outputTypes, locFiles, recursive } = compileSpec({
+    const {
+      source,
+      cName,
+      outputTypes,
+      locFiles,
+      recursive,
+      activatedSnippets,
+    } = compileSpec({
       workspace,
       lowerer,
       funcDecl: req.funcDecl,
@@ -70,11 +78,14 @@ export const jsBackend: JitBackend<JsArtifact> = {
       loc: helpers.loc ?? (() => -1),
       locFiles,
       recursive,
+      streamsOutput: outputIsReproducible(activatedSnippets),
       where: req.where,
     };
   },
 
   recursive: art => art.recursive,
+
+  streamsOutput: art => art.streamsOutput,
 
   invoke(art, args) {
     const jsArgs = args.map((v, i) =>

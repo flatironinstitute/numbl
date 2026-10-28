@@ -100,6 +100,8 @@ export function makeTopLevelExecutor<A>(
       );
     },
 
+    streamsOutput: art => art !== null && backend.streamsOutput(art),
+
     run(art, d, interp) {
       if (art === null) return null;
       const scope = scopeOfStmts(d.c.stmts, d.c.currentFile);

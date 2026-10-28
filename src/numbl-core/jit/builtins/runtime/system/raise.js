@@ -3,7 +3,8 @@
 // each emitted module defines its own copy of the class). The host
 // (executors/jit/raise.ts) maps it: a bail re-runs the unit on the
 // interpreter; an error becomes numbl's RuntimeError, or, when `message`
-// is null, is left to the interpreter's re-run to word. Anything else
+// is null, is left to the interpreter's re-run to word; a cancel becomes
+// numbl's CancellationError. Anything else
 // thrown by emitted code is a JIT bug.
 
 export class JitRaise extends Error {
@@ -19,6 +20,12 @@ export class JitRaise extends Error {
 /** A JIT limitation: the interpreter re-runs the unit. */
 export function jit_raise_bail(why) {
   throw new JitRaise("bail", "", why);
+}
+
+/** The host's cancel flag was set (emitted loops poll `$cancel`): the host
+ *  raises numbl's CancellationError. */
+export function jit_raise_cancel() {
+  throw new JitRaise("cancel", "", null);
 }
 
 /** A MATLAB error with the interpreter's exact message and identifier. */

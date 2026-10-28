@@ -169,10 +169,12 @@ export class Registry {
     // bail or re-run we discard its output and plots and rewind the PRNG,
     // and the caller falls through to the next executor or the interpreter,
     // which re-runs the same code; committing here would duplicate them.
-    // A throw is the unit's error: what it produced before the error stays,
-    // as it would on the interpreter.
+    // A streaming attempt's output is emitted as it runs instead, and a
+    // discard makes the re-run skip it (`Runtime.beginOutputCapture`).
+    // A throw (an error or a cancel) is the unit's end: what it produced
+    // before stays, as it would on the interpreter.
     const rt = interp.rt;
-    rt.beginOutputCapture();
+    rt.beginOutputCapture(executor.streamsOutput?.(compiled) ?? false);
     const rng = snapshotRng();
     let result: RunResult;
     try {

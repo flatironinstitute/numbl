@@ -54,3 +54,15 @@ export function isRecursive(prog: IRProgram, entry: IRFunc): boolean {
   });
   return recursive;
 }
+
+/** Whether `fn`'s own body calls a spec (itself included). Recursion needs
+ *  such a call, so polling the cancel flag at the entry of these functions,
+ *  as well as in every loop, bounds the work between polls. */
+export function callsSpec(prog: IRProgram, fn: IRFunc): boolean {
+  let found = false;
+  visitCalls(prog, fn.body, () => {
+    found = true;
+    return false;
+  });
+  return found;
+}

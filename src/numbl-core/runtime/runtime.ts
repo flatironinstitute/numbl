@@ -107,10 +107,18 @@ import { isRuntimeChar, isRuntimeString, kstr } from "./types.js";
 import { allocFloat64Array } from "./alloc.js";
 import { valueShape } from "./utils.js";
 
-/** One `beginOutputCapture()` frame: the buffered output, plus the plot
+/** One `beginOutputCapture()` frame: where its output goes, plus the plot
  *  state to restore if the attempt is discarded. */
 interface CaptureFrame {
-  text: string[];
+  /** The buffer the attempt's output goes to: its own (a buffering frame),
+   *  an enclosing buffering frame's (a streaming frame nested in one), or
+   *  null (a streaming frame whose output is emitted as it is produced). */
+  into: string[] | null;
+  /** Whether `into` is this frame's own buffer. */
+  owns: boolean;
+  /** Where a discard rewinds to: `into`'s length at the start, or, when
+   *  `into` is null, the replay cursor (`OutputReplay.pos`). */
+  mark: number;
   plotLength: number;
   holdState: boolean;
   currentFigureHandle: number;
@@ -118,17 +126,31 @@ interface CaptureFrame {
   tiledLayoutState: Runtime["tiledLayoutState"];
 }
 
+/** Output emitted while streaming JIT attempts were active. When an
+ *  attempt is discarded, `pos` rewinds to where it began, and output up to
+ *  `emitted.length` is a replay: skipped while it matches `emitted`. */
+interface OutputReplay {
+  emitted: string;
+  pos: number;
+}
+
 // ── Runtime class ────────────────────────────────────────────────────
 
 export class Runtime {
   outputLines: string[] = [];
-  /** Stack of in-progress capture frames. While non-empty, `output()`
-   *  appends to the top frame's buffer instead of emitting, so a
-   *  speculative JIT attempt's side effects can be committed on success
-   *  or discarded on bail (preventing duplicated output when the
-   *  interpreter re-runs the same code). Plot instructions are pushed
+  /** Stack of in-progress capture frames, one per speculative JIT attempt,
+   *  so the attempt's side effects can be committed on success or discarded
+   *  on a bail (preventing duplicated output when the interpreter re-runs
+   *  the same code). A buffering frame holds its output until commit. A
+   *  streaming frame emits it at once; discarding it rewinds the replay
+   *  cursor instead (see `OutputReplay`). Plot instructions are pushed
    *  directly, so a frame records the plot state to roll back to. */
   private outputCaptureStack: CaptureFrame[] = [];
+  /** Streaming frames on the stack that emit straight to the sink. */
+  private streamingDepth = 0;
+  /** Emitted output a discarded streaming attempt may be replaying; null
+   *  when there is none and no streaming frame is active. */
+  private replay: OutputReplay | null = null;
   plotInstructions: PlotInstruction[] = [];
   variableValues: Record<string, RuntimeValue> = {};
   holdState = false;
@@ -164,8 +186,10 @@ export class Runtime {
     count: number;
   } | null = null;
 
-  // Cooperative cancellation
-  private cancelFlag: Int32Array | null = null;
+  /** Cooperative cancellation: word 0 of the host's `cancelSAB`, nonzero
+   *  once cancelled. The interpreter polls it between statements and calls
+   *  (`checkCancel`); JIT'd code polls it in loops (see executors.md). */
+  cancelFlag: Int32Array | null = null;
 
   // Line tracking
   public $line = 0;
@@ -494,21 +518,93 @@ export class Runtime {
 
   output(text: string): void {
     const depth = this.outputCaptureStack.length;
-    if (depth > 0) {
-      this.outputCaptureStack[depth - 1].text.push(text);
+    const into = depth > 0 ? this.outputCaptureStack[depth - 1].into : null;
+    if (into !== null) {
+      into.push(text);
       return;
     }
+    const r = this.replay;
+    if (r === null) {
+      this.emitOutput(text);
+      return;
+    }
+    if (r.pos === r.emitted.length) {
+      r.emitted += text;
+      r.pos = r.emitted.length;
+      this.emitOutput(text);
+      return;
+    }
+    // Replaying: skip what a discarded streaming attempt already emitted.
+    const done = r.emitted;
+    const n = Math.min(text.length, done.length - r.pos);
+    let i = 0;
+    while (i < n && text.charCodeAt(i) === done.charCodeAt(r.pos + i)) i++;
+    r.pos += i;
+    if (i === text.length) {
+      this.endReplayIfDone();
+      return;
+    }
+    if (r.pos < done.length) {
+      // The re-run's output differs from what the attempt emitted (it
+      // cannot be retracted): emit the rest and stop replaying.
+      if (typeof process !== "undefined" && process.env?.NUMBL_JIT_LOG) {
+        console.error(
+          `[jit-replay] re-run output diverged from streamed JIT output at offset ${r.pos}`
+        );
+      }
+    }
+    const rest = text.slice(i);
+    r.emitted = done + rest;
+    r.pos = r.emitted.length;
+    this.emitOutput(rest);
+  }
+
+  private emitOutput(text: string): void {
     this.outputLines.push(text);
     this.options.onOutput?.(text);
   }
 
-  /** Begin buffering output for a speculative execution attempt.
-   *  Pair with exactly one `commitOutputCapture()` or
-   *  `discardOutputCapture()`. */
-  beginOutputCapture(): void {
+  private endReplayIfDone(): void {
+    const r = this.replay;
+    if (r && this.streamingDepth === 0 && r.pos === r.emitted.length) {
+      this.replay = null;
+    }
+  }
+
+  /** Begin a frame for a speculative execution attempt. Pair with exactly
+   *  one `commitOutputCapture()` or `discardOutputCapture()`.
+   *
+   *  A buffering frame (the default) holds the attempt's output until
+   *  commit. A streaming frame (`streaming`) emits it as it is produced,
+   *  which is what lets output from a long JIT'd loop appear while it
+   *  runs. On discard, the interpreter re-runs the attempt from its start,
+   *  so the replay cursor rewinds to where the attempt began, and the
+   *  re-run's output is skipped while it matches what was already
+   *  emitted. That is exact when the re-run reproduces the attempt's output
+   *  up to the point where it was discarded; the caller streams only
+   *  attempts whose output does not depend on timing. */
+  beginOutputCapture(streaming = false): void {
     const t = this.tiledLayoutState;
+    const depth = this.outputCaptureStack.length;
+    const outer = depth > 0 ? this.outputCaptureStack[depth - 1].into : null;
+    let into: string[] | null;
+    let mark: number;
+    if (!streaming) {
+      into = [];
+      mark = 0;
+    } else if (outer !== null) {
+      into = outer;
+      mark = outer.length;
+    } else {
+      into = null;
+      this.replay ??= { emitted: "", pos: 0 };
+      mark = this.replay.pos;
+      this.streamingDepth++;
+    }
     this.outputCaptureStack.push({
-      text: [],
+      into,
+      owns: !streaming,
+      mark,
       plotLength: this.plotInstructions.length,
       holdState: this.holdState,
       currentFigureHandle: this.currentFigureHandle,
@@ -518,19 +614,35 @@ export class Runtime {
   }
 
   /** Emit the buffered output (to the parent capture frame if nested,
-   *  else to the real sink) — call when the attempt succeeded. */
+   *  else to the real sink) — call when the attempt succeeded (or threw).
+   *  A streaming frame's output is already out. */
   commitOutputCapture(): void {
     const frame = this.outputCaptureStack.pop();
     if (frame === undefined) return;
-    for (const text of frame.text) this.output(text);
+    if (frame.owns) {
+      for (const text of frame.into!) this.output(text);
+    } else if (frame.into === null) {
+      this.streamingDepth--;
+      this.endReplayIfDone();
+    }
   }
 
-  /** Drop the buffered output and roll back the plot instructions and
-   *  plot state the attempt produced — call when the attempt bailed, so
-   *  a subsequent re-run is the only thing that emits. */
+  /** Drop the buffered output (for a streaming frame, rewind the replay
+   *  cursor) and roll back the plot instructions and plot state the
+   *  attempt produced — call when the attempt bailed, so a subsequent
+   *  re-run is the only thing that emits. */
   discardOutputCapture(): void {
     const frame = this.outputCaptureStack.pop();
     if (frame === undefined) return;
+    if (!frame.owns) {
+      if (frame.into !== null) {
+        frame.into.length = frame.mark;
+      } else {
+        this.streamingDepth--;
+        this.replay!.pos = frame.mark;
+        this.endReplayIfDone();
+      }
+    }
     if (this.plotInstructions.length > frame.plotLength) {
       this.plotInstructions.length = frame.plotLength;
     }

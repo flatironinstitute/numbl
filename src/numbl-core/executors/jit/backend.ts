@@ -59,6 +59,20 @@ export interface JitBackend<A = unknown> {
   /** Whether the compiled entry can call itself, so that its code also
    *  runs in frames the JIT does not track. */
   recursive(art: A): boolean;
+  /** Whether the unit's output may stream (`Executor.streamsOutput`). */
+  streamsOutput(art: A): boolean;
+}
+
+/** Whether the output of a compiled module is reproduced exactly by the
+ *  interpreter's re-run after a bail, so it may stream (see
+ *  `Runtime.beginOutputCapture`). Every JIT builtin computes the same bits
+ *  on a re-run (the registry rewinds the PRNG) except `toc`, which reads
+ *  the clock. `activated` is every runtime snippet the module uses, the
+ *  session's other specs included, which errs on the side of buffering. */
+export function outputIsReproducible(
+  activated: ReadonlyArray<string>
+): boolean {
+  return !activated.includes("jit_tic_toc");
 }
 
 /** `backend.compile`, turning a compiler rejection into a recorded

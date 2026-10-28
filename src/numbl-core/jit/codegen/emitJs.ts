@@ -19,7 +19,7 @@
  *
  * The emitted module has the shape:
  *   ```js
- *   let $write, $plotDispatch, $rand, $elemwise;
+ *   let $write, $plotDispatch, $rand, $elemwise, $cancel, $loc;
  *   <inlined runtime snippet bodies>
  *   function <user-fn-spec-1>(...) { ... }
  *   function <user-fn-spec-2>(...) { ... }
@@ -57,6 +57,14 @@ import {
 } from "./runtime.js";
 import { emitTensorConcatJs } from "./emitTensorConcatJs.js";
 import { maybeUnassignedReads } from "../lowering/definiteAssign.js";
+import { callsSpec } from "../lowering/callGraph.js";
+import {
+  STRIP_CHUNK,
+  breakLabel,
+  enterLoop,
+  exitLoop,
+  isConstantTimeLoop,
+} from "./cancelPoll.js";
 
 export interface EmitJsOptions {
   /** cName of the entry spec the module's factory returns.
@@ -98,7 +106,7 @@ export function emitJsProgram(
 
   const userParts: string[] = [];
   for (const fn of prog.functions.values()) {
-    userParts.push(emitFunction(fn, state));
+    userParts.push(emitFunction(fn, state, callsSpec(prog, fn)));
     userParts.push("");
   }
 
@@ -110,15 +118,16 @@ export function emitJsProgram(
   // `typeof === "function"` checks gate behavior when a host omits a hook.
   const out: string[] = [];
   // `$loc` is the statement location (see `locCode`), read by the host
-  // through `$h.loc` when a raise escapes.
-  out.push("let $write, $plotDispatch, $rand, $elemwise, $loc = -1;");
+  // through `$h.loc` when a raise escapes. `$cancel` is the host's cancel
+  // flag (an Int32Array; see `CANCEL_POLL_JS`).
+  out.push("let $write, $plotDispatch, $rand, $elemwise, $cancel, $loc = -1;");
   if (state.active.size > 0) {
     out.push(renderJsRuntimeBodies(state));
     out.push("");
   }
   out.push(...userParts);
   out.push(
-    `return function ($h) { $write = $h.write; $plotDispatch = $h.plotDispatch; $rand = $h.rand; $elemwise = $h.elemwise; $h.loc = () => $loc; return ${opts.exposeSpec}; };`
+    `return function ($h) { $write = $h.write; $plotDispatch = $h.plotDispatch; $rand = $h.rand; $elemwise = $h.elemwise; $cancel = $h.cancel; $h.loc = () => $loc; return ${opts.exposeSpec}; };`
   );
 
   return {
@@ -128,9 +137,29 @@ export function emitJsProgram(
   };
 }
 
+/** Cancel polls. The host's flag (`$cancel`, an Int32Array the thread that
+ *  cancels writes) is read through `_jit_cancel`, a function-local alias,
+ *  with a plain load: reading the module binding, or `Atomics.load`, costs
+ *  several times more in a tight loop. V8 does not eliminate typed-array
+ *  loads across iterations, so the other thread's store is seen (the cancel
+ *  tests check this).
+ *
+ *  A loop polls in its condition (`CANCEL_OK_JS`) and raises after it exits
+ *  (`CANCEL_POLL_JS`): a call to the raise helper inside the loop body, even
+ *  one never taken, slows a tight V8 loop by up to 3x. The extra condition
+ *  still costs 10% to 80% in a one-statement scalar loop, so a loop whose
+ *  iterations take constant time is strip-mined (`cancelPoll.ts`).
+ *  Functions that call specs (and so may recurse) poll on entry. See
+ *  `raise.js`. */
+const CANCEL_OK_JS = "_jit_cancel[0] === 0";
+const CANCEL_POLL_JS = "if (_jit_cancel[0] !== 0) jit_raise_cancel();";
 // ── User function specialization ─────────────────────────────────────────
 
-function emitFunction(fn: IRFunc, state: RuntimeState): string {
+function emitFunction(
+  fn: IRFunc,
+  state: RuntimeState,
+  pollOnEntry: boolean
+): string {
   // Multi-output user functions return an array; single-output return
   // the bare value; zero-output return nothing. We keep parameter
   // passing identical (positional args, no out-pointers).
@@ -147,6 +176,8 @@ function emitFunction(fn: IRFunc, state: RuntimeState): string {
   if (locals.length > 0) {
     lines.push(`  let ${locals.join(", ")};`);
   }
+  const pollAt = lines.length;
+  if (pollOnEntry) lines.push(`  ${CANCEL_POLL_JS}`);
 
   // Stash the current function's output cNames on the state so any
   // in-body `ReturnFromFunction` can emit `return <fn outputs>` with
@@ -161,6 +192,9 @@ function emitFunction(fn: IRFunc, state: RuntimeState): string {
   state.currentFnOutputs = prevOutputs;
   state.currentFnOutputTypes = prevOutputTypes;
   if (bodyLines.length > 0) lines.push(bodyLines);
+  if (pollOnEntry || bodyLines.includes("_jit_cancel")) {
+    lines.splice(pollAt, 0, "  const _jit_cancel = $cancel;");
+  }
 
   // Implicit return at function end based on declared outputs.
   if (fn.outputs.length === 0) {
@@ -274,10 +308,31 @@ function emitStmt(s: IRStmt, indent: string, state: RuntimeState): string {
 
     case "While": {
       const lines: string[] = [];
-      lines.push(`${indent}while (${truthy(s.cond, state)}) {`);
-      const body = emitBody(s.body, indent + "  ", state);
+      // Strip-mined as the `for` loop below, with a chunk counter.
+      const label = enterLoop(state, isConstantTimeLoop(s.body, s.cond));
+      const strip = label !== null;
+      let ind = indent;
+      if (strip) {
+        lines.push(`${indent}${label}: while (${CANCEL_OK_JS}) {`);
+        lines.push(
+          `${indent}  for (let _jit_w = 0; _jit_w < ${STRIP_CHUNK}; _jit_w++) {`
+        );
+        lines.push(
+          `${indent}    if (!(${truthy(s.cond, state)})) break ${label};`
+        );
+        ind += "    ";
+      } else {
+        lines.push(
+          `${indent}while (${CANCEL_OK_JS} && (${truthy(s.cond, state)})) {`
+        );
+        ind += "  ";
+      }
+      const body = emitBody(s.body, ind, state);
+      exitLoop(state);
       if (body.length > 0) lines.push(body);
+      if (strip) lines.push(`${indent}  }`);
       lines.push(`${indent}}`);
+      lines.push(`${indent}${CANCEL_POLL_JS}`);
       return lines.join("\n");
     }
 
@@ -303,15 +358,37 @@ function emitStmt(s: IRStmt, indent: string, state: RuntimeState): string {
       lines.push(
         `${indent}  const _jit_for_n = jit_loop_count(_jit_for_start, _jit_for_end, ${stepStr});`
       );
+      // Strip-mined when its iterations take constant time (see
+      // `cancelPoll.ts`).
+      const label = enterLoop(state, isConstantTimeLoop(s.body));
+      const strip = label !== null;
+      let ind = indent + "  ";
+      if (strip) {
+        lines.push(`${indent}  let _jit_for_i = 0;`);
+        lines.push(
+          `${indent}  ${label}: while (_jit_for_i < _jit_for_n && ${CANCEL_OK_JS}) {`
+        );
+        lines.push(
+          `${indent}    const _jit_for_m = Math.min(_jit_for_n, _jit_for_i + ${STRIP_CHUNK});`
+        );
+        lines.push(
+          `${indent}    for (; _jit_for_i < _jit_for_m; _jit_for_i++) {`
+        );
+        ind += "  ";
+      } else {
+        lines.push(
+          `${indent}  for (let _jit_for_i = 0; _jit_for_i < _jit_for_n && ${CANCEL_OK_JS}; _jit_for_i++) {`
+        );
+      }
       lines.push(
-        `${indent}  for (let _jit_for_i = 0; _jit_for_i < _jit_for_n; _jit_for_i++) {`
+        `${ind}  ${s.cVar} = jit_range_value(_jit_for_start, ${stepStr}, _jit_for_end, _jit_for_n, _jit_for_i);`
       );
-      lines.push(
-        `${indent}    ${s.cVar} = jit_range_value(_jit_for_start, ${stepStr}, _jit_for_end, _jit_for_n, _jit_for_i);`
-      );
-      const body = emitBody(s.body, indent + "    ", state);
+      const body = emitBody(s.body, ind + "  ", state);
+      exitLoop(state);
       if (body.length > 0) lines.push(body);
+      if (strip) lines.push(`${indent}    }`);
       lines.push(`${indent}  }`);
+      lines.push(`${indent}  ${CANCEL_POLL_JS}`);
       lines.push(`${indent}}`);
       return lines.join("\n");
     }
@@ -323,8 +400,11 @@ function emitStmt(s: IRStmt, indent: string, state: RuntimeState): string {
       // function-end return (bare value / array / nothing).
       return emitReturnFromFunction(state, indent);
 
-    case "Break":
-      return `${indent}break;`;
+    case "Break": {
+      // Leave both JS loops of a strip-mined loop.
+      const label = breakLabel(state);
+      return label === null ? `${indent}break;` : `${indent}break ${label};`;
+    }
 
     case "Continue":
       return `${indent}continue;`;
