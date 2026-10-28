@@ -2,7 +2,8 @@
  * Built-in constant values
  */
 
-import { RuntimeValue, RTV } from "../runtime/index.js";
+import type { RuntimeValue } from "../runtime/types.js";
+import { RTV } from "../runtime/constructors.js";
 
 const CONSTANTS: Record<string, number> = {
   pi: Math.PI,

@@ -78,7 +78,7 @@ This is the fastest way to test changes during development.
 
 ## Before Committing
 
-CI checks formatting, lint, types, the generated files above, the unit tests and the `.m` test scripts. Before pushing, run at least:
+CI checks formatting, lint, types, the generated files above, the import-cycle count in `src/numbl-core` (`npm run check:cycles`), the unit tests and the `.m` test scripts. Before pushing, run at least:
 
 ```bash
 npm run lint            # ESLint

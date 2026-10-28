@@ -66,6 +66,7 @@
     "build:snippets:check": "tsx scripts/build_runtime_snippets.ts --check",
     "gen:builtin-names": "tsx scripts/gen_builtin_names.ts",
     "gen:builtin-names:check": "tsx scripts/gen_builtin_names.ts --check",
+    "check:cycles": "tsx scripts/check_import_cycles.ts",
     "build:web": "npm run build:snippets && npm run bundle:stdlib && tsc -b && vite build && npm run prerender:seo",
     "prerender:seo": "tsx scripts/prerender-seo.ts",
     "build:lib": "npm run build:snippets && npm run bundle:stdlib && rm -rf dist-lib && esbuild src/lib.ts src/node.ts --bundle --splitting --platform=node --format=esm --outdir=dist-lib --packages=external --loader:.wasm=file && tsc -p tsconfig.lib.json",

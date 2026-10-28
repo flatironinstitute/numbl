@@ -12,7 +12,7 @@ import {
   UnaryOperation,
 } from "./types.js";
 import { SyntaxError } from "./errors.js";
-import { offsetToLine } from "../runtime/index.js";
+import { offsetToLine } from "../sourceLoc.js";
 
 const KEYWORD_TOKENS: ReadonlySet<Token> = new Set(KEYWORDS.values());
 

@@ -1,6 +1,8 @@
 /**
- * Help text for builtins. Registered via registerBuiltinHelp so existing
- * builtin definitions don't need to be modified.
+ * Help text for builtins defined without inline `help`, registered via
+ * registerBuiltinHelp. New builtins should use inline `help` on their
+ * builtin() spec instead. A unit test (help-text.test.ts) checks that every
+ * key names a registered builtin and that no builtin has help in both places.
  */
 
 import {
@@ -8,7 +10,7 @@ import {
   type BuiltinHelp,
 } from "../../runtime/builtinRegistry.js";
 
-const H: Record<string, BuiltinHelp> = {
+export const HELP_TEXT: Record<string, BuiltinHelp> = {
   // ── Math ──────────────────────────────────────────────────────────────
   sin: {
     signatures: ["Y = sin(X)"],
@@ -2021,10 +2023,6 @@ const H: Record<string, BuiltinHelp> = {
     description:
       "Test if Java feature is available. Always returns false in numbl.",
   },
-  nargin: {
-    signatures: ["N = nargin", "N = nargin(FUN)"],
-    description: "Number of input arguments of current or specified function.",
-  },
   lastwarn: {
     signatures: ["S = lastwarn"],
     description: "Last warning message. Returns empty string in numbl.",
@@ -2206,6 +2204,6 @@ const H: Record<string, BuiltinHelp> = {
   },
 };
 
-for (const [name, help] of Object.entries(H)) {
+for (const [name, help] of Object.entries(HELP_TEXT)) {
   registerBuiltinHelp(name, help);
 }

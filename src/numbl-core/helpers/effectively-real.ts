@@ -15,9 +15,12 @@
  * all-zero imaginary lane and drop it so the real code path runs.
  */
 
-import { RTV } from "../runtime/index.js";
-import type { RuntimeValue } from "../runtime/index.js";
-import { isRuntimeTensor, type RuntimeTensor } from "../runtime/types.js";
+import { RTV } from "../runtime/constructors.js";
+import {
+  isRuntimeTensor,
+  type RuntimeTensor,
+  type RuntimeValue,
+} from "../runtime/types.js";
 
 /** True when `imag` is absent or every element is exactly zero. */
 export function imagAllZero(imag: ArrayLike<number> | undefined): boolean {

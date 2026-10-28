@@ -24,6 +24,8 @@ export type {
   AbstractSyntaxTree,
 } from "../../parser/index.js";
 
+export { offsetToLineCol } from "../../sourceLoc.js";
+
 // ── Resolver / code index (workspace function dispatch) ─────────────────
 
 export type { CodeIndex } from "../../workspace/codeIndex.js";

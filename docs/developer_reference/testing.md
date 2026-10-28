@@ -33,7 +33,7 @@ Integration scripts are wrapped by a Vitest spec (`src/__tests__/test-scripts.te
 
 ## Continuous integration
 
-The `lint` job checks formatting, ESLint, `tsc -b` and that the committed generated files are in sync (see [Generated files](../../CONTRIBUTING.md#generated-files)). The `test` job builds everything and runs Vitest; `test-browser` runs Playwright. The `test-lapack` job builds the native addon and then runs the addon parity tests, `npm run test:scripts`, `npm run test:scripts:c`, and `npm run jit-parity` (including `--opt 2`, which needs a C compiler).
+All four jobs run in parallel. The `lint` job checks formatting, ESLint, `tsc -b`, that the committed generated files are in sync (see [Generated files](../../CONTRIBUTING.md#generated-files)), and that the number of circular imports in `src/numbl-core` has not grown (`npm run check:cycles`; lower `MAX_CYCLES` in `scripts/check_import_cycles.ts` after removing cycles). The `test` job builds the published library entry points and runs Vitest. The `test-browser` job runs `npm run build` and `npm run build:browser`, then Playwright. The `test-lapack` job builds the native addon and then runs the addon parity tests, `npm run test:scripts`, `npm run test:scripts:c`, and `npm run jit-parity` (including `--opt 2`, which needs a C compiler); it runs from source and needs no web build.
 
 ## Running tests in both environments
 

@@ -2,11 +2,12 @@
  * String manipulation builtin functions
  */
 
-import { type RuntimeValue, toNumber, toString } from "../runtime/index.js";
+import { toNumber, toString } from "../runtime/convert.js";
 import {
   isRuntimeTensor,
   isRuntimeNumber,
   isRuntimeLogical,
+  type RuntimeValue,
 } from "../runtime/types.js";
 
 /** Convert a number to string.

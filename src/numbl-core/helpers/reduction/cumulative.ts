@@ -3,16 +3,14 @@
  */
 
 import { allocFloat64Array } from "../../runtime/alloc.js";
-import {
-  RuntimeValue,
-  RTV,
-  toNumber,
-  RuntimeError,
-} from "../../runtime/index.js";
+import { RTV } from "../../runtime/constructors.js";
+import { toNumber } from "../../runtime/convert.js";
+import { RuntimeError } from "../../runtime/error.js";
 import {
   isRuntimeNumber,
   isRuntimeSparseMatrix,
   isRuntimeTensor,
+  type RuntimeValue,
 } from "../../runtime/types.js";
 import { sparseToDense } from "../sparse-arithmetic.js";
 

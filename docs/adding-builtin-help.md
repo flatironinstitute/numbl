@@ -41,7 +41,7 @@ The help is stored on the registered `IBuiltin` (`src/numbl-core/runtime/builtin
 
 ### Existing builtins (bulk)
 
-Add an entry to the `H` record in `src/numbl-core/interpreter/builtins/help-text.ts`:
+Add an entry to the `HELP_TEXT` record in `src/numbl-core/interpreter/builtins/help-text.ts`:
 
 ```typescript
 myFunc: {
@@ -50,7 +50,7 @@ myFunc: {
 },
 ```
 
-This file calls `registerBuiltinHelp()` to fill a separate help registry, which `getIBuiltinHelp()` consults when the builtin has no inline `help`.
+This file calls `registerBuiltinHelp()` to fill a separate help registry, which `getIBuiltinHelp()` consults when the builtin has no inline `help`. A builtin must not have help in both places, and every key must name a registered builtin; `src/__tests__/help-text.test.ts` checks both.
 
 ## Writing good help text
 

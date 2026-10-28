@@ -3,6 +3,14 @@
  */
 
 import type { RuntimeClassInstance } from "./types.js";
+import { offsetToColumn, offsetToLine } from "../sourceLoc.js";
+
+export {
+  buildLineTable,
+  offsetToColumn,
+  offsetToLine,
+  offsetToLineFast,
+} from "../sourceLoc.js";
 
 export interface Span {
   file: string;
@@ -186,60 +194,6 @@ export class RuntimeError extends Error {
     if (line < 1 || line > lines.length) return null;
     return lines[line - 1].trim() || null;
   }
-}
-
-/**
- * Compute 1-based line number from a character offset in source text.
- */
-export function offsetToLine(source: string, offset: number): number {
-  let line = 1;
-  for (let i = 0; i < offset && i < source.length; i++) {
-    if (source[i] === "\n") line++;
-  }
-  return line;
-}
-
-/**
- * Build an array of newline character positions for fast offset→line lookup.
- * Returns a sorted array where lineBreaks[i] is the offset of the (i+1)th '\n'.
- */
-export function buildLineTable(source: string): number[] {
-  const breaks: number[] = [];
-  for (let i = 0; i < source.length; i++) {
-    if (source[i] === "\n") breaks.push(i);
-  }
-  return breaks;
-}
-
-/**
- * Compute 1-based line number from a character offset using a pre-built line table.
- * Uses binary search — O(log n) instead of O(n).
- */
-export function offsetToLineFast(lineBreaks: number[], offset: number): number {
-  // Binary search for the number of newlines before `offset`
-  let lo = 0;
-  let hi = lineBreaks.length;
-  while (lo < hi) {
-    const mid = (lo + hi) >>> 1;
-    if (lineBreaks[mid] < offset) {
-      lo = mid + 1;
-    } else {
-      hi = mid;
-    }
-  }
-  return lo + 1; // 1-based
-}
-
-/**
- * Compute 1-based column number from a character offset in source text.
- */
-export function offsetToColumn(source: string, offset: number): number {
-  let column = 1;
-  for (let i = offset - 1; i >= 0; i--) {
-    if (source[i] === "\n") break;
-    column++;
-  }
-  return column;
 }
 
 /**

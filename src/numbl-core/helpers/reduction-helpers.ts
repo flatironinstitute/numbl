@@ -3,7 +3,9 @@
  * reduction factories, sparse helpers, and logical/complex scan utilities.
  */
 
-import { RuntimeValue, RTV, toString, RuntimeError } from "../runtime/index.js";
+import { RTV } from "../runtime/constructors.js";
+import { toString } from "../runtime/convert.js";
+import { RuntimeError } from "../runtime/error.js";
 import {
   isRuntimeChar,
   isRuntimeLogical,
@@ -11,6 +13,7 @@ import {
   isRuntimeTensor,
   type RuntimeTensor,
   type RuntimeSparseMatrix,
+  type RuntimeValue,
 } from "../runtime/types.js";
 import { tensorOps, OpReduce } from "../ops/index.js";
 import { allocFloat64Array } from "../runtime/alloc.js";

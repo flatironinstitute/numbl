@@ -2,12 +2,9 @@
  * min/max builtin functions.
  */
 
-import {
-  RuntimeValue,
-  RTV,
-  toNumber,
-  RuntimeError,
-} from "../../runtime/index.js";
+import { RTV } from "../../runtime/constructors.js";
+import { toNumber } from "../../runtime/convert.js";
+import { RuntimeError } from "../../runtime/error.js";
 import {
   isRuntimeChar,
   isRuntimeComplexNumber,
@@ -17,6 +14,7 @@ import {
   isRuntimeString,
   isRuntimeTensor,
   type RuntimeTensor,
+  type RuntimeValue,
 } from "../../runtime/types.js";
 import { getBroadcastShape, broadcastIterate } from "../arithmetic.js";
 import { sparseToDense } from "../sparse-arithmetic.js";

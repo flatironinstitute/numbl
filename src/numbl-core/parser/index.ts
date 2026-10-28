@@ -1,7 +1,7 @@
 import { tokenizeDetailed, Token } from "../lexer/index.js";
 import { AbstractSyntaxTree, TokenInfo } from "./types.js";
 import { SyntaxError } from "./errors.js";
-import { offsetToLine } from "../runtime/index.js";
+import { offsetToLine } from "../sourceLoc.js";
 import { Parser } from "./Parser.js";
 
 // Re-export all types
