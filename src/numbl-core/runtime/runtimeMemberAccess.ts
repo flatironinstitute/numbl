@@ -23,6 +23,48 @@ import {
   MEXCEPTION_PROPERTIES,
   isMException,
 } from "./mexception.js";
+import type { PropertyInfo } from "../workspace/classInfo.js";
+import {
+  noSetMethodError,
+  propertyGetError,
+  propertySetError,
+  unrecognizedMemberError,
+  unrecognizedPropertyError,
+} from "./classAccess.js";
+
+/** Whether `obj.name` on an instance of `className` may go to the class's
+ *  overloaded subsref (or subsasgn): the class has one and is not already
+ *  running it. */
+function hasOverload(
+  rt: Runtime,
+  className: string,
+  method: "subsref" | "subsasgn"
+): boolean {
+  return (
+    !rt.activeAccessors.has(`${className}.${method}`) &&
+    rt.cachedResolveClassMethod(className, method) !== null
+  );
+}
+
+/** The declaration of property `name` of a `className` object, checked
+ *  against the running code's access. When the code may not read it, the
+ *  class's overloaded subsref handles the access ("subsref" is returned),
+ *  or MATLAB's error is thrown. */
+export function readableProperty(
+  rt: Runtime,
+  className: string,
+  name: string
+): PropertyInfo | undefined | "subsref" {
+  const table = rt.classTable;
+  const prop = table?.findProperty(className, name);
+  if (!prop) return undefined;
+  const denied = propertyGetError(table!, rt.codeSite(), className, prop);
+  if (denied) {
+    if (hasOverload(rt, className, "subsref")) return "subsref";
+    throw denied;
+  }
+  return prop;
+}
 
 export function getMember(
   rt: Runtime,
@@ -31,8 +73,11 @@ export function getMember(
   nargout = 1
 ): unknown {
   const mv = ensureRuntimeValue(base);
-  // Check for property getter method (get.PropertyName)
   if (isRuntimeClassInstance(mv)) {
+    const prop = readableProperty(rt, mv.className, name);
+    if (prop === "subsref") return subsrefCall(rt, base, [name]);
+    if (prop?.constant) return rt.constantPropertyValue!(prop);
+    // Check for property getter method (get.PropertyName)
     const accessorKey = `${mv.className}.get.${name}`;
     if (!rt.activeAccessors.has(accessorKey)) {
       const getter = rt.cachedResolveClassMethod(mv.className, `get.${name}`);
@@ -64,9 +109,7 @@ export function getMember(
         return subsrefCall(rt, base, [name]);
       }
     }
-    throw new RuntimeError(
-      `No property or method '${name}' for class '${mv.className}'`
-    );
+    throw unrecognizedMemberError(name, mv.className);
   }
   // Property access on an object array yields a comma-separated list; numbl
   // materializes it by horzcat-ing the per-element values (mirroring struct
@@ -113,7 +156,6 @@ export function setMemberReturn(
   rhs: unknown
 ): unknown {
   const mv = ensureRuntimeValue(base);
-  // Check for property setter method (set.PropertyName)
   if (isRuntimeClassInstance(mv)) {
     if (
       MEXCEPTION_PROPERTIES.includes(name) &&
@@ -126,9 +168,36 @@ export function setMemberReturn(
         { identifier: "MATLAB:class:SetProhibited" }
       );
     }
+    const table = rt.classTable;
+    const prop = table?.findProperty(mv.className, name);
+    if (prop) {
+      const denied = propertySetError(
+        table!,
+        rt.codeSite(),
+        mv.className,
+        prop
+      );
+      if (denied) {
+        // An overloaded subsasgn handles assignments the class does not
+        // expose.
+        if (hasOverload(rt, mv.className, "subsasgn"))
+          return subsasgnCall(rt, base, [name], rhs);
+        throw denied;
+      }
+    } else if (
+      table?.get(mv.className)?.ast &&
+      !mv.fields.has(name) &&
+      !table.isSubclassOf(mv.className, "dynamicprops") &&
+      rt.cachedResolveClassMethod(mv.className, "subsasgn") === null
+    ) {
+      // A classdef object has only its declared (or dynamic) properties.
+      throw unrecognizedPropertyError(name, mv.className);
+    }
+    // Check for property setter method (set.PropertyName)
     const accessorKey = `${mv.className}.set.${name}`;
     if (!rt.activeAccessors.has(accessorKey)) {
       const setter = rt.cachedResolveClassMethod(mv.className, `set.${name}`);
+      if (!setter && prop?.dependent) throw noSetMethodError(prop);
       if (setter) {
         rt.activeAccessors.add(accessorKey);
         try {

@@ -50,6 +50,8 @@ import type { ExecOptions } from "../executeCode.js";
 import type { FileIOAdapter } from "../fileIOAdapter.js";
 import { type FileTable, fileIOView, fileTableFor } from "../fileTable.js";
 import type { SystemAdapter } from "../systemAdapter.js";
+import type { ClassTable } from "../workspace/classTable.js";
+import type { PropertyInfo } from "../workspace/classInfo.js";
 import { ensureRuntimeValue } from "./runtimeHelpers.js";
 import { errorToMException } from "./mexception.js";
 import {
@@ -240,6 +242,17 @@ export class Runtime {
     | null = null;
   // Ancestor class names in method-resolution order (for isa / superclasses).
   public getClassAncestors: ((className: string) => string[]) | null = null;
+  /** The run's classes, for property and method attributes (set by the
+   *  interpreter). */
+  public classTable: ClassTable | null = null;
+  /** The class and method of the running code, for access checks (set by
+   *  the interpreter). */
+  public codeSite: () => { className?: string; methodName?: string } =
+    () => ({});
+  /** The value of a Constant property, evaluated once per class (set by
+   *  the interpreter). */
+  public constantPropertyValue: ((prop: PropertyInfo) => RuntimeValue) | null =
+    null;
   // Cache for resolved class methods: "className.methodName" → fn | null
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   public classMethodCache = new Map<string, ((...args: any[]) => any) | null>();

@@ -43,6 +43,8 @@ import { callResolved, interpretTarget } from "./calls.js";
 import { callerScope } from "./callerScope.js";
 import { callBody } from "./callConvention.js";
 import { MEXCEPTION_CLASS } from "../runtime/mexception.js";
+import { constantPropertyValue } from "./oop.js";
+import { META_CLASS_ALIASES } from "./metaClass.js";
 
 // ── Interpreter ──────────────────────────────────────────────────────────
 
@@ -102,6 +104,15 @@ export class Interpreter {
    *  calls. The C-JIT declines while it is non-zero: a runtime error in
    *  compiled C exits the process, so it can't be caught. */
   tryDepth: number = 0;
+
+  /** @internal Constant property values by "definingClass\0name",
+   *  evaluated on first use (`constantPropertyValue`). */
+  readonly constantValues = new Map<string, RuntimeValue>();
+  /** @internal Constant properties whose default is being evaluated, to
+   *  detect circular definitions. */
+  readonly constantsInProgress = new Set<string>();
+  /** @internal meta.class objects by class name (`?Name`, `metaclass`). */
+  readonly metaClasses = new Map<string, RuntimeValue>();
 
   /** @internal Pre-built line break tables for offset→line lookup per file. */
   lineTableCache = new Map<string, number[]>();
@@ -243,7 +254,12 @@ export class Interpreter {
     };
 
     this.rt.getClassAncestors = (className: string) =>
-      this.code.classes.ancestors(className);
+      META_CLASS_ALIASES[className] ?? this.code.classes.ancestors(className);
+
+    // Class member attributes and access checks.
+    this.rt.classTable = this.code.classes;
+    this.rt.codeSite = () => this.frame;
+    this.rt.constantPropertyValue = prop => constantPropertyValue(this, prop);
 
     this.rt.callerScope = () => callerScope(this);
   }

@@ -2,7 +2,7 @@
  * Class information types and extraction utilities.
  */
 
-import { type Expr, type Stmt } from "../parser/index.js";
+import { type Attr, type Expr, type Stmt } from "../parser/index.js";
 
 /** Built-in base classes that confer handle (reference) semantics. */
 export const HANDLE_BASE_CLASSES = new Set([
@@ -14,6 +14,49 @@ export const HANDLE_BASE_CLASSES = new Set([
   "hgsetget",
 ]);
 
+/** Who may use a class member. A class list (`Access = {?A, ?B}`) admits
+ *  the listed classes and their subclasses, besides the defining class.
+ *  `immutable` (SetAccess only) admits the defining class's constructor;
+ *  `none` (SetAccess only, e.g. of a Constant property) admits no one. */
+export type MemberAccess =
+  | "public"
+  | "protected"
+  | "private"
+  | "immutable"
+  | "none"
+  | { classes: string[] };
+
+/** A property declared in a classdef, with its block's attributes. */
+export interface PropertyInfo {
+  name: string;
+  /** Qualified name of the class that declares the property. */
+  definingClass: string;
+  defaultExpr: Expr | null;
+  getAccess: MemberAccess;
+  setAccess: MemberAccess;
+  constant: boolean;
+  dependent: boolean;
+  hidden: boolean;
+  abstract: boolean;
+  /** Parsed only (numbl does not serialize objects). */
+  transient: boolean;
+}
+
+/** A method declared in a classdef (with a body or as a signature), with its
+ *  block's attributes. Property accessors (`get.X`/`set.X`) are not listed. */
+export interface MethodInfo {
+  name: string;
+  /** Qualified name of the class that declares the method. */
+  definingClass: string;
+  access: MemberAccess;
+  static: boolean;
+  hidden: boolean;
+  abstract: boolean;
+  sealed: boolean;
+  inputs: string[];
+  outputs: string[];
+}
+
 /** Metadata about a class definition. */
 export interface ClassInfo {
   name: string; // e.g. "Rectangle_"
@@ -22,11 +65,24 @@ export interface ClassInfo {
   source: string; // raw .m file source
   /** Direct superclasses in declaration order (`classdef A < B & C`). */
   superClasses: string[];
+  /** Properties stored on each instance (not Dependent, Constant or
+   *  Abstract), in declaration order. */
   propertyNames: string[];
   propertyDefaults: Map<string, Expr>; // property name → default AST expr
+  /** Every property the class itself declares, in declaration order. */
+  properties: Map<string, PropertyInfo>;
+  /** Every method the class itself declares (including the constructor and
+   *  static methods), in declaration order. Methods that only exist as
+   *  `@folder` files, without a signature in the classdef, are not listed;
+   *  they are public. */
+  methods: Map<string, MethodInfo>;
   methodNames: Set<string>; // instance method names (non-static, non-constructor)
   staticMethodNames: Set<string>;
   constructorName: string | null; // method name matching class name
+  /** Class attributes. */
+  abstract: boolean;
+  sealed: boolean;
+  hidden: boolean;
   /** Enumeration members in declaration order (name + constructor-arg
    *  exprs), or null when the class is not an enumeration. */
   enumMembers: { name: string; args: Expr[] }[] | null;
@@ -34,6 +90,75 @@ export interface ClassInfo {
   isOldStyle?: boolean; // true for pre-classdef @folder classes (constructor is a plain function calling class(s,'name'))
   inferiorClasses: string[]; // classes declared inferior via InferiorClasses attribute
   externalMethodFiles: Map<string, { fileName: string; source: string }>; // method name → file info (for @folder methods)
+}
+
+// ── Attributes ──────────────────────────────────────────────────────────
+
+/** An attribute's value with any quotes removed (`'private'` → private). */
+function attrText(value: string): string {
+  const v = value.trim();
+  if (
+    v.length >= 2 &&
+    (v[0] === "'" || v[0] === '"') &&
+    v[v.length - 1] === v[0]
+  )
+    return v.slice(1, -1);
+  return v;
+}
+
+/** A logical attribute: bare (`Static`) is true, `~Static` or `= false` is
+ *  false. */
+function attrFlag(value: string | null): boolean {
+  if (value === null) return true;
+  const v = attrText(value).toLowerCase();
+  return v !== "false" && v !== "0";
+}
+
+/** An access attribute's value: a level, or a class list `{?A, ?B}`. An
+ *  empty list (`{}`) admits only the defining class, as `private` does. */
+function attrAccess(value: string | null): MemberAccess {
+  if (value === null) return "public";
+  const v = attrText(value);
+  if (v.startsWith("{")) {
+    const classes = [...v.matchAll(/\?([\w.]+)/g)].map(m => m[1]);
+    return classes.length > 0 ? { classes } : "private";
+  }
+  switch (v.toLowerCase()) {
+    case "private":
+      return "private";
+    case "protected":
+      return "protected";
+    case "immutable":
+      return "immutable";
+    case "none":
+      return "none";
+    default:
+      return "public";
+  }
+}
+
+interface BlockAttributes {
+  getAccess: MemberAccess;
+  setAccess: MemberAccess;
+  /** Logical attributes that are true, lower-cased. */
+  flags: Set<string>;
+}
+
+/** The attributes of a properties or methods block. `Access` sets both get
+ *  and set access (a method's access is `getAccess`); a later `GetAccess` or
+ *  `SetAccess` overrides one of them. */
+function blockAttributes(attrs: Attr[]): BlockAttributes {
+  let getAccess: MemberAccess = "public";
+  let setAccess: MemberAccess = "public";
+  const flags = new Set<string>();
+  for (const a of attrs) {
+    const n = a.name.toLowerCase();
+    if (n === "access") getAccess = setAccess = attrAccess(a.value);
+    else if (n === "getaccess") getAccess = attrAccess(a.value);
+    else if (n === "setaccess") setAccess = attrAccess(a.value);
+    else if (attrFlag(a.value)) flags.add(n);
+  }
+  return { getAccess, setAccess, flags };
 }
 
 /**
@@ -47,6 +172,8 @@ export function extractClassInfo(
 ): ClassInfo {
   const propertyNames: string[] = [];
   const propertyDefaults = new Map<string, Expr>();
+  const properties = new Map<string, PropertyInfo>();
+  const methods = new Map<string, MethodInfo>();
   const methodNames = new Set<string>();
   const staticMethodNames = new Set<string>();
   let constructorName: string | null = null;
@@ -59,58 +186,72 @@ export function extractClassInfo(
 
   for (const member of classDef.members) {
     if (member.type === "Properties") {
-      const isDependent = member.attributes.some(
-        a =>
-          a.name.toLowerCase() === "dependent" &&
-          (a.value === null || a.value === "true")
+      const { getAccess, setAccess, flags } = blockAttributes(
+        member.attributes
       );
-      if (!isDependent) {
-        for (let i = 0; i < member.names.length; i++) {
-          propertyNames.push(member.names[i]);
-          if (member.defaultValues[i]) {
-            propertyDefaults.set(member.names[i], member.defaultValues[i]!);
-          }
-        }
+      const constant = flags.has("constant");
+      const dependent = flags.has("dependent");
+      const abstract = flags.has("abstract");
+      for (let i = 0; i < member.names.length; i++) {
+        const name = member.names[i];
+        const defaultExpr = member.defaultValues[i] ?? null;
+        properties.set(name, {
+          name,
+          definingClass: qualifiedName,
+          defaultExpr,
+          getAccess,
+          setAccess: constant ? "none" : setAccess,
+          constant,
+          dependent,
+          hidden: flags.has("hidden"),
+          abstract,
+          transient: flags.has("transient"),
+        });
+        if (constant || dependent || abstract) continue;
+        propertyNames.push(name);
+        if (defaultExpr) propertyDefaults.set(name, defaultExpr);
       }
     } else if (member.type === "Methods") {
-      const isStatic = member.attributes.some(
-        a =>
-          a.name.toLowerCase() === "static" &&
-          (a.value === null || a.value === "true")
-      );
-      for (const methodStmt of member.body) {
-        if (methodStmt.type === "Function") {
-          if (isStatic) {
-            staticMethodNames.add(methodStmt.name);
-          } else if (
-            methodStmt.name === classDef.name ||
-            methodStmt.name === baseName
-          ) {
-            constructorName = methodStmt.name;
-          } else {
-            methodNames.add(methodStmt.name);
-          }
+      const { getAccess, flags } = blockAttributes(member.attributes);
+      const isStatic = flags.has("static");
+      const addMethod = (name: string, inputs: string[], outputs: string[]) => {
+        if (isStatic) {
+          staticMethodNames.add(name);
+        } else if (name === classDef.name || name === baseName) {
+          constructorName = name;
+        } else {
+          methodNames.add(name);
         }
+        // Property accessors are not methods in their own right.
+        if (name.includes(".")) return;
+        methods.set(name, {
+          name,
+          definingClass: qualifiedName,
+          access: getAccess,
+          static: isStatic,
+          hidden: flags.has("hidden"),
+          abstract: flags.has("abstract"),
+          sealed: flags.has("sealed"),
+          inputs,
+          outputs,
+        });
+      };
+      for (const methodStmt of member.body) {
+        if (methodStmt.type === "Function")
+          addMethod(methodStmt.name, methodStmt.params, methodStmt.outputs);
       }
       // Also process method signatures (prototype declarations without
       // function keyword, e.g. `result = myMethod(x);`). These are used
-      // for external method files declared in the classdef.
-      if (member.signatures) {
-        for (const sig of member.signatures) {
-          if (isStatic) {
-            staticMethodNames.add(sig.name);
-          } else if (sig.name === classDef.name || sig.name === baseName) {
-            constructorName = sig.name;
-          } else {
-            methodNames.add(sig.name);
-          }
-        }
-      }
+      // for external method files declared in the classdef, and for
+      // abstract methods.
+      for (const sig of member.signatures ?? [])
+        addMethod(sig.name, sig.params, sig.outputs);
     } else if (member.type === "Enumeration") {
       enumMembers = member.members.map(m => ({ name: m.name, args: m.args }));
     }
   }
 
+  const classFlags = blockAttributes(classDef.classAttributes).flags;
   // Extract InferiorClasses from class attributes
   const inferiorClasses: string[] = [];
   for (const attr of classDef.classAttributes) {
@@ -131,9 +272,14 @@ export function extractClassInfo(
     superClasses: classDef.superClasses,
     propertyNames,
     propertyDefaults,
+    properties,
+    methods,
     methodNames,
     staticMethodNames,
     constructorName,
+    abstract: classFlags.has("abstract"),
+    sealed: classFlags.has("sealed"),
+    hidden: classFlags.has("hidden"),
     enumMembers,
     inferiorClasses,
     ast: classDef,
@@ -179,9 +325,14 @@ export function makeOldStyleClassInfo(
     superClasses: [],
     propertyNames: [],
     propertyDefaults: new Map(),
+    properties: new Map(),
+    methods: new Map(),
     methodNames,
     staticMethodNames: new Set(),
     constructorName: baseName,
+    abstract: false,
+    sealed: false,
+    hidden: false,
     enumMembers: null,
     inferiorClasses: [],
     ast: null,

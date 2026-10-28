@@ -26,13 +26,17 @@ import {
   oldStyleConstructorBodyFor,
   type ResolvedTarget,
 } from "../resolution/index.js";
-import type { ClassInfo } from "../workspace/classInfo.js";
+import type { ClassInfo, PropertyInfo } from "../workspace/classInfo.js";
 import {
   MEXCEPTION_CLASS,
   MEXCEPTION_PROPERTIES,
 } from "../runtime/mexception.js";
+import { methodAccessError, propertyGetError } from "../runtime/classAccess.js";
+import { incref } from "../runtime/refcount.js";
 
 import type { Interpreter } from "./interpreter.js";
+import { Environment } from "./types.js";
+import { CallFrame } from "./callFrame.js";
 import { evalArgs, evalExpr } from "./evalExpressions.js";
 import { callBody } from "./callConvention.js";
 
@@ -86,6 +90,7 @@ export function instantiateClass(
     return callBody(interp, body, args, nargout);
   }
 
+  checkInstantiable(interp, className, classInfo);
   const { propertyNames, defaults } = propertyDefaults(
     interp,
     className,
@@ -107,6 +112,69 @@ export function instantiateClass(
     );
   }
   return instance;
+}
+
+/** Classes already checked by `checkClassDefinition`. */
+const checkedClasses = new WeakSet<ClassInfo>();
+
+/** Raise MATLAB's error when the running code cannot construct an instance
+ *  of `className`: the class is abstract, its constructor is not accessible
+ *  from here, or its definition is invalid (`checkClassDefinition`). */
+function checkInstantiable(
+  interp: Interpreter,
+  className: string,
+  info: ClassInfo
+): void {
+  if (!checkedClasses.has(info)) {
+    checkClassDefinition(interp, info);
+    checkedClasses.add(info);
+  }
+  const table = interp.code.classes;
+  if (info.abstract || table.unimplementedAbstractMembers(className).length) {
+    const declares =
+      info.abstract ||
+      [...info.properties.values(), ...info.methods.values()].some(
+        m => m.abstract
+      );
+    throw new RuntimeError(
+      declares
+        ? `Abstract classes cannot be instantiated. Class '${className}' defines abstract methods and/or properties.`
+        : `Abstract classes cannot be instantiated. Class '${className}' inherits abstract methods or properties but does not implement them. Use matlab.metadata.abstractDetails to see the list of methods and properties that '${className}' must implement if you do not intend the class to be abstract.`,
+      null,
+      { identifier: "MATLAB:class:abstract" }
+    );
+  }
+  const ctor =
+    info.constructorName && table.findMethod(className, info.constructorName);
+  if (ctor) {
+    const denied = methodAccessError(table, interp.frame, className, ctor);
+    if (denied) throw denied;
+  }
+}
+
+/** Raise MATLAB's error when a class subclasses a Sealed class or overrides
+ *  a Sealed method. */
+function checkClassDefinition(interp: Interpreter, info: ClassInfo): void {
+  const lineage = interp.code.classes.lineage(info);
+  for (let i = 1; i < lineage.length; i++) {
+    const parent = lineage[i];
+    if (parent.sealed)
+      throw new RuntimeError(
+        `Class '${parent.qualifiedName}' is Sealed and may not be used as a superclass.`,
+        null,
+        { identifier: "MATLAB:class:sealed" }
+      );
+    for (const m of parent.methods.values()) {
+      if (!m.sealed) continue;
+      const sub = lineage.slice(0, i).find(c => c.methods.has(m.name));
+      if (sub)
+        throw new RuntimeError(
+          `Method '${m.name}' in class '${sub.qualifiedName}' conflicts with the sealed method in superclass '${parent.qualifiedName}'. Overriding a sealed method is not supported.`,
+          null,
+          { identifier: "MATLAB:class:methodOverrideSealed" }
+        );
+    }
+  }
 }
 
 /** Run a classdef constructor on `args` (the new instance, then the user
@@ -180,46 +248,66 @@ export function evalSuperMethodCall(
 
 // ── Properties ───────────────────────────────────────────────────────────
 
-/** A class's property names, including inherited ones, and their evaluated
- *  default values. `className` names the class being built, for errors. */
+/** A class's instance property names, including inherited ones, and their
+ *  evaluated default values. `className` names the class being built, for
+ *  errors. A default is evaluated in the context of the class declaring it. */
 function propertyDefaults(
   interp: Interpreter,
   className: string,
   classInfo: ClassInfo
 ): { propertyNames: string[]; defaults: Map<string, RuntimeValue> } {
-  const propertyNames: string[] = [...classInfo.propertyNames];
-  const defaultExprs = new Map(classInfo.propertyDefaults);
-  for (const parentInfo of interp.code.classes.lineage(classInfo).slice(1)) {
-    for (const propName of parentInfo.propertyNames) {
-      if (!propertyNames.includes(propName)) {
-        propertyNames.push(propName);
-        const defaultExpr = parentInfo.propertyDefaults.get(propName);
-        if (defaultExpr && !defaultExprs.has(propName)) {
-          defaultExprs.set(propName, defaultExpr);
-        }
-      }
+  const propertyNames: string[] = [];
+  const defaultExprs = new Map<string, { expr: Expr; info: ClassInfo }>();
+  for (const info of interp.code.classes.lineage(classInfo)) {
+    for (const propName of info.propertyNames) {
+      if (!propertyNames.includes(propName)) propertyNames.push(propName);
+      const expr = info.propertyDefaults.get(propName);
+      if (expr && !defaultExprs.has(propName))
+        defaultExprs.set(propName, { expr, info });
     }
   }
   const defaults = new Map<string, RuntimeValue>();
-  for (const [propName, defaultExpr] of defaultExprs) {
+  for (const [propName, { expr, info }] of defaultExprs) {
     defaults.set(
       propName,
-      evalPropertyDefault(interp, className, propName, defaultExpr)
+      evalPropertyDefault(interp, className, info, propName, expr)
     );
   }
   return { propertyNames, defaults };
 }
 
-/** Evaluate a property's default value expression. MATLAB reports an
- *  invalid default as an error rather than leaving the property unset. */
+/** A frame running code of class `info` outside any method (property
+ *  defaults), with an empty workspace of its own. */
+function classContextFrame(interp: Interpreter, info: ClassInfo): CallFrame {
+  const env = new Environment();
+  env.rt = interp.rt;
+  return new CallFrame(
+    interp.code,
+    info.fileName,
+    info.qualifiedName,
+    undefined,
+    env,
+    interp.frame,
+    undefined
+  );
+}
+
+/** Evaluate a property's default value expression in the context of the
+ *  class `info` that declares it. MATLAB reports an invalid default as an
+ *  error rather than leaving the property unset. */
 function evalPropertyDefault(
   interp: Interpreter,
   className: string,
+  info: ClassInfo,
   propName: string,
   defaultExpr: Expr
 ): RuntimeValue {
   try {
-    return ensureRuntimeValue(evalExpr(interp, defaultExpr));
+    return ensureRuntimeValue(
+      interp.inFrame(classContextFrame(interp, info), () =>
+        evalExpr(interp, defaultExpr)
+      )
+    );
   } catch (e) {
     if (e instanceof CancellationError) throw e;
     const msg = e instanceof Error ? e.message : String(e);
@@ -227,6 +315,73 @@ function evalPropertyDefault(
       `Invalid default value for property '${propName}' in class '${className}':\n${msg}`
     );
   }
+}
+
+/** `ClassName.Prop` for a Constant property, checked against the running
+ *  code's access. */
+export function classConstantValue(
+  interp: Interpreter,
+  className: string,
+  propName: string
+): RuntimeValue {
+  const table = interp.code.classes;
+  const prop = table.findProperty(className, propName)!;
+  const denied = propertyGetError(table, interp.frame, className, prop);
+  if (denied) throw denied;
+  return constantPropertyValue(interp, prop);
+}
+
+/** A property's default value (a Constant property's value), or undefined
+ *  when it declares none. */
+export function propertyDefaultValue(
+  interp: Interpreter,
+  prop: PropertyInfo
+): RuntimeValue | undefined {
+  if (prop.constant) return constantPropertyValue(interp, prop);
+  const info = interp.code.classes.get(prop.definingClass);
+  if (!prop.defaultExpr || !info) return undefined;
+  return evalPropertyDefault(
+    interp,
+    prop.definingClass,
+    info,
+    prop.name,
+    prop.defaultExpr
+  );
+}
+
+/** The value of a Constant property: its default, evaluated on first use
+ *  and then shared by every access (`Class.Prop`, `obj.Prop`). */
+export function constantPropertyValue(
+  interp: Interpreter,
+  prop: PropertyInfo
+): RuntimeValue {
+  const key = `${prop.definingClass}\0${prop.name}`;
+  const cached = interp.constantValues.get(key);
+  if (cached !== undefined) return cached;
+  if (interp.constantsInProgress.has(key))
+    throw new RuntimeError(
+      `Circular definition of the Constant property '${prop.name}' in class '${prop.definingClass}'.`
+    );
+  const info = interp.code.classes.get(prop.definingClass)!;
+  interp.constantsInProgress.add(key);
+  let value: RuntimeValue;
+  try {
+    value = prop.defaultExpr
+      ? evalPropertyDefault(
+          interp,
+          prop.definingClass,
+          info,
+          prop.name,
+          prop.defaultExpr
+        )
+      : RTV.tensor(allocFloat64Array(0), [0, 0]);
+  } finally {
+    interp.constantsInProgress.delete(key);
+  }
+  // The cache is a slot holding the value for the rest of the run.
+  incref(value);
+  interp.constantValues.set(key, value);
+  return value;
 }
 
 // ── Methods ──────────────────────────────────────────────────────────────
@@ -244,6 +399,17 @@ export function interpretClassMethod(
   );
   const classInfo = interp.code.classes.get(definingClass);
   if (!classInfo) throw new RuntimeError(`Class '${definingClass}' not found`);
+
+  const method = interp.code.classes.findMethod(className, methodName);
+  if (method) {
+    const denied = methodAccessError(
+      interp.code.classes,
+      interp.frame,
+      className,
+      method
+    );
+    if (denied) throw denied;
+  }
 
   if (methodName === classInfo.constructorName) {
     return interpretConstructor(interp, classInfo, args, nargout);
@@ -377,106 +543,28 @@ function convertToEnum(
 
 // ── Introspection ────────────────────────────────────────────────────────
 
-/** Public (GetAccess public) property names of a class, including inherited
- *  ones, in declaration order. A Properties block whose `Access` or
- *  `GetAccess` is `private`/`protected` is excluded — matching MATLAB's
- *  `properties(obj)`, which lists only publicly-gettable properties. Returns
- *  undefined when `className` is not a known class. */
+/** The properties `properties` and `fieldnames` list: publicly readable,
+ *  not Hidden, own before inherited (Constant and Dependent included). A
+ *  subclass of MException also has MException's properties. Undefined when
+ *  `className` is not a known class. */
 export function classPublicProperties(
   interp: Interpreter,
   className: string
 ): string[] | undefined {
   if (className === MEXCEPTION_CLASS) return [...MEXCEPTION_PROPERTIES];
-  const self = interp.code.classes.get(className);
-  if (!self) return undefined;
-  const out: string[] = [];
-  const seen = new Set<string>();
-  for (const info of interp.code.classes.lineage(self)) {
-    const ast = info.ast;
-    if (ast) {
-      for (const member of ast.members) {
-        if (member.type !== "Properties") continue;
-        const hidden = member.attributes.some(a => {
-          const n = a.name.toLowerCase();
-          if (n !== "access" && n !== "getaccess") return false;
-          const val = (a.value ?? "").toLowerCase();
-          return val === "private" || val === "protected";
-        });
-        if (hidden) continue;
-        for (const pn of member.names) {
-          if (!seen.has(pn)) {
-            seen.add(pn);
-            out.push(pn);
-          }
-        }
-      }
-    }
-  }
-  // A subclass of MException inherits its properties.
-  if (interp.code.classes.ancestors(className).includes(MEXCEPTION_CLASS)) {
-    for (const pn of MEXCEPTION_PROPERTIES) if (!seen.has(pn)) out.push(pn);
-  }
+  const classes = interp.code.classes;
+  if (!classes.get(className)) return undefined;
+  const out = classes.publicProperties(className).map(p => p.name);
+  if (classes.ancestors(className).includes(MEXCEPTION_CLASS))
+    for (const pn of MEXCEPTION_PROPERTIES) if (!out.includes(pn)) out.push(pn);
   return out;
 }
 
-/** Methods inherited from the built-in `handle` class. */
-const HANDLE_CLASS_METHODS = [
-  "addlistener",
-  "delete",
-  "eq",
-  "findobj",
-  "findprop",
-  "ge",
-  "gt",
-  "isvalid",
-  "le",
-  "listener",
-  "lt",
-  "ne",
-  "notify",
-];
-
-/** Public method names of a class (instance and static methods, the
- *  constructor, @folder method files), including inherited ones. Methods in
- *  a block with private/protected Access are excluded, matching MATLAB's
- *  `ismethod`. Returns undefined when `className` is not a known class. */
+/** The methods `methods` and `ismethod` report (see
+ *  `ClassTable.publicMethodNames`); undefined for an unknown class. */
 export function classPublicMethods(
   interp: Interpreter,
   className: string
 ): Set<string> | undefined {
-  const self = interp.code.classes.get(className);
-  if (!self) return undefined;
-  const out = new Set<string>();
-  if (self.constructorName) out.add(self.constructorName);
-  for (const info of interp.code.classes.lineage(self)) {
-    const ast = info.ast;
-    if (ast) {
-      for (const member of ast.members) {
-        if (member.type !== "Methods") continue;
-        const hidden = member.attributes.some(a => {
-          if (a.name.toLowerCase() !== "access") return false;
-          const val = (a.value ?? "").toLowerCase();
-          return val !== "public";
-        });
-        if (hidden) continue;
-        const names = [
-          ...member.body.flatMap(m => (m.type === "Function" ? [m.name] : [])),
-          ...(member.signatures ?? []).map(sig => sig.name),
-        ];
-        for (const n of names) {
-          // skip property accessors (get.X / set.X) and superclass ctors
-          if (n.includes(".") || (n === info.name && n !== className)) continue;
-          out.add(n);
-        }
-      }
-    } else {
-      for (const n of info.methodNames) out.add(n);
-      for (const n of info.staticMethodNames) out.add(n);
-    }
-    for (const n of info.externalMethodFiles.keys())
-      if (n !== info.name || info.qualifiedName === className) out.add(n);
-  }
-  if (interp.code.classes.isHandleClass(self))
-    for (const n of HANDLE_CLASS_METHODS) out.add(n);
-  return out;
+  return interp.code.classes.publicMethodNames(className);
 }

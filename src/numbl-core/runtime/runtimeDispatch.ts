@@ -50,6 +50,7 @@ import {
 import { ensureRuntimeValue } from "./runtimeHelpers.js";
 import type { Runtime } from "./runtime.js";
 import { allocFloat64Array } from "./alloc.js";
+import { readableProperty } from "./runtimeMemberAccess.js";
 import { coerceToTensor } from "../helpers/shape-utils.js";
 
 // ── Builtin invocation ──────────────────────────────────────────────────
@@ -399,8 +400,18 @@ export function methodDispatch(
       }
       // Class instance: property access or method call
       if (firstRV && isRuntimeClassInstance(firstRV)) {
+        // A property the running code may not read goes to an overloaded
+        // subsref (below), or raises MATLAB's access error.
+        const prop = readableProperty(rt, firstRV.className, name);
+        if (prop !== "subsref" && prop?.constant) {
+          const value = rt.constantPropertyValue!(prop);
+          const remaining = args.slice(1);
+          return remaining.length > 0
+            ? rt.index(value, remaining, nargout)
+            : value;
+        }
         // Try field access first
-        if (firstRV.fields.has(name)) {
+        if (prop !== "subsref" && firstRV.fields.has(name)) {
           const fieldVal = mGetField(firstRV, name);
           const remaining = args.slice(1);
           if (remaining.length > 0) {
