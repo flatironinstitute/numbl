@@ -1,17 +1,16 @@
 /**
  * MATLAB-style warnings from helper code that has no Runtime handle.
  *
- * The Runtime installs a sink that routes messages through its output
- * channel ("Warning: <msg>"); before a Runtime exists, messages fall back
- * to console.warn.
+ * A message goes to the active runtime's output ("Warning: <msg>"); with no
+ * runtime active it falls back to console.warn.
  */
 
-let sink: (msg: string) => void = msg => console.warn("Warning: " + msg);
-
-export function setWarningSink(fn: (msg: string) => void): void {
-  sink = fn;
-}
+import { getCurrentRuntime } from "../runtime/refcount.js";
 
 export function emitWarning(msg: string): void {
-  sink(msg);
+  const rt = getCurrentRuntime() as {
+    output?: (text: string) => void;
+  } | null;
+  if (rt?.output) rt.output("Warning: " + msg + "\n");
+  else console.warn("Warning: " + msg);
 }

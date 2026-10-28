@@ -225,8 +225,8 @@ function execute(id: number, code: string) {
       },
     });
   } catch (error: unknown) {
-    // On error (or interrupt) the workspace state is left unchanged, so
-    // variables from before the run survive the abort.
+    // On error (or interrupt) the workspace survives, keeping what the run
+    // did before it stopped (as at the MATLAB prompt).
     const { message, cancelled } = formatExecuteError(error, code);
     post({
       type: "executeResult",

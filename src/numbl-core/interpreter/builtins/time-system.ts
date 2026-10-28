@@ -13,13 +13,14 @@ import { allocFloat64Array } from "../../runtime/alloc.js";
 
 // ── tic / toc ───────────────────────────────────────────────────────────
 
-let ticTime = 0;
+// The stopwatch is per session (`SessionState.ticTime`).
 
 builtin({
   name: "tic",
   nargin: 0,
-  apply: (_args, nargout) => {
-    ticTime = performance.now();
+  apply: (_args, nargout, ctx) => {
+    const ticTime = performance.now();
+    ctx.rt.session.ticTime = ticTime;
     // Bare `tic;` starts the stopwatch and produces nothing: MATLAB does
     // not set `ans`.
     if (nargout === 0) return undefined;
@@ -33,7 +34,7 @@ builtin({
   apply: (args, nargout, ctx) => {
     let startSeconds: number;
     if (args.length === 0) {
-      startSeconds = ticTime / 1000;
+      startSeconds = ctx.rt.session.ticTime / 1000;
     } else {
       const h = args[0];
       if (typeof h !== "number")

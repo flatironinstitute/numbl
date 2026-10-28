@@ -17,6 +17,7 @@ import {
   rngRandom,
   boxMullerRandom,
   fillRandn,
+  fillRand,
   seedRng,
   setRngShuffle,
   setRngSeed,
@@ -185,7 +186,7 @@ function registerRandBuiltin(
   });
 }
 
-registerRandBuiltin("rand", rngRandom);
+registerRandBuiltin("rand", rngRandom, fillRand);
 registerRandBuiltin("randn", boxMullerRandom, fillRandn);
 
 // ── randi ───────────────────────────────────────────────────────────────
@@ -229,8 +230,8 @@ builtin({
     const shape = sizeArgs("randi", shapeArgs);
     const n = numel(shape);
     const data = allocFloat64Array(n);
-    for (let i = 0; i < n; i++)
-      data[i] = Math.floor(rngRandom() * range) + imin;
+    fillRand(data);
+    for (let i = 0; i < n; i++) data[i] = Math.floor(data[i] * range) + imin;
     return RTV.tensor(data, shape);
   },
 });

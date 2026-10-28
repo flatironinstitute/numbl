@@ -60,8 +60,9 @@ describe("browser session worker", () => {
     expect(r.output).toBe("   6   2\n");
   });
 
-  it("keeps the workspace after a failed execute", () => {
+  it("keeps the workspace after a failed execute, with what it did before the error", () => {
+    expect(execute("b = 7; disp(a)").output).toBe("5\n");
     expect(execute("a = 100; error('boom')").ok).toBe(false);
-    expect(execute("disp(a)").output).toBe("5\n");
+    expect(execute("disp(a); disp(b)").output).toBe("100\n7\n");
   });
 });

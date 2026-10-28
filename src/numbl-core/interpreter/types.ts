@@ -128,9 +128,7 @@ export class Environment {
 
   /** Remove a variable from this scope's local map.
    *  Returns true if the name was present locally. Does not touch
-   *  the parent scope, globals, or persistent registrations — those
-   *  are removed via `clear global` / `clear functions` (not yet
-   *  implemented). */
+   *  the parent scope, globals, or persistent registrations. */
   delete(name: string): boolean {
     if (!this.vars.has(name)) return false;
     const old = this.vars.get(name)!;
@@ -146,6 +144,20 @@ export class Environment {
       for (const v of this.vars.values()) decref(this.rt, v);
     }
     this.vars.clear();
+  }
+
+  /** `clear name`: remove a variable of this scope or its link to a
+   *  global (the global itself stays). */
+  clearVariable(name: string): void {
+    this._globalNames?.delete(name);
+    this.delete(name);
+  }
+
+  /** `clear`: remove every variable of this scope, links to globals
+   *  included. */
+  clearVariables(): void {
+    this._globalNames?.clear();
+    this.clearLocals();
   }
 
   has(name: string): boolean {

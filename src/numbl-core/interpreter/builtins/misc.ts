@@ -43,7 +43,8 @@ import {
 import { allocFloat64Array } from "../../runtime/alloc.js";
 import { convertJsonValue } from "../../runtime/jsonDecode.js";
 import { PARULA_ANCHORS } from "../../plotting/colormaps.js";
-import { incref, decref, getCurrentRuntime } from "../../runtime/refcount.js";
+import { incref, decref } from "../../runtime/refcount.js";
+import type { Runtime } from "../../runtime/runtime.js";
 import { stripClassNameArgs } from "./array-construction.js";
 import { parseShapeArgs } from "../../helpers/shape-utils.js";
 
@@ -614,23 +615,8 @@ builtin({
 
 // ── setappdata / getappdata / rmappdata / isappdata ────────────────────
 
-// Persistent storage keyed by object handle (number).
-// Survives clear all because it's module-level state.
-const appdataStore = new Map<number, Map<string, RuntimeValue>>();
-
-/** Clear all appdata — called at the start of each executeCode to isolate
- *  runs. Decrefs every stored value so the previous run's containers can
- *  hit rc=0 cleanly; if the previous runtime is gone (test harness), we
- *  just drop the JS references and let GC reclaim them. */
-export function resetAppdataStore(): void {
-  const rt = getCurrentRuntime();
-  if (rt) {
-    for (const bucket of appdataStore.values()) {
-      for (const v of bucket.values()) decref(rt, v);
-    }
-  }
-  appdataStore.clear();
-}
+// Storage keyed by object handle (number), per session
+// (`SessionState.appdata`): it survives `clear all` and later runs.
 
 function getObjKey(obj: RuntimeValue): number {
   if (typeof obj === "number") return obj;
@@ -640,11 +626,12 @@ function getObjKey(obj: RuntimeValue): number {
   );
 }
 
-function ensureBucket(key: number): Map<string, RuntimeValue> {
-  let bucket = appdataStore.get(key);
+function ensureBucket(rt: Runtime, key: number): Map<string, RuntimeValue> {
+  const store = rt.session.appdata;
+  let bucket = store.get(key);
   if (!bucket) {
     bucket = new Map();
-    appdataStore.set(key, bucket);
+    store.set(key, bucket);
   }
   return bucket;
 }
@@ -656,7 +643,7 @@ builtin({
   apply: (args, _nargout, ctx) => {
     const key = getObjKey(args[0]);
     const name = toString(args[1]);
-    const bucket = ensureBucket(key);
+    const bucket = ensureBucket(ctx.rt, key);
     // Manage refcount: bucket takes ownership of the value, dropping
     // any prior occupant. Without this the bucket holds a dangling
     // reference once the caller's local goes out of scope, and a
@@ -672,9 +659,9 @@ builtin({
 builtin({
   name: "getappdata",
   nargin: [1, 2],
-  apply: args => {
+  apply: (args, _nargout, ctx) => {
     const key = getObjKey(args[0]);
-    const bucket = appdataStore.get(key);
+    const bucket = ctx.rt.session.appdata.get(key);
     if (args.length === 2) {
       const name = toString(args[1]);
       if (!bucket || !bucket.has(name))
@@ -695,7 +682,7 @@ builtin({
   apply: (args, _nargout, ctx) => {
     const key = getObjKey(args[0]);
     const name = toString(args[1]);
-    const bucket = appdataStore.get(key);
+    const bucket = ctx.rt.session.appdata.get(key);
     if (bucket) {
       const old = bucket.get(name);
       if (bucket.delete(name) && old !== undefined) decref(ctx.rt, old);
@@ -706,10 +693,10 @@ builtin({
 builtin({
   name: "isappdata",
   nargin: 2,
-  apply: args => {
+  apply: (args, _nargout, ctx) => {
     const key = getObjKey(args[0]);
     const name = toString(args[1]);
-    const bucket = appdataStore.get(key);
+    const bucket = ctx.rt.session.appdata.get(key);
     return !!(bucket && bucket.has(name));
   },
 });

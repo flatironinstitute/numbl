@@ -114,6 +114,10 @@ export class Interpreter {
    *  compiled C exits the process, so it can't be caught. */
   tryDepth: number = 0;
 
+  /** @internal The base workspace outlives the run (it is a session's):
+   *  what a unit assigned there before an error stays observable. */
+  baseWorkspacePersists = false;
+
   /** @internal Constant property values by "definingClass\0name",
    *  evaluated on first use (`constantPropertyValue`). */
   readonly constantValues = new Map<string, RuntimeValue>();
@@ -124,8 +128,9 @@ export class Interpreter {
   readonly metaClasses = new Map<string, RuntimeValue>();
   /** @internal meta.property objects by property (`metaPropertyFor`). */
   readonly metaProperties = new Map<PropertyInfo, RuntimeClassInstance>();
-  /** @internal Event listeners by source object (`events.ts`). */
-  readonly events = new EventRegistry();
+  /** @internal Event listeners by source object (`events.ts`): the
+   *  session's, so listeners outlive the run. */
+  readonly events: EventRegistry;
 
   /** @internal Pre-built line break tables for offset→line lookup per file. */
   lineTableCache = new Map<string, number[]>();
@@ -171,26 +176,19 @@ export class Interpreter {
    *  docs/developer_reference/executors.md. */
   readonly registry: import("../executors/registry.js").Registry;
 
-  constructor(
-    rt: Runtime,
-    code: CodeIndex,
-    initialVariableValues?: Record<string, RuntimeValue>
-  ) {
+  /** `baseEnv` is the base workspace: the session's, which outlives the
+   *  run (see SessionState), or a fresh one. */
+  constructor(rt: Runtime, code: CodeIndex, baseEnv = new Environment()) {
     this.rt = rt;
     this.code = code;
-    const env = new Environment();
-    env.rt = rt;
-    if (initialVariableValues) {
-      for (const [name, value] of Object.entries(initialVariableValues)) {
-        env.set(name, value);
-      }
-    }
+    this.events = rt.session.events ??= new EventRegistry();
+    baseEnv.rt = rt;
     this.baseFrame = new CallFrame(
       code,
       code.mainFileName,
       undefined,
       undefined,
-      env,
+      baseEnv,
       undefined,
       undefined
     );
