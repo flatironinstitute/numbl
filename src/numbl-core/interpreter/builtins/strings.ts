@@ -886,17 +886,17 @@ builtin({
   },
 });
 
-// NOTE: the real str2num is the special builtin in
-// interpreterSpecialBuiltins.ts, which evaluates the text as `[<text>]`
-// (handling vectors / matrices / arithmetic). It intercepts before this
-// builtin, which only stays registered for builtin-listing/type presence
-// and the degenerate fallback.
+// MATLAB's str2num evaluates the text as the expression `[<text>]`, so it
+// handles vectors, matrices and arithmetic, not just a single number. The
+// text is evaluated in the calling scope; on failure the result is [] and
+// the status false.
 builtin({
   name: "str2num",
   nargin: [1, 3],
   nargout: 2,
   mfile: true,
-  apply: (args, nargout) => {
+  scope: true,
+  apply: (args, nargout, { scope }) => {
     if (args.length > 1)
       throw unsupportedFormError("str2num", "the 'Evaluation' option");
     if (!isText(args[0]))
@@ -904,9 +904,30 @@ builtin({
         "MATLAB:str2num:InvalidArgument",
         "Input must be a character vector or string scalar."
       );
-    const n = Number(toString(args[0]));
-    const ok = !Number.isNaN(n);
-    const x = ok ? RTV.num(n) : RTV.tensor(allocFloat64Array(0), [0, 0]);
+    // Capture the result through a temp variable rather than eval's return
+    // value: a bare literal result (e.g. `[42]`) does not come back through
+    // the expression path.
+    const tmp = "__numbl_str2num_result__";
+    const saved = scope.env.get(tmp);
+    let x: RuntimeValue | undefined;
+    try {
+      scope.evalText(`${tmp} = [${toString(args[0])}];`);
+      x = scope.env.get(tmp);
+    } catch {
+      x = undefined;
+    } finally {
+      if (saved !== undefined) scope.env.set(tmp, saved);
+      else scope.env.delete(tmp);
+    }
+    const ok = x !== undefined;
+    if (x === undefined) x = RTV.tensor(allocFloat64Array(0), [0, 0]);
+    // The `[...]` wrapper yields a tensor even for one value; numbl
+    // distinguishes a scalar from a 1x1 tensor, so demote it.
+    else if (isRuntimeTensor(x) && x.data.length === 1)
+      x =
+        x.imag && x.imag[0] !== 0
+          ? RTV.complex(x.data[0], x.imag[0])
+          : RTV.num(x.data[0]);
     return nargout >= 2 ? [x, RTV.logical(ok)] : x;
   },
 });

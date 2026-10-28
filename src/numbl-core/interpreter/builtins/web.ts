@@ -11,7 +11,7 @@ import {
 } from "../../runtime/index.js";
 import { isRuntimeStruct } from "../../runtime/types.js";
 import type { WebOptions } from "../../fileIOAdapter.js";
-import { convertJsonValue } from "./misc.js";
+import { convertJsonValue } from "../../runtime/jsonDecode.js";
 import { requireFileIO } from "./filesystem.js";
 import { builtin } from "./builtin.js";
 

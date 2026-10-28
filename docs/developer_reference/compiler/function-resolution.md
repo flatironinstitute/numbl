@@ -8,7 +8,7 @@ A `Scope` (`scope.ts`) is where a name is looked up from: the `CodeIndex`, the r
 
 ## Bare names: `resolveName`
 
-`resolveName(name, scope, opts)` returns a `NameResolution`, a discriminated union whose kinds are `variable`, `constant`, `nested`, `special` (an interpreter special such as `eval` or `exist`), `builtin`, `mainLocal`, `fileLocal`, `private`, `classMethod`, `staticMethod`, `classConstructor`, `packageFunction`, `jsUserFunction`, `workspaceFunction`, and `notFound`. Callable kinds carry a `ResolvedTarget` that `interpretTarget` runs.
+`resolveName(name, scope, opts)` returns a `NameResolution`, a discriminated union whose kinds are `variable`, `constant`, `nested`, `builtin`, `mainLocal`, `fileLocal`, `private`, `classMethod`, `staticMethod`, `classConstructor`, `packageFunction`, `jsUserFunction`, `workspaceFunction`, and `notFound`. Callable kinds carry a `ResolvedTarget` that `interpretTarget` runs.
 
 The precedence is MATLAB's:
 
@@ -20,9 +20,9 @@ The precedence is MATLAB's:
 6. private function of the calling file's folder;
 7. method of the dominant object argument (`InferiorClasses` breaks ties);
 8. workspace function, then `.numbl.js` function, then class constructor;
-9. constant (`pi`, with no arguments), interpreter special, builtin.
+9. constant (`pi`, with no arguments), builtin.
 
-Tiers 3 to 9 are `resolveFunction` (`resolveFunction.ts`), which works on the `FunctionIndex` and caches its result per index, call site and object-argument classes. A workspace `.m`, including the bundled stdlib, shadows a builtin, and `.m` wins over `.numbl.js` in the same tier.
+Tiers 3 to 9 are `resolveFunction` (`resolveFunction.ts`), which works on the `FunctionIndex` and caches its result per index, call site and object-argument classes. A workspace `.m`, including the bundled stdlib, shadows a builtin, and `.m` wins over `.numbl.js` in the same tier. This includes the builtins that work on the calling scope (`eval`, `exist`, `nargin`, ...): they are ordinary builtins, so a user `exist.m` on the path shadows `exist`, much as a folder earlier on MATLAB's path shadows a MATLAB builtin (MATLAB warns when this happens; numbl does not).
 
 Options select the view a consumer needs. `args` supplies the call's arguments (object arguments select methods; no arguments allows a constant). `variables: false` skips variables, as calls do once the caller has ruled them out. `nested: false` skips nested functions: MATLAB's string-named calls (`feval('f')`) do not see them, while `@f`, `nargin('f')`, `exist` and `which` do.
 

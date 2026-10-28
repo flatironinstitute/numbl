@@ -35,9 +35,14 @@ export function bypassesOverload(interp: Interpreter, base: unknown): boolean {
 
 // ── Reads ────────────────────────────────────────────────────────────────
 
+/** `base(indices)`. `nargout` is the number of values the context requests
+ *  (0 for a statement, as for a call by name), which matters when `base` is
+ *  a function handle: `c{i}()` as a statement may call a function with no
+ *  outputs. */
 export function evalIndex(
   interp: Interpreter,
-  expr: Extract<Expr, { type: "Index" }>
+  expr: Extract<Expr, { type: "Index" }>,
+  nargout = 1
 ): unknown {
   let base = evalExpr(interp, expr.base);
   // A brace/member chain can produce a comma-list (array); indexing is
@@ -50,7 +55,12 @@ export function evalIndex(
       );
   }
   const indices = evalIndicesWithEnd(interp, base, expr.indices);
-  return interp.rt.index(base, indices, 1, bypassesOverload(interp, base));
+  return interp.rt.index(
+    base,
+    indices,
+    nargout,
+    bypassesOverload(interp, base)
+  );
 }
 
 export function evalIndexCell(

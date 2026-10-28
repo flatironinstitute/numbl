@@ -5,8 +5,8 @@
  * using the `FunctionIndex`: imports, local functions of the calling file,
  * private functions, class methods (by object argument), workspace and
  * `.numbl.js` functions, class constructors and builtins. `resolveName`
- * (resolveName.ts) layers variables, nested functions, constants and
- * interpreter specials on top. The JIT calls this directly.
+ * (resolveName.ts) layers variables, nested functions and constants on
+ * top. The JIT calls this directly.
  */
 
 import type { FunctionIndex } from "../workspace/functionIndex.js";

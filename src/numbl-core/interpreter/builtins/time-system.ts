@@ -198,6 +198,3 @@ for (const [name, val] of [
 ] as [string, boolean][]) {
   builtin({ name, nargin: 0, apply: () => RTV.logical(val) });
 }
-
-// getenv / setenv are implemented as special builtins in
-// interpreterSpecialBuiltins.ts (they need the SystemAdapter from Runtime).

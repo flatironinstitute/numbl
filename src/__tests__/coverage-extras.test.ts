@@ -6,7 +6,7 @@ import { parseMFile } from "../numbl-core/parser/index.js";
 
 // ── jsUserFunctions ──────────────────────────────────────────────────
 
-/** Helper: resolve an IBuiltin and call its apply with given args. */
+/** Helper: call a loaded JS user function. */
 function callIBuiltin(
   loaded: ReturnType<typeof loadJsUserFunctions>,
   name: string,
@@ -15,13 +15,7 @@ function callIBuiltin(
 ) {
   const entry = loaded.find(b => b.name === name);
   if (!entry) throw new Error(`IBuiltin '${name}' not found`);
-  const ib = entry.builtin;
-  const res = ib.resolve(
-    args.map(() => ({ kind: "number" as const })),
-    nargout
-  );
-  if (!res) throw new Error(`resolve returned null for '${name}'`);
-  return res.apply(args as RuntimeValue[], nargout);
+  return entry.builtin.call(args as RuntimeValue[], nargout);
 }
 
 describe("jsUserFunctions", () => {
@@ -199,14 +193,14 @@ register({ resolve: () => ({ outputTypes: [{ kind: 'number' }], apply: (args) =>
     const jsFiles = [
       {
         name: "myfunc.numbl.js",
-        source: `register({ resolve: () => ({ outputTypes: [], apply: () => wasm }) });`,
+        source: `register(() => wasm);`,
       },
     ];
     const wasmFiles = [
       { name: "myfunc.wasm", source: "", data: new Uint8Array([]) },
     ];
     const fns = loadJsUserFunctions(jsFiles, wasmFiles);
-    expect(callIBuiltin(fns, "myfunc", [])).toBeUndefined();
+    expect(callIBuiltin(fns, "myfunc", [], 0)).toBeUndefined();
   });
 
   it("provides wasm when directive is present and wasm file exists", () => {
@@ -216,7 +210,7 @@ register({ resolve: () => ({ outputTypes: [{ kind: 'number' }], apply: (args) =>
     const jsFiles = [
       {
         name: "/path/to/myfunc.numbl.js",
-        source: `// wasm: mymod\nregister({ resolve: () => ({ outputTypes: [], apply: () => (wasm !== undefined) }) });`,
+        source: `// wasm: mymod\nregister(() => (wasm !== undefined));`,
       },
     ];
     const wasmFiles = [
@@ -230,7 +224,7 @@ register({ resolve: () => ({ outputTypes: [{ kind: 'number' }], apply: (args) =>
     const jsFiles = [
       {
         name: "/path/to/myfunc.numbl.js",
-        source: `register({ resolve: () => ({ outputTypes: [], apply: () => (typeof native === 'undefined') }) });`,
+        source: `register(() => (typeof native === 'undefined'));`,
       },
     ];
     const mockBridge = { load: () => ({ fake: true }) };
@@ -244,7 +238,7 @@ register({ resolve: () => ({ outputTypes: [{ kind: 'number' }], apply: (args) =>
     const jsFiles = [
       {
         name: "/path/to/myfunc.numbl.js",
-        source: `// native: mylib\nregister({ resolve: () => ({ outputTypes: [], apply: () => native }) });`,
+        source: `// native: mylib\nregister(() => native);`,
       },
     ];
     const fns = loadJsUserFunctions(jsFiles, [], mockBridge);
@@ -260,7 +254,7 @@ register({ resolve: () => ({ outputTypes: [{ kind: 'number' }], apply: (args) =>
     const jsFiles = [
       {
         name: "/path/to/myfunc.numbl.js",
-        source: `// native: mylib\nregister({ resolve: () => ({ outputTypes: [], apply: () => (typeof native === 'undefined') }) });`,
+        source: `// native: mylib\nregister(() => (typeof native === 'undefined'));`,
       },
     ];
     const fns = loadJsUserFunctions(jsFiles, [], mockBridge);
@@ -276,7 +270,7 @@ register({ resolve: () => ({ outputTypes: [{ kind: 'number' }], apply: (args) =>
     const jsFiles = [
       {
         name: "/path/to/myfunc.numbl.js",
-        source: `// wasm: mymod\n// native: mylib\nregister({ resolve: () => ({ outputTypes: [], apply: () => [wasm !== undefined, native !== undefined] }) });`,
+        source: `// wasm: mymod\n// native: mylib\nregister(() => [wasm !== undefined, native !== undefined]);`,
       },
     ];
     const wasmFiles = [

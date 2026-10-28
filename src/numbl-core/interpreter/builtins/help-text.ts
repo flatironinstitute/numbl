@@ -3,7 +3,10 @@
  * builtin definitions don't need to be modified.
  */
 
-import { registerBuiltinHelp, type BuiltinHelp } from "./types.js";
+import {
+  registerBuiltinHelp,
+  type BuiltinHelp,
+} from "../../runtime/builtinRegistry.js";
 
 const H: Record<string, BuiltinHelp> = {
   // ── Math ──────────────────────────────────────────────────────────────

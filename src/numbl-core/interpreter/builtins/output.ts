@@ -20,37 +20,98 @@ import {
   isRuntimeStringArray,
 } from "../../runtime/types.js";
 import { sprintfFormat } from "../../helpers/string.js";
-import { getAllBuiltinNames } from "../../helpers/registry.js";
-import { getIBuiltinHelp } from "./types.js";
+import {
+  getAllIBuiltinNames,
+  getIBuiltinHelp,
+  isBuiltin,
+} from "../../runtime/builtinRegistry.js";
 import { builtin } from "./builtin.js";
+
+/** The leading help comment block of a .m source file: the comment lines
+ *  right after the function/classdef declaration (or at the top of a
+ *  script), up to the first non-comment line, with the `%` and one
+ *  following space stripped. */
+function extractMHelp(source: string): string {
+  const lines = source.split(/\r?\n/);
+  let i = 0;
+  // Skip a leading declaration, including its continuation lines.
+  if (i < lines.length && /^\s*(function|classdef)\b/.test(lines[i])) {
+    while (i < lines.length && /\.\.\.\s*(%[^\n]*)?$/.test(lines[i])) i++;
+    i++;
+  }
+  const helpLines: string[] = [];
+  let sawComment = false;
+  while (i < lines.length) {
+    const trimmed = lines[i].trimStart();
+    if (trimmed.startsWith("%")) {
+      let line = trimmed.slice(1);
+      if (line.startsWith(" ")) line = line.slice(1);
+      helpLines.push(line);
+      sawComment = true;
+      i++;
+    } else if (!sawComment && trimmed === "") {
+      i++; // blank lines before the first comment
+    } else {
+      break;
+    }
+  }
+  return helpLines.join("\n");
+}
+
+/** A path-style help target (`+mip/install.m`) as the function name numbl
+ *  uses (`mip.install`); other names are returned unchanged. */
+function helpPathToFuncName(name: string): string {
+  if (!/[/\\]/.test(name) && !name.endsWith(".m")) return name;
+  const parts = name
+    .replace(/\.m$/, "")
+    .split(/[/\\]/)
+    .filter(p => p.length > 0);
+  return parts.map(p => (p.startsWith("+") ? p.slice(1) : p)).join(".");
+}
 
 builtin({
   name: "help",
   mfile: true,
-  apply: (args, nargout, ctx) => {
+  scope: true,
+  apply: (args, nargout, { rt, scope }) => {
     let text = "";
     const emit = (s: string) => {
       text += s;
-      if (nargout === 0) ctx.rt.output(s);
+      if (nargout === 0) rt.output(s);
     };
-    if (args.length === 0) {
-      const names = getAllBuiltinNames().sort();
+    const name = args.length > 0 ? toString(args[0]) : undefined;
+    if (name === undefined) {
+      const names = getAllIBuiltinNames().sort();
       emit("Available builtins:\n");
       emit("  " + names.join(", ") + "\n");
       emit("\nType 'help <name>' for help on a specific builtin.\n");
     } else {
-      const name = toString(args[0]);
       const h = getIBuiltinHelp(name);
-      if (!h) {
-        const allNames = getAllBuiltinNames();
-        if (allNames.includes(name)) {
-          emit(`No help available for '${name}'.\n`);
-        } else {
-          emit(`Unknown function '${name}'.\n`);
-        }
-      } else {
+      // A workspace .m function or class (or a .numbl.js function with
+      // registered help): its leading comment block. Bare names
+      // ("mip.install") and path-style targets ("+mip/install.m") work, as
+      // in MATLAB.
+      let fileHelp = "";
+      if (!h && !isBuiltin(name)) {
+        const funcName = helpPathToFuncName(name);
+        const ws =
+          scope.lookupWorkspaceFile(funcName) ??
+          (funcName !== name ? scope.lookupWorkspaceFile(name) : undefined);
+        if (ws)
+          fileHelp =
+            ws.kind === "jsfunction"
+              ? ws.source.trimEnd()
+              : extractMHelp(ws.source);
+      }
+      if (h) {
         emit(`  ${h.signatures.join("\n  ")}\n\n`);
         emit(`${h.description}\n`);
+      } else if (fileHelp) {
+        emit(fileHelp + "\n");
+      } else if (isBuiltin(name)) {
+        emit(`No help available for '${name}'.\n`);
+      } else {
+        emit(`Unknown function '${name}'.\n`);
       }
     }
     return nargout >= 1 ? RTV.char(text) : undefined;

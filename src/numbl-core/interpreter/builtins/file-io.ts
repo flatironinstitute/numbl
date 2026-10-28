@@ -668,16 +668,13 @@ builtin({
   },
 });
 
-// frewind has no outputs in MATLAB (`x = frewind(fid)` errors). It still
-// accepts one here because the interpreter requests an output from a
-// statement call through a cell element (`c{i}()`); it returns 0.
 builtin({
   name: "frewind",
   nargin: 1,
+  nargout: 0,
   mfile: true,
-  apply: (args, nargout, ctx) => {
+  apply: (args, _nargout, ctx) => {
     requireFiles(ctx.rt).seek(toNumber(args[0]), 0, -1);
-    return nargout >= 1 ? RTV.num(0) : undefined;
   },
 });
 

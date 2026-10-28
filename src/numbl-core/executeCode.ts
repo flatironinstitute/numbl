@@ -95,7 +95,7 @@ export interface BuiltinProfileEntry {
 export interface BuiltinProfileBreakdown {
   /** Calls from the registry fallback (rt.builtins). */
   fallback: BuiltinProfileEntry;
-  /** Calls from the interpreter (IBuiltin.resolve → apply). */
+  /** Calls from the interpreter (invokeBuiltin). */
   interp: BuiltinProfileEntry;
   /** Calls from JIT-compiled code (ib_* helpers). */
   jit: BuiltinProfileEntry;

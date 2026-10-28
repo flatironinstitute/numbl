@@ -10,7 +10,7 @@
  */
 
 import type { AbstractSyntaxTree, Stmt } from "../parser/index.js";
-import type { IBuiltin } from "../interpreter/builtins/index.js";
+import type { IBuiltin } from "../runtime/builtinRegistry.js";
 import type { WorkspaceFile } from "./types.js";
 import { extractClassInfo, makeOldStyleClassInfo } from "./classInfo.js";
 import { ClassTable } from "./classTable.js";

@@ -29,7 +29,7 @@ import { toNumber } from "../runtime/convert.js";
 import { getLapackBridge } from "../native/lapack-bridge.js";
 import { tensorOps, OpCmp } from "../ops/index.js";
 import { linsolveLapack, linsolveComplexLapack } from "./linsolve.js";
-import { applyBuiltin as applyBuiltinFn } from "./check-helpers.js";
+import { getIBuiltin } from "../runtime/builtinRegistry.js";
 import { coerceToTensor } from "./shape-utils.js";
 import { num2strScalar } from "./string.js";
 import {
@@ -1285,7 +1285,7 @@ export function mPow(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
       let n = exp;
       if (n < 0) {
         // A^(-n) = inv(A)^n
-        const invA = applyBuiltinFn("mpower", "inv", [a], 1);
+        const invA = getIBuiltin("inv")!.call([a], 1) as RuntimeValue;
         if (!isRuntimeTensor(invA))
           throw new RuntimeError("mpower: inv returned non-tensor");
         base = invA;

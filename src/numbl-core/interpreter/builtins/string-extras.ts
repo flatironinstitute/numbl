@@ -16,7 +16,7 @@ import { toNumber } from "../../runtime/convert.js";
 import { builtin } from "./builtin.js";
 import { unsupportedFormError } from "./text-args.js";
 import { parseMFile, type Stmt, type Expr } from "../../parser/index.js";
-import { getIBuiltin } from "./types.js";
+import { getIBuiltin } from "../../runtime/builtinRegistry.js";
 import { allocFloat64Array } from "../../runtime/alloc.js";
 
 /** Names of built-in constants, excluded from `symvar` results. */

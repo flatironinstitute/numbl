@@ -19,7 +19,9 @@ import type { WorkspaceFile, NativeBridge } from "./workspace/index.js";
 import { RTV, RuntimeError, toNumber } from "./runtime/index.js";
 import type { RuntimeValue } from "./runtime/types.js";
 import { getCurrentRuntime } from "./runtime/refcount.js";
-import type { IBuiltin } from "./interpreter/builtins/types.js";
+import { isRuntimeClassInstance, isRuntimeStruct } from "./runtime/types.js";
+import type { IBuiltin } from "./runtime/builtinRegistry.js";
+import { inferJitType, type JitType } from "./jitTypes.js";
 
 /** Minimal runtime surface needed to invoke a function handle from JS. */
 interface HandleCaller {
@@ -76,40 +78,88 @@ export interface LoadedJsUserFunction {
 
 type JsApply = (args: RuntimeValue[], nargout: number) => unknown;
 
+/** The older register({ resolve }) form: given argument types, return the
+ *  output types and an apply, or null to reject the arguments. */
+type LegacyResolve = (
+  argTypes: JitType[],
+  nargout: number
+) => {
+  outputTypes: unknown[];
+  apply: (args: RuntimeValue[], nargout: number) => unknown;
+} | null;
+
 /** What a .numbl.js file may pass to register(). */
 type RegisterSpec =
   | JsApply
   | { apply: JsApply; help?: string }
-  | { resolve: IBuiltin["resolve"] };
+  | { resolve: LegacyResolve };
+
+/** The argument type the legacy resolve form sees. Structs and objects
+ *  carry only their kind and class, not their fields. */
+function legacyArgType(v: RuntimeValue): JitType {
+  if (isRuntimeStruct(v)) return { kind: "struct", fields: {} };
+  if (isRuntimeClassInstance(v))
+    return {
+      kind: "class_instance",
+      className: v.className,
+      isHandleClass: v.isHandleClass,
+      fields: {},
+    };
+  return inferJitType(v);
+}
+
+/** Adapt the legacy resolve form to an apply. */
+function applyFromResolve(name: string, resolve: LegacyResolve): JsApply {
+  return (args, nargout) => {
+    const argTypes = args.map(legacyArgType);
+    const resolution = resolve(argTypes, nargout);
+    if (!resolution)
+      throw new RuntimeError(
+        `JS user function '${name}' does not support these argument types: (${argTypes.map(t => t.kind).join(", ")})`
+      );
+    // No output types marks a function with no outputs.
+    if (resolution.outputTypes.length === 0) {
+      if (nargout > 0) throw new RuntimeError("Too many output arguments.");
+      resolution.apply(args, nargout);
+      return undefined;
+    }
+    return resolution.apply(args, nargout);
+  };
+}
 
 /** Convert a register() argument to an IBuiltin plus optional help text. */
 function builtinFromSpec(
   name: string,
   spec: RegisterSpec
 ): { builtin: IBuiltin; help?: string } {
+  let fn: JsApply;
+  let help: string | undefined;
   if (spec && typeof spec === "object" && "resolve" in spec) {
     if (typeof spec.resolve !== "function")
       throw new Error("register(): resolve must be a function");
-    return { builtin: { name, resolve: spec.resolve } };
+    fn = applyFromResolve(name, spec.resolve);
+  } else {
+    const apply = typeof spec === "function" ? spec : spec?.apply;
+    if (typeof apply !== "function")
+      throw new Error(
+        "register() expects a function, or an object with an apply function"
+      );
+    fn = apply;
+    help = typeof spec === "object" ? spec.help : undefined;
+    if (help !== undefined && typeof help !== "string")
+      throw new Error("register(): help must be a string");
   }
-  const fn = typeof spec === "function" ? spec : spec?.apply;
-  if (typeof fn !== "function")
-    throw new Error(
-      "register() expects a function, or an object with an apply function"
-    );
-  const help = typeof spec === "object" ? spec.help : undefined;
-  if (help !== undefined && typeof help !== "string")
-    throw new Error("register(): help must be a string");
-  const apply = (args: RuntimeValue[], nargout: number) => {
-    const result = fn(args, nargout);
-    if (result === undefined && nargout > 0)
-      throw new RuntimeError("Too many output arguments.");
-    return result as RuntimeValue | RuntimeValue[];
-  };
   return {
     builtin: {
       name,
-      resolve: () => ({ outputTypes: [{ kind: "unknown" }], apply }),
+      nargin: [0, Infinity],
+      nargout: [0, Infinity],
+      call: (args, nargout) => {
+        const result = fn(args, nargout);
+        if (result === undefined && nargout > 0)
+          throw new RuntimeError("Too many output arguments.");
+        return result as RuntimeValue | RuntimeValue[] | undefined;
+      },
     },
     help,
   };
@@ -473,7 +523,8 @@ export function loadJsUserFunctions(
         );
       }
 
-      // Wrap resolve with binding status logging (only if directives were present)
+      // Log the binding status on the first call (only if directives were
+      // present).
       if (directives.native || directives.wasm) {
         const parts: string[] = [];
         if (directives.native) {
@@ -484,21 +535,14 @@ export function loadJsUserFunctions(
         }
         const statusMsg = `${funcName}: ${parts.join(", ")}`;
         let logged = false;
-        const origResolve = (builtin as IBuiltin).resolve;
-        (builtin as IBuiltin).resolve = (argTypes, nargout) => {
-          const resolution = origResolve(argTypes, nargout);
-          if (!resolution) return null;
-          const origApply = resolution.apply;
-          return {
-            outputTypes: resolution.outputTypes,
-            apply: (args, n) => {
-              if (!logged) {
-                logged = true;
-                console.log(statusMsg);
-              }
-              return origApply(args, n);
-            },
-          };
+        const ib = builtin as IBuiltin;
+        const call = ib.call;
+        ib.call = (args, n) => {
+          if (!logged) {
+            logged = true;
+            console.log(statusMsg);
+          }
+          return call(args, n);
         };
       }
 

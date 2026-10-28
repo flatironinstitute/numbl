@@ -19,7 +19,7 @@
  *   - callConvention.ts   binding, running and returning from a user function
  *   - oop.ts              classes, constructors, enumerations
  *   - argumentsBlock.ts   `arguments` block defaults and name-value structs
- *   - specialContext.ts   the special builtins' context, eval of text
+ *   - callerScope.ts      the calling scope scoped builtins see, eval of text
  */
 
 import type { AbstractSyntaxTree, Stmt } from "../parser/types.js";
@@ -39,7 +39,8 @@ import { Environment, type ControlSignal } from "./types.js";
 import { CallFrame } from "./callFrame.js";
 import { Registry } from "../executors/registry.js";
 import { execStmt } from "./execStatements.js";
-import { callResolved, declaredNargout, interpretTarget } from "./calls.js";
+import { callResolved, interpretTarget } from "./calls.js";
+import { callerScope } from "./callerScope.js";
 import { callBody } from "./callConvention.js";
 
 // ── Interpreter ──────────────────────────────────────────────────────────
@@ -240,7 +241,7 @@ export class Interpreter {
     this.rt.getClassAncestors = (className: string) =>
       this.code.classes.ancestors(className);
 
-    this.rt.declaredNargout = (name: string) => declaredNargout(this, name);
+    this.rt.callerScope = () => callerScope(this);
   }
 
   /** Run a complete AST (main script). */

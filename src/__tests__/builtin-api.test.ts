@@ -13,7 +13,6 @@ import {
   realScalarArg,
 } from "../numbl-core/interpreter/builtins/args.js";
 import { unaryElemwise } from "../numbl-core/interpreter/builtins/types.js";
-import { registerExtraBuiltinNames } from "../numbl-core/helpers/registry.js";
 import { RuntimeError } from "../numbl-core/runtime/error.js";
 import { RTV } from "../numbl-core/runtime/constructors.js";
 import {
@@ -35,9 +34,8 @@ function caught(fn: () => unknown): RuntimeError {
 describe("builtin() metadata", () => {
   it("normalizes nargin and nargout", () => {
     const ib = makeBuiltin({ name: "t1", nargin: 2, apply: () => 0 });
-    expect(ib.direct!.nargin).toEqual([2, 2]);
-    expect(ib.direct!.nargout).toEqual([0, 1]);
-    expect(ib.direct!.reportedNargin).toBe(2);
+    expect(ib.nargin).toEqual([2, 2]);
+    expect(ib.nargout).toEqual([0, 1]);
 
     const ib2 = makeBuiltin({
       name: "t2",
@@ -45,21 +43,13 @@ describe("builtin() metadata", () => {
       nargout: 2,
       apply: () => 0,
     });
-    expect(ib2.direct!.nargin).toEqual([1, 3]);
-    expect(ib2.direct!.nargout).toEqual([0, 2]);
-    expect(ib2.direct!.reportedNargin).toBe(3);
+    expect(ib2.nargin).toEqual([1, 3]);
+    expect(ib2.nargout).toEqual([0, 2]);
   });
 
-  it("reports -1 for an unbounded nargin, as MATLAB does for zeros", () => {
+  it("defaults to any number of inputs", () => {
     const ib = makeBuiltin({ name: "t3", apply: () => 0 });
-    expect(ib.direct!.nargin).toEqual([0, Infinity]);
-    expect(ib.direct!.reportedNargin).toBe(-1);
-    const ib2 = makeBuiltin({
-      name: "t4",
-      nargin: [1, Infinity],
-      apply: () => 0,
-    });
-    expect(ib2.direct!.reportedNargin).toBe(-1);
+    expect(ib.nargin).toEqual([0, Infinity]);
   });
 
   it("rejects invalid ranges", () => {
@@ -69,14 +59,6 @@ describe("builtin() metadata", () => {
     expect(() =>
       makeBuiltin({ name: "bad", nargout: -1, apply: () => 0 })
     ).toThrow(/invalid nargout/);
-  });
-
-  it("exposes a resolve that accepts any argument types", () => {
-    const ib = makeBuiltin({ name: "t5", nargin: 1, apply: a => a[0] });
-    const r = ib.resolve([{ kind: "cell" }], 1);
-    expect(r).not.toBeNull();
-    expect(r!.outputTypes.length).toBe(1);
-    expect(r!.apply([7], 1)).toBe(7);
   });
 });
 
@@ -88,7 +70,7 @@ describe("builtin() arity checks", () => {
     apply: (args, nargout) =>
       nargout > 1 ? [args[0], args[0]] : (args[0] as RuntimeValue),
   });
-  const call = ib.direct!.call;
+  const call = ib.call;
 
   it("passes valid calls through", () => {
     expect(call([3], 1)).toBe(3);
@@ -115,12 +97,12 @@ describe("builtin() arity checks", () => {
       mfile: true,
       apply: a => a[0],
     });
-    let e = caught(() => mf.direct!.call([1, 2], 1));
+    let e = caught(() => mf.call([1, 2], 1));
     expect(e.message).toBe("Too many input arguments.");
     expect(e.identifier).toBe("MATLAB:TooManyInputs");
-    e = caught(() => mf.direct!.call([1], 2));
+    e = caught(() => mf.call([1], 2));
     expect(e.identifier).toBe("MATLAB:TooManyOutputs");
-    e = caught(() => mf.direct!.call([], 1));
+    e = caught(() => mf.call([], 1));
     expect(e.identifier).toBe("MATLAB:minrhs");
   });
 
@@ -144,15 +126,11 @@ describe("void builtins", () => {
   });
 
   it("discard the result and reject requested outputs", () => {
-    expect(ib.direct!.call([], 0)).toBeUndefined();
+    expect(ib.call([], 0)).toBeUndefined();
     expect(ran).toBe(1);
-    const e = caught(() => ib.direct!.call([], 1));
+    const e = caught(() => ib.call([], 1));
     expect(e.identifier).toBe("MATLAB:maxlhs");
     expect(ran).toBe(1);
-  });
-
-  it("report no output types through resolve", () => {
-    expect(ib.resolve([], 0)!.outputTypes).toEqual([]);
   });
 });
 
@@ -166,7 +144,7 @@ describe("builtin context", () => {
         return ctx.rt ? 1 : 0;
       },
     });
-    const e = caught(() => ib.direct!.call([], 1));
+    const e = caught(() => ib.call([], 1));
     expect(e.message).toBe("no active runtime");
     expect(seenName).toBe("t8");
   });
@@ -186,7 +164,13 @@ describe("registered builtins end to end", () => {
       ctx.rt.output(`said ${String(args[0])}\n`);
     },
   });
-  registerExtraBuiltinNames(["zz_api_echo", "zz_api_say"]);
+  builtin({
+    name: "zz_api_peek",
+    nargin: 1,
+    scope: true,
+    apply: (args, _n, { scope }) =>
+      scope.env.get(String((args[0] as { value: string }).value)) ?? -1,
+  });
 
   const errorOf = (stmt: string) => {
     const res = executeCode(
@@ -225,7 +209,17 @@ describe("registered builtins end to end", () => {
     expect(res.variableValues["ans"]).toBeUndefined();
   });
 
+  it("gives a scoped builtin the calling scope", () => {
+    const res = executeCode(
+      "q = 7; a = zz_api_peek('q'); b = f();\nfunction r = f()\nr = zz_api_peek('q');\nend",
+      { optimization: "0" }
+    );
+    expect(res.variableValues["a"]).toBe(7);
+    expect(res.variableValues["b"]).toBe(-1);
+  });
+
   it("reports nargin(@f) from the metadata", () => {
+    expect(getIBuiltinNargin("zeros")).toBe(-1);
     expect(getIBuiltinNargin("zz_api_echo")).toBe(2);
     expect(getIBuiltinNargin("zz_api_say")).toBe(1);
     expect(getIBuiltinNargin("hash")).toBe(2);

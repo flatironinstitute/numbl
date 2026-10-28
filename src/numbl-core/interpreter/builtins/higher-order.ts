@@ -3,7 +3,7 @@
  * bsxfun, quadgk, subsref, subsasgn, builtin, onCleanup.
  */
 
-import { RTV, toNumber, RuntimeError } from "../../runtime/index.js";
+import { RTV, toNumber, toString, RuntimeError } from "../../runtime/index.js";
 import {
   type RuntimeValue,
   isRuntimeTensor,
@@ -49,30 +49,21 @@ builtin({
     structfunImpl(ctx.rt, nargout, args) as RuntimeValue | RuntimeValue[],
 });
 
+// feval(name, ...) resolves `name` from the calling scope, without nested
+// functions (MATLAB's string-named calls do not see them).
 builtin({
   name: "feval",
   nargin: [1, Infinity],
   nargout: Infinity,
   apply: (args, nargout, ctx) => {
     const fn = args[0];
-    if (isRuntimeFunction(fn)) {
-      if (fn.jsFn) {
-        return (
-          fn.jsFnExpectsNargout
-            ? fn.jsFn(nargout, ...args.slice(1))
-            : fn.jsFn(...args.slice(1))
-        ) as RuntimeValue | RuntimeValue[];
-      }
-      return ctx.rt.dispatch(fn.name, nargout, args.slice(1)) as
+    const rest = args.slice(1);
+    if (isRuntimeFunction(fn))
+      return ctx.rt.index(fn, rest, nargout) as RuntimeValue | RuntimeValue[];
+    if (isRuntimeChar(fn) || isRuntimeString(fn))
+      return ctx.rt.dispatch(toString(fn), nargout, rest) as
         | RuntimeValue
         | RuntimeValue[];
-    }
-    if (isRuntimeChar(fn) || isRuntimeString(fn)) {
-      const name = typeof fn === "string" ? fn : fn.value;
-      return ctx.rt.dispatch(name, nargout, args.slice(1)) as
-        | RuntimeValue
-        | RuntimeValue[];
-    }
     throw new RuntimeError(
       "feval: first argument must be a function handle or name"
     );

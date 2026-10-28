@@ -13,7 +13,7 @@ import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 // Loading the interpreter registers every builtin name.
 import "../src/numbl-core/executeCode.js";
-import { getAllBuiltinNames } from "../src/numbl-core/helpers/registry.js";
+import { getAllIBuiltinNames } from "../src/numbl-core/runtime/builtinRegistry.js";
 import { getAllConstantNames } from "../src/numbl-core/helpers/constants.js";
 
 const OUT_FILE = join(
@@ -30,7 +30,7 @@ function stringConst(name: string, value: string): string {
 }
 
 export function generateBuiltinNames(): string {
-  const functions = [...new Set(getAllBuiltinNames())]
+  const functions = [...new Set(getAllIBuiltinNames())]
     .filter(n => !n.startsWith("__"))
     .sort();
   const constants = [...new Set(getAllConstantNames())].sort();

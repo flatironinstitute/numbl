@@ -5,7 +5,6 @@
 
 import { ensureRuntimeValue } from "../runtime/runtimeHelpers.js";
 import { RuntimeError } from "../runtime/error.js";
-import { inferDispatchType } from "./builtins/types.js";
 import { invokeBuiltin, NOT_A_BUILTIN } from "../runtime/runtimeDispatch.js";
 import {
   resolveName,
@@ -14,14 +13,12 @@ import {
   type NameResolution,
   type ResolvedTarget,
 } from "../resolution/index.js";
-import { FALL_THROUGH } from "./interpreterSpecialBuiltins.js";
 
 import { ReturnSignal } from "./types.js";
 import type { Interpreter } from "./interpreter.js";
 import { callBody, callNestedFunction } from "./callConvention.js";
 import { execStmt } from "./execStatements.js";
 import { instantiateClass, interpretClassMethod } from "./oop.js";
-import { callInterpreterSpecial } from "./specialContext.js";
 
 /** Call the function `name` resolves to in the running frame (a call
  *  expression or bare name; variables are handled by the caller). */
@@ -39,24 +36,6 @@ export function callFunction(
   return callResolved(interp, r, args, nargout);
 }
 
-/** Call a function named by a string (`feval('f', ...)`, runtime dispatch by
- *  name). Like `callFunction`, but, as in MATLAB, nested functions are not
- *  visible. */
-export function callByName(
-  interp: Interpreter,
-  name: string,
-  args: unknown[],
-  nargout: number
-): unknown {
-  interp.rt.checkCancel();
-  const r = resolveName(name, interp.frame, {
-    args,
-    variables: false,
-    nested: false,
-  });
-  return callResolved(interp, r, args, nargout);
-}
-
 /** Call what a name resolved to. */
 export function callResolved(
   interp: Interpreter,
@@ -69,12 +48,6 @@ export function callResolved(
       return callNestedFunction(interp, r.fn, r.env, args, nargout);
     case "constant":
       return r.value;
-    case "special": {
-      const result = callInterpreterSpecial(interp, r.name, args, nargout);
-      if (result !== FALL_THROUGH) return result;
-      if (r.target) return interpretTarget(interp, r.target, args, nargout);
-      break;
-    }
     case "variable":
     case "enumMember":
     case "notFound":
@@ -174,32 +147,16 @@ function interpretJsUserFunction(
   if (!entry) {
     throw new RuntimeError(`JS user function '${target.name}' not found`);
   }
-  const ib = entry.builtin;
   const margs = args.map(a => ensureRuntimeValue(a));
-  const argTypes = margs.map(inferDispatchType);
-  const resolution = ib.resolve(argTypes, nargout);
-  if (!resolution) {
-    const typeNames = argTypes.map(t => t.kind);
-    throw new RuntimeError(
-      `JS user function '${target.name}' does not support these argument types: (${typeNames.join(", ")})`
-    );
-  }
-  // MATLAB: a function declared with no outputs errors if the call site
-  // expects any. Detect via `outputTypes: []`.
-  const isVoid = resolution.outputTypes.length === 0;
-  if (isVoid && nargout > 0) {
-    throw new RuntimeError("Too many output arguments.");
-  }
   // Calls back by name from the function resolve from its file.
   return interp.inFrame(interp.frame.at({ file: entry.fileName }), () => {
-    if (interp.rt.profilingEnabled) {
-      interp.rt.profileEnter("jsUserFunction:interp:" + target.name);
-      const result = resolution.apply(margs, nargout);
+    if (!interp.rt.profilingEnabled) return entry.builtin.call(margs, nargout);
+    interp.rt.profileEnter("jsUserFunction:interp:" + target.name);
+    try {
+      return entry.builtin.call(margs, nargout);
+    } finally {
       interp.rt.profileLeave();
-      return isVoid ? undefined : result;
     }
-    const result = resolution.apply(margs, nargout);
-    return isVoid ? undefined : result;
   });
 }
 

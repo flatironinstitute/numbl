@@ -45,11 +45,7 @@ import { stringArraySubscript, cellBraceElements } from "./indexing.js";
 import { isShared } from "./refcount.js";
 import { scalarSubsOffset } from "./indexPlan.js";
 import { matlabNumToString, numel, valueShape } from "./utils.js";
-import {
-  dictLookup,
-  dictInsertSingle,
-  dictRemove,
-} from "../interpreter/builtins/dictionary.js";
+import { dictLookup, dictInsertSingle, dictRemove } from "./dictionary.js";
 import { COLON_SENTINEL, END_SENTINEL } from "./sentinels.js";
 import {
   isDeferredRange,

@@ -32,9 +32,9 @@ import {
   makeTensor,
   unaryElemwise,
   unaryRealResult,
-  type BuiltinHelp,
   type UnaryElemwiseFns,
 } from "./types.js";
+import type { BuiltinHelp } from "../../runtime/builtinRegistry.js";
 import {
   erfScalar,
   erfcScalar,

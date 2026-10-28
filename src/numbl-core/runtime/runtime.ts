@@ -283,15 +283,15 @@ export class Runtime {
     (nargout: number, args: unknown[]) => unknown
   > = {};
 
+  // The calling scope that builtins declared with `scope: true` see (an
+  // interpreter `CallerScope`, opaque here so the runtime does not depend
+  // on the interpreter). Set by Interpreter.installRuntimeCallbacks().
+  public callerScope: (() => object) | null = null;
+
   // Resolves a function called by name (`dispatch`) from the running code's
   // scope; with `targetClassName`, the method of that class. Set by
   // Interpreter.installRuntimeCallbacks(). Returns a callable taking
   // (nargout, ...args), or null for a builtin or an unknown name.
-  // Declared output count of the user function `name` names in the running
-  // code's scope (backs `nargout('name')`); undefined for builtins and
-  // unknown names. Set by Interpreter.installRuntimeCallbacks().
-  public declaredNargout: ((name: string) => number | undefined) | null = null;
-
   public resolveNamedCall:
     | ((
         name: string,

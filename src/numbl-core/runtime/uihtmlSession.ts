@@ -16,7 +16,7 @@ import type { PlotInstruction } from "../plotting/types.js";
 import { RTV } from "./constructors.js";
 import { pushCurrentRuntime, popCurrentRuntime, decref } from "./refcount.js";
 import { isRuntimeFunction, type RuntimeFunction } from "./types.js";
-import { convertJsonValue } from "../interpreter/builtins/misc.js";
+import { convertJsonValue } from "./jsonDecode.js";
 
 export interface UihtmlSession {
   /** True while at least one component still has a registered callback. */
