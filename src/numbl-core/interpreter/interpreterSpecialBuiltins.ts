@@ -3,6 +3,7 @@
  * context (env, callerEnv, etc.) and run before normal function resolution.
  */
 
+import { DEFAULT_TEXT_ENCODING } from "../helpers/textCodec.js";
 import {
   isRuntimeNumber,
   isRuntimeTensor,
@@ -735,7 +736,8 @@ register("run", (ctx, args) => {
   }
   const cwdAfterCd = sys?.cwd() ?? "/";
   try {
-    const code = fio.fileread(resolvedFile);
+    const bytes = ctx.rt.files!.readFileBytes(resolvedFile);
+    const code = DEFAULT_TEXT_ENCODING.decode(bytes, 0, bytes.length).text;
     ctx.evalInLocalScope(code, resolvedFile);
   } finally {
     // Revert cwd only if the script didn't change it

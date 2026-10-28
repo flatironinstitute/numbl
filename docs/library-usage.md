@@ -78,6 +78,8 @@ const result = executeCode(
 );
 ```
 
+To back file I/O with some other store, implement the `FileIOAdapter` type exported from `numbl`. The core handles file identifiers itself (`fopen`, `fgetl`, `fread`, `fseek`, `fprintf` to a file, ...), so `readFile(path)`, `writeFile(path, bytes)`, `existsPath(path)` and `resolvePath(path)` are all it needs for those. Without random access, an open file is held in memory; providing `handles` (`openHandle`, `readAt`, `writeAt`, `size`, `close`, as `NodeFileIOAdapter` does) lets numbl read and write it in place; the other methods enable individual builtins such as `dir`, `copyfile` or `zip`. Files left open stay open across calls that pass the same adapter object. Adapters written against older releases, which implemented `fopen`/`fclose`/`freadBytes`/`fwriteBytes` themselves, still work; numbl now only uses those methods to read and write whole files.
+
 ### Native addon and C-JIT (`initNodePlatform`)
 
 Optimization `"2"` and the native LAPACK addon need some Node-side setup, which the CLI does on startup. Library hosts call `initNodePlatform` once and pass the returned `nativeBridge` along:

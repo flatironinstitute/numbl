@@ -32,7 +32,12 @@ Numbl is organized as a platform-agnostic language core surrounded by thin platf
 | Builtin registry | `IBuiltin` lookup by name; provides type resolution and JIT emission.                                                      |
 | Ops layer        | Dispatches tensor kernels to the native addon or JS fallbacks.                                                             |
 | Stdlib bundle    | `.m` files loaded into every run's workspace.                                                                              |
+| FileTable        | MATLAB fid semantics (fopen modes, positions, EOF, encodings, write-back) over the adapter's byte primitives.              |
 | Platform adapter | Implements file I/O, system info, and output/plot callbacks for one environment.                                           |
+
+## File I/O
+
+All stream semantics live in `numbl-core/fileTable.ts`. A `FileIOAdapter` supplies byte primitives (`readFile`, `writeFile`, `existsPath`, `resolvePath`, and optionally random access through `handles`: `openHandle`/`readAt`/`writeAt`/`size`/`close`) plus the operations behind individual builtins (dir, copyfile, zip, ...). All fids on the same path share one `FileStore` (`numbl-core/fileStore.ts`), so a reader sees another fid's writes at once, as in MATLAB. With `handles` (Node) the store is a `HandleStore`: reads go through a 64 KB cache and writes through a 64 KB buffer, so memory does not grow with file size. Without them (the browser VFS) it is a `MemoryStore` holding the whole file. Buffered writes reach the host on `fclose`, before reads, before any other adapter call (the runtime sees the adapter through `fileIOView`, which flushes first), and when `executeCode` returns. There is one table per adapter object, so fids stay open across runs that reuse the adapter (the CLI REPL). Adapters that predate this and implement only the old `fopen`/`freadBytes`/... methods still work: the table emulates `readFile`/`writeFile` with them.
 
 ## Data flow
 

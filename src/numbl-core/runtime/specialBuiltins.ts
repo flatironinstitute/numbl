@@ -26,6 +26,7 @@ import {
   isRuntimeStructArray,
   isRuntimeSparseMatrix,
   isRuntimeStringArray,
+  RuntimeChar,
   type RuntimeTensor,
 } from "../runtime/types.js";
 import {
@@ -35,7 +36,12 @@ import {
 } from "./registerSpecial.js";
 import { sprintfFormat } from "../../numbl-core/helpers/string.js";
 import { scanFormat } from "../helpers/scanFormat.js";
+import {
+  DEFAULT_TEXT_ENCODING,
+  lookupTextEncoding,
+} from "../helpers/textCodec.js";
 import { ensureRuntimeValue } from "./runtimeHelpers.js";
+import type { FileIOAdapter } from "../fileIOAdapter.js";
 import {
   arrayfunImpl as _arrayfunImpl,
   cellfunImpl as _cellfunImpl,
@@ -262,6 +268,7 @@ registerSpecial("warning", (nargout, args, rt) => {
 
 registerSpecial("fprintf", (nargout, args, rt) => {
   let output = "";
+  let count: number | undefined;
   if (args.length >= 1) {
     const margs = args.map(a => ensureRuntimeValue(a));
 
@@ -287,14 +294,14 @@ registerSpecial("fprintf", (nargout, args, rt) => {
     if (fid === 1 || fid === 2) {
       rt.output(output);
     } else {
-      if (!rt.fileIO)
+      if (!rt.files)
         throw new RuntimeError("File I/O is not available in this environment");
-      rt.fileIO.fwrite(fid, output);
+      count = rt.files.writeText(fid, output);
     }
   }
   // MATLAB: called as a statement, fprintf does not set `ans`.  Only
   // surface the byte count when the caller asks for it.
-  return nargout >= 1 ? output.length : undefined;
+  return nargout >= 1 ? (count ?? output.length) : undefined;
 });
 
 registerSpecial("arrayfun", (nargout, args, rt) => {
@@ -431,52 +438,84 @@ const requireFileIO = () => {
   return io;
 };
 
-registerSpecial("fopen", (_nargout, args) => {
-  const io = requireFileIO();
+const requireFiles = () => {
+  const files = currentRuntime().files;
+  if (!files)
+    throw new RuntimeError("File I/O is not available in this environment");
+  return files;
+};
+
+const isTextArg = (v: RuntimeValue) => isRuntimeChar(v) || isRuntimeString(v);
+
+/** Open fids as fopen('all') / openedFiles return them: a row vector, or
+ *  0x0 when none are open. */
+const openFidsValue = (): RuntimeValue => {
+  const fids = requireFiles().openFids();
+  return fids.length === 0
+    ? RTV.tensor(allocFloat64Array(0), [0, 0])
+    : RTV.tensor(allocFloat64Array(fids), [1, fids.length]);
+};
+
+registerSpecial("fopen", (nargout, args) => {
+  const files = requireFiles();
   const margs = args.map(a => ensureRuntimeValue(a));
   if (margs.length < 1)
     throw new RuntimeError("fopen requires at least 1 argument");
-  const filename = toString(margs[0]);
-  const permission = margs.length >= 2 ? toString(margs[1]) : "r";
-  return RTV.num(io.fopen(filename, permission));
+  const first = margs[0];
+  if (!isTextArg(first)) {
+    // [filename, permission, machinefmt, encoding] = fopen(fid)
+    const info = files.info(toNumber(first));
+    const out = info
+      ? [
+          RTV.char(info.name),
+          RTV.char(info.permission),
+          RTV.char(info.machinefmt),
+          RTV.char(info.encoding),
+        ]
+      : [RTV.char(""), RTV.char(""), RTV.char(""), RTV.char("")];
+    return nargout <= 1 ? out[0] : out.slice(0, nargout);
+  }
+  const filename = toString(first);
+  if (filename === "all" && margs.length === 1) return openFidsValue();
+  const opt = (i: number) =>
+    margs.length > i ? toString(margs[i]) : undefined;
+  const { fid, message } = files.open(filename, opt(1), opt(2), opt(3));
+  return nargout <= 1 ? RTV.num(fid) : [RTV.num(fid), RTV.char(message)];
 });
 
+registerSpecial("openedFiles", () => openFidsValue());
+
 registerSpecial("fclose", (_nargout, args) => {
-  const io = requireFileIO();
+  const files = requireFiles();
   const margs = args.map(a => ensureRuntimeValue(a));
   if (margs.length < 1) throw new RuntimeError("fclose requires 1 argument");
   const arg = margs[0];
-  if (isRuntimeChar(arg) || isRuntimeString(arg)) {
-    const s = toString(arg);
-    if (s === "all") return RTV.num(io.fclose("all"));
+  if (isTextArg(arg)) {
+    if (toString(arg) === "all") return RTV.num(files.closeAll());
     throw new RuntimeError("fclose: invalid argument");
   }
-  return RTV.num(io.fclose(toNumber(arg)));
+  return RTV.num(files.close(toNumber(arg)));
 });
 
-registerSpecial("fgetl", (_nargout, args) => {
-  const io = requireFileIO();
-  const margs = args.map(a => ensureRuntimeValue(a));
-  if (margs.length < 1) throw new RuntimeError("fgetl requires 1 argument");
-  const result = io.fgetl(toNumber(margs[0]));
-  return typeof result === "number" ? RTV.num(result) : RTV.char(result);
-});
-
-registerSpecial("fgets", (_nargout, args) => {
-  const io = requireFileIO();
-  const margs = args.map(a => ensureRuntimeValue(a));
-  if (margs.length < 1) throw new RuntimeError("fgets requires 1 argument");
-  const result = io.fgets(toNumber(margs[0]));
-  return typeof result === "number" ? RTV.num(result) : RTV.char(result);
-});
+const lineReader = (name: string, keepNewline: boolean) =>
+  registerSpecial(name, (_nargout, args) => {
+    const files = requireFiles();
+    const margs = args.map(a => ensureRuntimeValue(a));
+    if (margs.length < 1) throw new RuntimeError(`${name} requires 1 argument`);
+    if (margs.length > (keepNewline ? 2 : 1))
+      throw new RuntimeError("Too many input arguments.");
+    const maxChars = margs.length > 1 ? toNumber(margs[1]) : undefined;
+    const result = files.readLine(toNumber(margs[0]), keepNewline, maxChars);
+    return result === -1 ? RTV.num(-1) : RTV.char(result);
+  });
+lineReader("fgetl", false);
+lineReader("fgets", true);
 
 registerSpecial("fscanf", (nargout, args) => {
-  const io = requireFileIO();
+  const files = requireFiles();
   const margs = args.map(a => ensureRuntimeValue(a));
   if (margs.length < 2)
     throw new RuntimeError("fscanf requires at least 2 arguments");
-  if (!io.ftell || !io.fseek || !io.freadBytes)
-    throw new RuntimeError("fscanf is not supported in this environment");
   const fid = toNumber(margs[0]);
   const fmt = toString(margs[1]);
 
@@ -493,20 +532,10 @@ registerSpecial("fscanf", (nargout, args) => {
     }
   }
 
-  // Read the remainder of the file (latin-1, one char per byte), scan it,
-  // then reposition after the last consumed character.
-  const pos = io.ftell(fid);
-  const CHUNK = 1 << 16;
-  const chunks: string[] = [];
-  for (;;) {
-    const bytes = io.freadBytes(fid, CHUNK);
-    let s = "";
-    for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
-    chunks.push(s);
-    if (bytes.length < CHUNK) break;
-  }
-  const { results, consumed } = scanFormat(chunks.join(""), fmt, maxCount);
-  io.fseek(fid, pos + consumed, -1);
+  // Scan the rest of the file, then move past what the scan consumed.
+  const rest = files.scanText(fid);
+  const { results, consumed } = scanFormat(rest.text, fmt, maxCount);
+  rest.consume(consumed);
 
   const n = results.length;
   let out: RuntimeValue;
@@ -527,24 +556,49 @@ registerSpecial("fscanf", (nargout, args) => {
 });
 
 registerSpecial("fileread", (_nargout, args) => {
-  const io = requireFileIO();
+  const files = requireFiles();
   const margs = args.map(a => ensureRuntimeValue(a));
   if (margs.length < 1) throw new RuntimeError("fileread requires 1 argument");
-  return RTV.char(io.fileread(toString(margs[0])));
+  const filename = toString(margs[0]);
+  let encoding = DEFAULT_TEXT_ENCODING;
+  for (let i = 1; i + 1 < margs.length; i += 2) {
+    if (toString(margs[i]).toLowerCase() !== "encoding") continue;
+    const name = toString(margs[i + 1]);
+    const found = lookupTextEncoding(name);
+    if (!found)
+      throw new RuntimeError(`fileread: unsupported encoding '${name}'`);
+    encoding = found;
+  }
+  let bytes: Uint8Array;
+  try {
+    bytes = files.readFileBytes(filename);
+  } catch {
+    const err = new RuntimeError(
+      `Could not open file ${filename}. No such file or directory.`
+    );
+    err.identifier = "MATLAB:fileread:cannotOpenFile";
+    throw err;
+  }
+  return RTV.char(encoding.decode(bytes, 0, bytes.length).text);
 });
 
 registerSpecial("feof", (_nargout, args) => {
-  const io = requireFileIO();
+  const files = requireFiles();
   const margs = args.map(a => ensureRuntimeValue(a));
   if (margs.length < 1) throw new RuntimeError("feof requires 1 argument");
-  return RTV.num(io.feof(toNumber(margs[0])));
+  return RTV.num(files.atEof(toNumber(margs[0])) ? 1 : 0);
 });
 
-registerSpecial("ferror", (_nargout, args) => {
-  const io = requireFileIO();
+registerSpecial("ferror", (nargout, args) => {
+  const files = requireFiles();
   const margs = args.map(a => ensureRuntimeValue(a));
   if (margs.length < 1) throw new RuntimeError("ferror requires 1 argument");
-  return RTV.char(io.ferror(toNumber(margs[0])));
+  const clear =
+    margs.length >= 2 && toString(margs[1]).toLowerCase() === "clear";
+  const { message, errnum } = files.error(toNumber(margs[0]), clear);
+  return nargout <= 1
+    ? RTV.char(message)
+    : [RTV.char(message), RTV.num(errnum)];
 });
 
 // ── Binary fread / fwrite / frewind / fseek / ftell ──────────────
@@ -688,6 +742,12 @@ function readValue(
   }
 }
 
+/** Round and saturate to an integer range (NaN -> 0), as fwrite does. */
+function saturate(value: number, lo: number, hi: number): number {
+  if (Number.isNaN(value)) return 0;
+  return Math.min(hi, Math.max(lo, Math.round(value)));
+}
+
 function writeValue(
   dv: DataView,
   offset: number,
@@ -701,40 +761,44 @@ function writeValue(
     case "unsigned char":
     case "char":
     case "char*1":
-      dv.setUint8(offset, value);
+      dv.setUint8(offset, saturate(value, 0, 0xff));
       break;
     case "int8":
     case "schar":
     case "signed char":
     case "integer*1":
-      dv.setInt8(offset, value);
+      dv.setInt8(offset, saturate(value, -0x80, 0x7f));
       break;
     case "uint16":
     case "ushort":
-      dv.setUint16(offset, value, le);
+      dv.setUint16(offset, saturate(value, 0, 0xffff), le);
       break;
     case "int16":
     case "short":
     case "integer*2":
-      dv.setInt16(offset, value, le);
+      dv.setInt16(offset, saturate(value, -0x8000, 0x7fff), le);
       break;
     case "uint32":
     case "uint":
     case "ulong":
-      dv.setUint32(offset, value, le);
+      dv.setUint32(offset, saturate(value, 0, 0xffffffff), le);
       break;
     case "int32":
     case "int":
     case "long":
     case "integer*4":
-      dv.setInt32(offset, value, le);
+      dv.setInt32(offset, saturate(value, -0x80000000, 0x7fffffff), le);
       break;
     case "uint64":
-      dv.setBigUint64(offset, BigInt(Math.round(value)), le);
+      dv.setBigUint64(offset, BigInt(saturate(value, 0, 2 ** 64 - 1)), le);
       break;
     case "int64":
     case "integer*8":
-      dv.setBigInt64(offset, BigInt(Math.round(value)), le);
+      dv.setBigInt64(
+        offset,
+        BigInt(saturate(value, -(2 ** 63), 2 ** 63 - 1)),
+        le
+      );
       break;
     case "single":
     case "float":
@@ -752,10 +816,32 @@ function writeValue(
   }
 }
 
+/** Whether a machine format names little-endian byte order. */
+function isLittleEndian(machinefmt: string): boolean {
+  switch (machinefmt.toLowerCase()) {
+    case "b":
+    case "ieee-be":
+    case "s":
+    case "ieee-be.l64":
+      return false;
+    default:
+      return true;
+  }
+}
+
+/** Precisions whose char data is read and written as encoded text. */
+const TEXT_PRECISIONS = new Set(["char", "char*1"]);
+const SIGNED_BYTE = new Set(["int8", "schar", "signed char", "integer*1"]);
+const BYTE_PRECISIONS = new Set([
+  "uint8",
+  "uchar",
+  "unsigned char",
+  "char",
+  "char*1",
+]);
+
 registerSpecial("fread", (nargout, args) => {
-  const io = requireFileIO();
-  if (!io.freadBytes)
-    throw new RuntimeError("fread is not available in this environment");
+  const files = requireFiles();
   const margs = args.map(a => ensureRuntimeValue(a));
   if (margs.length < 1)
     throw new RuntimeError("fread requires at least 1 argument");
@@ -764,33 +850,33 @@ registerSpecial("fread", (nargout, args) => {
   // Parse arguments: fread(fid), fread(fid,sizeA), fread(fid,precision),
   // fread(fid,sizeA,precision), fread(...,skip), fread(...,machinefmt)
   let sizeA: number[] = [Infinity, 1]; // default: column vector, read all
+  let scalarSize = true;
   let precision = "uint8=>double";
   let skip = 0;
-  let machinefmt = "n";
+  let machinefmt = files.machineFormat(fid);
   let argIdx = 1;
 
   if (argIdx < margs.length) {
     const a = margs[argIdx];
     // Could be sizeA (number/tensor) or precision (string/char)
-    if (isRuntimeChar(a) || isRuntimeString(a)) {
+    if (isTextArg(a)) {
       precision = toString(a);
       argIdx++;
     } else {
       // It's sizeA
       if (isRuntimeTensor(a)) {
         sizeA = Array.from(a.data);
+        scalarSize = sizeA.length < 2;
         argIdx++;
       } else if (isRuntimeNumber(a)) {
         sizeA = [toNumber(a), 1];
+        scalarSize = true;
         argIdx++;
       }
       // Check for precision as next arg
-      if (argIdx < margs.length) {
-        const b = margs[argIdx];
-        if (isRuntimeChar(b) || isRuntimeString(b)) {
-          precision = toString(b);
-          argIdx++;
-        }
+      if (argIdx < margs.length && isTextArg(margs[argIdx])) {
+        precision = toString(margs[argIdx]);
+        argIdx++;
       }
     }
   }
@@ -803,115 +889,89 @@ registerSpecial("fread", (nargout, args) => {
     }
   }
   // Optional machinefmt
-  if (argIdx < margs.length) {
-    const a = margs[argIdx];
-    if (isRuntimeChar(a) || isRuntimeString(a)) {
-      machinefmt = toString(a);
-    }
+  if (argIdx < margs.length && isTextArg(margs[argIdx])) {
+    machinefmt = toString(margs[argIdx]);
   }
 
   const parsed = parsePrecision(precision);
-  const le =
-    machinefmt === "l" ||
-    machinefmt === "ieee-le" ||
-    machinefmt === "ieee-le.l64" ||
-    machinefmt === "a" ||
-    machinefmt === "n" ||
-    machinefmt === "native"; // assume native = little-endian
-
+  const le = isLittleEndian(machinefmt);
   const bytesPerVal = parsed.sourceBytes;
-  const repeatCount = parsed.repeat || 0;
 
   // Compute total elements to read
-  let totalElems: number;
   const m = sizeA[0];
   const n = sizeA.length > 1 ? sizeA[1] : 1;
-  if (m === Infinity && n === 1) {
-    totalElems = Infinity;
-  } else if (n === Infinity) {
-    totalElems = Infinity;
-  } else {
-    totalElems = m * n;
-  }
+  const totalElems = m === Infinity || n === Infinity ? Infinity : m * n;
 
-  // Read data
-  const values: number[] = [];
+  // Values accumulate in a growable Float64Array.
+  let values = new Float64Array(
+    Number.isFinite(totalElems) ? Math.min(totalElems, 1 << 24) : 1 << 16
+  );
   let count = 0;
-
-  if (repeatCount > 0 && skip > 0) {
-    // N*type with skip: read N values, skip `skip` bytes, repeat
-    while (count < totalElems) {
-      const batch = Math.min(repeatCount, totalElems - count);
-      const bytes = io.freadBytes(fid, batch * bytesPerVal);
-      if (bytes.length === 0) break;
-      const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-      const elemsRead = Math.floor(bytes.length / bytesPerVal);
-      for (let i = 0; i < elemsRead; i++) {
-        values.push(readValue(dv, i * bytesPerVal, parsed.sourceType, le));
-        count++;
-      }
-      if (elemsRead < batch) break;
-      // Skip bytes
-      if (count < totalElems) {
-        io.freadBytes(fid, skip);
-      }
-    }
-  } else {
-    // Simple read: read all at once (or in chunks for Inf)
-    if (totalElems === Infinity) {
-      // Read in chunks until EOF
-      const chunkSize = 65536;
-      for (;;) {
-        const bytes = io.freadBytes(fid, chunkSize);
-        if (bytes.length === 0) break;
-        const dv = new DataView(
-          bytes.buffer,
-          bytes.byteOffset,
-          bytes.byteLength
-        );
-        const elemsRead = Math.floor(bytes.length / bytesPerVal);
-        for (let i = 0; i < elemsRead; i++) {
-          values.push(readValue(dv, i * bytesPerVal, parsed.sourceType, le));
-          count++;
-        }
-        if (bytes.length < chunkSize) break;
-      }
+  const reserve = (extra: number) => {
+    if (count + extra <= values.length) return;
+    const grown = new Float64Array(Math.max(count + extra, values.length * 2));
+    grown.set(values.subarray(0, count));
+    values = grown;
+  };
+  const decodeInto = (bytes: Uint8Array) => {
+    const elems = Math.floor(bytes.length / bytesPerVal);
+    reserve(elems);
+    if (bytesPerVal === 1 && !SIGNED_BYTE.has(parsed.sourceType)) {
+      // uint8 and friends: bytes are the values
+      values.set(bytes.subarray(0, elems), count);
     } else {
-      const totalBytes = totalElems * bytesPerVal;
-      const bytes = io.freadBytes(fid, totalBytes);
-      const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-      const elemsRead = Math.floor(bytes.length / bytesPerVal);
-      for (let i = 0; i < elemsRead; i++) {
-        values.push(readValue(dv, i * bytesPerVal, parsed.sourceType, le));
-        count++;
-      }
+      const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.length);
+      for (let i = 0; i < elems; i++)
+        values[count + i] = readValue(
+          dv,
+          i * bytesPerVal,
+          parsed.sourceType,
+          le
+        );
     }
+    count += elems;
+    return elems;
+  };
+
+  if (skip > 0) {
+    // Read `repeat` values (default 1), then skip `skip` bytes; repeat.
+    const batchSize = parsed.repeat || 1;
+    while (count < totalElems) {
+      const batch = Math.min(batchSize, totalElems - count);
+      const got = decodeInto(files.readBytes(fid, batch * bytesPerVal));
+      if (got < batch) break;
+      files.readBytes(fid, skip);
+    }
+  } else if (TEXT_PRECISIONS.has(parsed.sourceType)) {
+    // Characters are decoded with the file's encoding.
+    const text = files.readChars(fid, totalElems);
+    reserve(text.length);
+    for (let i = 0; i < text.length; i++) values[count++] = text.charCodeAt(i);
+  } else {
+    decodeInto(files.readBytes(fid, totalElems * bytesPerVal));
   }
 
-  // If output type is char, return a char array instead of numeric tensor
-  const isCharOutput =
-    parsed.outputType === "char" || parsed.outputType === "char*1";
+  // A scalar size gives a count-by-1 column; [m, n] gives m rows and as
+  // many columns as the data fills, the last one zero-padded.
+  const rows = scalarSize || m === Infinity ? count : m;
+  const cols = count === 0 ? 0 : Math.ceil(count / rows);
+  const shape = count === 0 ? [0, 0] : [rows, cols];
+  let data: Float64Array = values;
+  if (data.length !== rows * cols) {
+    data = allocFloat64Array(rows * cols);
+    data.set(values.subarray(0, count));
+  }
 
-  // Shape the output
   let result: RuntimeValue;
-  if (isCharOutput) {
-    const str = String.fromCharCode(...values);
-    result = RTV.char(str);
-  } else if (count === 0) {
-    result = RTV.tensor(allocFloat64Array(0), [0, 0]);
-  } else if (count === 1 && m !== Infinity && n !== Infinity) {
-    result = RTV.tensor(allocFloat64Array(values), [m, n]);
-  } else if (m === Infinity || (m !== Infinity && n === Infinity)) {
-    if (m === Infinity) {
-      result = RTV.tensor(allocFloat64Array(values), [count, 1]);
-    } else {
-      const cols = Math.ceil(count / m);
-      while (values.length < m * cols) values.push(0);
-      result = RTV.tensor(allocFloat64Array(values), [m, cols]);
-    }
+  if (parsed.outputType === "char" || parsed.outputType === "char*1") {
+    // RuntimeChar stores rows one after another.
+    let str = "";
+    for (let r = 0; r < rows; r++)
+      for (let c = 0; c < cols; c++)
+        str += String.fromCharCode(data[c * rows + r]);
+    result = new RuntimeChar(str, shape);
   } else {
-    while (values.length < m * n) values.push(0);
-    result = RTV.tensor(allocFloat64Array(values.slice(0, m * n)), [m, n]);
+    result = RTV.tensor(data, shape);
   }
 
   if (nargout >= 2) {
@@ -921,37 +981,31 @@ registerSpecial("fread", (nargout, args) => {
 });
 
 registerSpecial("fwrite", (_nargout, args) => {
-  const io = requireFileIO();
-  if (!io.fwriteBytes)
-    throw new RuntimeError("fwrite is not available in this environment");
+  const files = requireFiles();
   const margs = args.map(a => ensureRuntimeValue(a));
   if (margs.length < 2)
     throw new RuntimeError("fwrite requires at least 2 arguments");
 
   const fid = toNumber(margs[0]);
   const data = margs[1];
-  let precision = "uint8";
-  let skip = 0;
-  let machinefmt = "n";
-
-  if (margs.length >= 3) {
-    precision = toString(margs[2]);
-  }
-  if (margs.length >= 4) {
-    skip = toNumber(margs[3]);
-  }
-  if (margs.length >= 5) {
-    machinefmt = toString(margs[4]);
-  }
+  const precision = margs.length >= 3 ? toString(margs[2]) : "uint8";
+  const skip = margs.length >= 4 ? toNumber(margs[3]) : 0;
+  const machinefmt =
+    margs.length >= 5 ? toString(margs[4]) : files.machineFormat(fid);
 
   const parsed = parsePrecision(precision);
-  const le =
-    machinefmt === "l" ||
-    machinefmt === "ieee-le" ||
-    machinefmt === "ieee-le.l64" ||
-    machinefmt === "a" ||
-    machinefmt === "n" ||
-    machinefmt === "native";
+  const le = isLittleEndian(machinefmt);
+
+  // Char data written as bytes is encoded with the file's encoding.
+  if (
+    (isRuntimeChar(data) || isRuntimeString(data)) &&
+    BYTE_PRECISIONS.has(parsed.sourceType) &&
+    skip === 0
+  ) {
+    const str = toString(data);
+    const written = files.writeBytes(fid, files.encodeText(fid, str));
+    return RTV.num(written > 0 ? str.length : 0);
+  }
 
   // Extract values from the data argument
   let values: number[];
@@ -959,6 +1013,8 @@ registerSpecial("fwrite", (_nargout, args) => {
     values = Array.from(data.data);
   } else if (isRuntimeNumber(data)) {
     values = [toNumber(data)];
+  } else if (isRuntimeLogical(data)) {
+    values = [data ? 1 : 0];
   } else if (isRuntimeChar(data) || isRuntimeString(data)) {
     const str = toString(data);
     values = [];
@@ -974,65 +1030,55 @@ registerSpecial("fwrite", (_nargout, args) => {
     for (let i = 0; i < values.length; i++) {
       writeValue(dv, i * bytesPerVal, values[i], parsed.sourceType, le);
     }
-    io.fwriteBytes(fid, buf);
-  } else {
-    // Write with skip bytes between values
-    const valBuf = new Uint8Array(bytesPerVal);
-    const skipBuf = new Uint8Array(skip);
-    const dv = new DataView(valBuf.buffer);
-    for (let i = 0; i < values.length; i++) {
-      writeValue(dv, 0, values[i], parsed.sourceType, le);
-      io.fwriteBytes(fid, valBuf);
-      if (i < values.length - 1) {
-        io.fwriteBytes(fid, skipBuf);
-      }
-    }
+    return RTV.num(files.writeBytes(fid, buf) / bytesPerVal);
   }
-  return RTV.num(values.length);
+  // Skip `skip` bytes before each value (zero-filling past the end).
+  const valBuf = new Uint8Array(bytesPerVal);
+  const dv = new DataView(valBuf.buffer);
+  let count = 0;
+  for (const v of values) {
+    files.skipForWrite(fid, skip);
+    writeValue(dv, 0, v, parsed.sourceType, le);
+    if (files.writeBytes(fid, valBuf) === 0) break;
+    count++;
+  }
+  return RTV.num(count);
 });
 
-registerSpecial("frewind", (_nargout, args) => {
-  const io = requireFileIO();
-  if (!io.fseek)
-    throw new RuntimeError("frewind is not available in this environment");
+registerSpecial("frewind", (nargout, args) => {
+  const files = requireFiles();
   const margs = args.map(a => ensureRuntimeValue(a));
   if (margs.length < 1) throw new RuntimeError("frewind requires 1 argument");
-  io.fseek(toNumber(margs[0]), 0, -1);
-  return RTV.num(0);
+  files.seek(toNumber(margs[0]), 0, -1);
+  return nargout >= 1 ? RTV.num(0) : undefined;
 });
 
 registerSpecial("fseek", (_nargout, args) => {
-  const io = requireFileIO();
-  if (!io.fseek)
-    throw new RuntimeError("fseek is not available in this environment");
+  const files = requireFiles();
   const margs = args.map(a => ensureRuntimeValue(a));
-  if (margs.length < 2)
-    throw new RuntimeError("fseek requires at least 2 arguments");
+  if (margs.length < 3) throw new RuntimeError("Not enough input arguments.");
   const fid = toNumber(margs[0]);
   const offset = toNumber(margs[1]);
-  let origin = -1; // default: bof
-  if (margs.length >= 3) {
-    const o = margs[2];
-    if (isRuntimeChar(o) || isRuntimeString(o)) {
-      const s = toString(o);
-      if (s === "bof") origin = -1;
-      else if (s === "cof") origin = 0;
-      else if (s === "eof") origin = 1;
-      else throw new RuntimeError(`fseek: invalid origin '${s}'`);
-    } else {
-      origin = toNumber(o);
-    }
-  }
-  return RTV.num(io.fseek(fid, offset, origin));
+  const o = margs[2];
+  const name = isTextArg(o) ? toString(o) : String(toNumber(o));
+  const origins: Record<string, number> = {
+    bof: -1,
+    "-1": -1,
+    cof: 0,
+    "0": 0,
+    eof: 1,
+    "1": 1,
+  };
+  if (!(name in origins))
+    throw new RuntimeError(`fseek: invalid origin '${name}'`);
+  return RTV.num(files.seek(fid, offset, origins[name]));
 });
 
 registerSpecial("ftell", (_nargout, args) => {
-  const io = requireFileIO();
-  if (!io.ftell)
-    throw new RuntimeError("ftell is not available in this environment");
+  const files = requireFiles();
   const margs = args.map(a => ensureRuntimeValue(a));
   if (margs.length < 1) throw new RuntimeError("ftell requires 1 argument");
-  return RTV.num(io.ftell(toNumber(margs[0])));
+  return RTV.num(files.tell(toNumber(margs[0])));
 });
 
 registerSpecial("mkdir", (nargout, args) => {
@@ -1304,6 +1350,34 @@ registerSpecial("copyfile", (nargout, args, rt) => {
 
 // ── fileattrib (resolve absolute path + attributes) ─────────────────
 
+/** fileattrib(name, attribs[, users]): only the user write/execute bits
+ *  ('+w', '-w', '+x', '-x', space-separated) are supported. */
+function setFileAttrib(
+  io: FileIOAdapter,
+  path: string,
+  attribs: string,
+  nargout: number
+): RuntimeValue | RuntimeValue[] | undefined {
+  const mode: { write?: boolean; execute?: boolean } = {};
+  for (const tok of attribs.split(/\s+/).filter(t => t)) {
+    const m = /^([+-])([wx])$/.exec(tok);
+    if (!m)
+      throw new RuntimeError(`fileattrib: unsupported attribute '${tok}'`);
+    mode[m[2] === "w" ? "write" : "execute"] = m[1] === "+";
+  }
+  if (!io.setFileMode)
+    throw new RuntimeError("fileattrib is not available in this environment");
+  const ok = io.setFileMode(path, mode);
+  const msg = ok ? "" : `No such file or directory: ${path}`;
+  if (nargout === 0) {
+    if (!ok) throw new RuntimeError(`fileattrib: ${msg}`);
+    return undefined;
+  }
+  return nargout <= 1
+    ? RTV.num(ok ? 1 : 0)
+    : [RTV.num(ok ? 1 : 0), RTV.char(msg), RTV.char("")];
+}
+
 registerSpecial("fileattrib", (nargout, args) => {
   const io = requireFileIO();
   if (!io.fileattrib)
@@ -1312,6 +1386,8 @@ registerSpecial("fileattrib", (nargout, args) => {
   if (margs.length < 1)
     throw new RuntimeError("fileattrib requires at least 1 argument");
   const p = toString(margs[0]);
+  if (margs.length >= 2)
+    return setFileAttrib(io, p, toString(margs[1]), nargout);
   const info = io.fileattrib(p);
   if (nargout === 0) {
     if (!info)

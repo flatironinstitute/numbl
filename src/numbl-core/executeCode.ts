@@ -13,6 +13,7 @@
 import type { RuntimeValue } from "./runtime/index.js";
 import type { PlotInstruction } from "./plotting/types.js";
 import type { FileIOAdapter } from "./fileIOAdapter.js";
+import { fileIOView } from "./fileTable.js";
 import type { SystemAdapter } from "./systemAdapter.js";
 import type { WorkspaceFile } from "../numbl-core/workspace/index.js";
 import { Runtime } from "./runtime/runtime.js";
@@ -179,7 +180,12 @@ export function executeCode(
   }
 
   // ── 2. Index the workspace for function resolution ──────────────────
-  const ws = new Workspace(mainFileName, source, options.fileIO, nativeBridge);
+  const ws = new Workspace(
+    mainFileName,
+    source,
+    options.fileIO && fileIOView(options.fileIO),
+    nativeBridge
+  );
   ws.load(
     workspaceFiles ?? [],
     searchPaths ?? [],
@@ -352,5 +358,8 @@ export function executeCode(
     throw re;
   } finally {
     popCurrentRuntime(rt);
+    // Files left open stay open (a REPL may keep using them), but their
+    // contents reach the host now.
+    rt.files?.flush();
   }
 }
