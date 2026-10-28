@@ -85,3 +85,75 @@ test("numbl/browser sessions execute incrementally with figures", async ({
   expect(result.errorResult.ok).toBe(false);
   expect(result.errorResult.error).toBeTruthy();
 });
+
+interface InterruptScenarioResult {
+  canInput: boolean;
+  answered: { ok: boolean; output: string };
+  stoppedInput: { aborted?: boolean; ms: number };
+  stoppedPause: { aborted?: boolean; ms: number };
+  after: { ok: boolean; output: string };
+}
+
+test("numbl/browser interrupt() stops a blocked input() or pause", async ({
+  page,
+}) => {
+  page.on("pageerror", err => console.error("[pageerror]", err.message));
+  await page.goto("/", { waitUntil: "load" });
+  // coi-serviceworker reloads the page once to enable SharedArrayBuffer.
+  await page.waitForFunction(() => window.crossOriginIsolated, null, {
+    timeout: 30_000,
+  });
+
+  const result = (await page.evaluate(
+    async bundleSource => {
+      const url = URL.createObjectURL(
+        new Blob([bundleSource], { type: "text/javascript" })
+      );
+      const { createNumblSession } = await import(/* @vite-ignore */ url);
+      let prompts = 0;
+      const session = await createNumblSession({
+        mip: false,
+        persistSystem: false,
+        onInputRequest: () => {
+          // Answer the first prompt; leave the second one waiting.
+          if (++prompts === 1) session.provideInput("21");
+        },
+      });
+
+      const answered = await session.execute("x = input('first: '); disp(2*x)");
+
+      const timedInterrupt = async (code: string) => {
+        const pending = session.execute(code);
+        await new Promise(r => setTimeout(r, 300));
+        const t0 = performance.now();
+        session.interrupt();
+        const r = await pending;
+        return { aborted: r.aborted, ms: performance.now() - t0 };
+      };
+      const stoppedInput = await timedInterrupt("y = input('second: ');");
+      const stoppedPause = await timedInterrupt("pause(60)");
+      const after = await session.execute("disp(x + 1)");
+      const canInput = session.canInput;
+      session.dispose();
+      return {
+        canInput,
+        answered: { ok: answered.ok, output: answered.output },
+        stoppedInput,
+        stoppedPause,
+        after: { ok: after.ok, output: after.output },
+      };
+    },
+    readFileSync(bundlePath, "utf-8")
+  )) as InterruptScenarioResult;
+
+  expect(result.canInput).toBe(true);
+  expect(result.answered.ok).toBe(true);
+  expect(result.answered.output).toContain("42");
+  // Both waits end promptly, and the workspace survives.
+  expect(result.stoppedInput.aborted).toBe(true);
+  expect(result.stoppedInput.ms).toBeLessThan(2000);
+  expect(result.stoppedPause.aborted).toBe(true);
+  expect(result.stoppedPause.ms).toBeLessThan(2000);
+  expect(result.after.ok).toBe(true);
+  expect(result.after.output).toContain("22");
+});

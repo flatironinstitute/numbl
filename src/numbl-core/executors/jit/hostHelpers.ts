@@ -25,16 +25,18 @@
  *    interpreter's own path (see `JitNumericHost`). The C-JIT reaches the
  *    same functions through callbacks (`bindHostNumeric`).
  *
- * The unknown-name fallthrough (when `dispatchPlotBuiltin` returns
- * false) is a programmer error: every name the JIT's plot builtin
- * registration covers is in `PLOT_ALL_NAMES`, which is sourced from
- * the same list `dispatchPlotBuiltin` switches on. Throw so the
- * mismatch is loud rather than silently dropping a side effect.
+ * Names `dispatchPlotBuiltin` does not handle are the stubs in
+ * `PLOT_STUB_NAMES` (`drawnow`, `pause`, `xlim`, ...): they run as the
+ * registered builtin, so a JIT'd `pause` sleeps (cancellably) like the
+ * interpreter's. A name that is not a builtin at all is a programmer
+ * error: throw so the mismatch is loud rather than silently dropping a
+ * side effect.
  */
 
 import type { Runtime } from "../../runtime/runtime.js";
 import type { RuntimeValue } from "../../runtime/types.js";
 import { dispatchPlotBuiltin } from "../../plotting/dispatch.js";
+import { invokeBuiltin, NOT_A_BUILTIN } from "../../runtime/runtimeDispatch.js";
 import { RTV } from "../../runtime/constructors.js";
 import { rngRandom } from "../../helpers/prng.js";
 import { jitToNumbl } from "./valueAdapter.js";
@@ -179,6 +181,18 @@ export interface JitHostHelpers {
   loc?: () => number;
 }
 
+/** Run the plot builtin `name` as a statement: through the plot dispatch
+ *  table, or else (a stub) as the registered builtin. */
+function runPlotBuiltin(rt: Runtime, name: string, args: RuntimeValue[]) {
+  if (dispatchPlotBuiltin(name, args, rt.plotInstructions, rt)) return;
+  if (invokeBuiltin(rt, name, 0, args) === NOT_A_BUILTIN) {
+    throw new Error(
+      `JIT plot bridge: '${name}' is neither a plot builtin nor a builtin; ` +
+        `the JIT's plot builtin set is out of sync with numbl's dispatch table`
+    );
+  }
+}
+
 export function buildHostHelpers(rt: Runtime): JitHostHelpers {
   return {
     write: (s: string) => rt.output(s),
@@ -189,19 +203,11 @@ export function buildHostHelpers(rt: Runtime): JitHostHelpers {
     numeric: numericHost,
     cancel: rt.cancelFlag ?? new Int32Array(1),
     plotDispatch: (name: string, args: unknown[]) => {
-      const runtimeArgs: RuntimeValue[] = args.map(a => jitToNumbl(a));
-      const handled = dispatchPlotBuiltin(
+      runPlotBuiltin(
+        rt,
         name,
-        runtimeArgs,
-        rt.plotInstructions,
-        rt
+        args.map(a => jitToNumbl(a))
       );
-      if (!handled) {
-        throw new Error(
-          `JIT plot bridge: dispatchPlotBuiltin rejected '${name}'; ` +
-            `the JIT's plot builtin set is out of sync with numbl's dispatch table`
-        );
-      }
     },
   };
 }
@@ -284,12 +290,7 @@ export function cOutputSink(rt: Runtime): {
         call: string;
         args: unknown[];
       };
-      dispatchPlotBuiltin(
-        rec.call,
-        rec.args.map(decodePlotArg),
-        rt.plotInstructions,
-        rt
-      );
+      runPlotBuiltin(rt, rec.call, rec.args.map(decodePlotArg));
     }
   };
   const flush = (): void => {

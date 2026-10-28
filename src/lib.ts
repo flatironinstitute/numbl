@@ -50,6 +50,24 @@ export { VirtualFileSystem } from "./vfs/VirtualFileSystem.js";
 export { BrowserFileIOAdapter } from "./vfs/BrowserFileIOAdapter.js";
 export { BrowserSystemAdapter } from "./vfs/BrowserSystemAdapter.js";
 export type { UihtmlSession } from "./numbl-core/executeCode.js";
+// Cancellation and blocking waits for a host's own worker: pass
+// createCancelBuffer() as ExecOptions.cancelSAB and stop with signalCancel;
+// a BlockingChannel bound to the same buffer gives a cancellable input().
+export {
+  BlockingChannel,
+  blockingChannelFor,
+  createChannelServer,
+  createCancelBuffer,
+  signalCancel,
+  clearCancel,
+} from "./numbl-core/runtime/blockingChannel.js";
+export type {
+  ChannelMessage,
+  ChannelReply,
+  ChannelServer,
+  ChannelServerHandlers,
+  ChannelTarget,
+} from "./numbl-core/runtime/blockingChannel.js";
 export type {
   WorkspaceFile,
   NativeBridge,

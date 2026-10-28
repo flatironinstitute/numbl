@@ -8,6 +8,7 @@ import type { PlotInstruction } from "./numbl-core/plotting/types.js";
 import type { UihtmlPageEvent } from "./graphics/uihtmlRelay.js";
 import type { OptLevel } from "./numbl-core/executors/plugins.js";
 import type { CallFrame } from "./numbl-core/runtime/error.js";
+import type { ChannelMessage } from "./numbl-core/runtime/blockingChannel.js";
 import type { WorkspaceFile } from "./numbl-core/workspace/index.js";
 import type { VfsChanges } from "./vfs/VirtualFileSystem.js";
 
@@ -35,11 +36,10 @@ export interface RunMessage {
   mainFileName?: string;
   searchPaths?: string[];
   vfsFiles?: WorkerVfsFile[];
-  /** Overrides the input channel set by `set_input_sab` for this run. */
-  inputSAB?: SharedArrayBuffer;
   /** Share variables, hold state and VFS with the REPL (`execute`). */
   persistent?: boolean;
-  /** Int32[0] != 0 cancels the run cooperatively. */
+  /** Cancel buffer (`createCancelBuffer`): Int32[0] != 0 cancels the run
+   *  cooperatively; input() blocks on the channel bound to it. */
   cancelSAB?: SharedArrayBuffer;
 }
 
@@ -55,7 +55,8 @@ export type ToNumblWorker =
       vfsFiles?: WorkerVfsFile[];
       searchPaths?: string[];
     }
-  | { type: "set_input_sab"; inputSAB: SharedArrayBuffer | null }
+  /** Whether the host answers input() requests (channel "input"). */
+  | { type: "set_input"; enabled: boolean }
   | { type: "clear" }
   | ({ type: "html_event" } & UihtmlPageEvent);
 
@@ -124,9 +125,8 @@ export type ResultMessage =
 
 export type FromNumblWorker =
   | { type: "output"; text: string }
-  // Posted by workerOnInput (syncInputChannel.ts) after the worker has blocked
-  // on the input SAB; the host writes the reply with mainThreadRespond.
-  | { type: "request-input"; prompt: string }
+  // Blocking-channel traffic: input() requests (see inputChannel.ts).
+  | ChannelMessage
   | { type: "drawnow"; plotInstructions: PlotInstruction[] }
   // sendEventToHTMLSource: relay to the uihtml iframe with this compId.
   | {

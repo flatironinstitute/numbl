@@ -15,7 +15,7 @@ import { diagnoseErrors } from "./numbl-core/diagnostics";
 import { VirtualFileSystem } from "./vfs/VirtualFileSystem.js";
 import { BrowserFileIOAdapter } from "./vfs/BrowserFileIOAdapter.js";
 import { BrowserSystemAdapter } from "./vfs/BrowserSystemAdapter.js";
-import { workerOnInput } from "./syncInputChannel.js";
+import { channelInput } from "./inputChannel.js";
 import { formatExecuteError } from "./workerErrorFormat.js";
 import { ensureQhullBackend } from "./numbl-core/native/qhull-browser.js";
 import { ensureWasmLapackBridge } from "./numbl-core/native/wasm-lapack-browser.js";
@@ -63,7 +63,8 @@ const session = new ExecSession();
 session.extraSearchPaths = [MIP_SEARCH_PATH];
 let optimizationLevel: OptLevel = "1";
 let vfs: VirtualFileSystem | null = null;
-let inputSAB: SharedArrayBuffer | null = null;
+// Whether the host answers input() requests (see inputChannel.ts).
+let inputEnabled = false;
 const systemAdapter = new BrowserSystemAdapter();
 
 // ── uihtml reverse channel (HTML → MATLAB) ──────────────────────────────
@@ -202,7 +203,7 @@ function handleRun(msg: RunMessage): void {
   // /project/refine_demo). Otherwise a bare name yields an empty directory.
   const activeFileName = mainAbsPath;
 
-  const runInputSAB = msg.inputSAB ?? inputSAB;
+  const onInput = inputEnabled ? channelInput(cancelSAB) : undefined;
 
   // ── Preamble phase ──────────────────────────────────────────────────
   // Optional setup code (e.g. `mip load --install ...`) that runs before the
@@ -227,7 +228,7 @@ function handleRun(msg: RunMessage): void {
           session: runState,
           fileIO: adapter,
           system: sysAdapter,
-          onInput: runInputSAB ? workerOnInput(runInputSAB) : undefined,
+          onInput,
           cancelSAB,
         },
         useWorkspaceFiles,
@@ -283,7 +284,7 @@ function handleRun(msg: RunMessage): void {
         initialHoldState: useHoldState,
         fileIO: adapter,
         system: sysAdapter,
-        onInput: runInputSAB ? workerOnInput(runInputSAB) : undefined,
+        onInput,
         onHtmlSourceEvent,
         cancelSAB,
       },
@@ -360,7 +361,7 @@ function handleExecute(code: string, cancelSAB?: SharedArrayBuffer): void {
       optimization: optimizationLevel,
       fileIO: adapter,
       system: systemAdapter,
-      onInput: inputSAB ? workerOnInput(inputSAB) : undefined,
+      onInput: inputEnabled ? channelInput(cancelSAB) : undefined,
       onHtmlSourceEvent,
       cancelSAB,
     });
@@ -417,8 +418,8 @@ self.onmessage = (e: MessageEvent<ToNumblWorker>) => {
       return;
     }
 
-    case "set_input_sab":
-      inputSAB = msg.inputSAB ?? null;
+    case "set_input":
+      inputEnabled = msg.enabled;
       return;
 
     case "set_optimization":
