@@ -56,4 +56,21 @@ d = sort(diag(Dl));
 assert(abs(d(1)) < 1e-9);               % connected -> smallest eigenvalue 0
 assert(d(2) > 1e-6);
 
+%% a self-loop counts twice toward degree; laplacian rejects self-loops
+Gs = graph([1 1 2], [1 2 3]);
+assert(isequal(degree(Gs), [3; 2; 1]));
+assert(degree(Gs, 1) == 3);
+assert(numedges(Gs) == 3);
+Ga = graph([1 1 0; 1 0 1; 0 1 2]);
+assert(isequal(degree(Ga), [3; 2; 3]));
+Gb = addedge(graph([1 2], [2 3]), 2, 2);
+assert(isequal(degree(Gb), [1; 4; 1]));
+try
+    laplacian(Gs);
+    error('expected an error');
+catch err
+    assert(strcmp(err.identifier, 'MATLAB:graphfun:laplacian:SelfLoops'));
+    assert(strcmp(err.message, 'Graph has self-loops.'));
+end
+
 disp('SUCCESS')
