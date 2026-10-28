@@ -5,9 +5,10 @@
  * writer.
  */
 
-import type {
-  FigureState,
-  AxesState,
+import {
+  createDefaultAxes,
+  type FigureState,
+  type AxesState,
 } from "../numbl-core/plotting/figuresReducer.js";
 import {
   GRID_FIELDS,
@@ -40,28 +41,6 @@ const isTyped = (v: unknown): v is ArrayLike<number | bigint> =>
   !!v && typeof v === "object" && "BYTES_PER_ELEMENT" in (v as object);
 const toNumArray = (v: unknown): number[] =>
   Array.from(v as ArrayLike<number | bigint>, x => Number(x));
-
-function freshAxes(): AxesState {
-  return {
-    holdOn: false,
-    traces: [],
-    plot3Traces: [],
-    surfTraces: [],
-    pcolorTraces: [],
-    contourTraces: [],
-    barTraces: [],
-    barhTraces: [],
-    bar3Traces: [],
-    bar3hTraces: [],
-    errorBarTraces: [],
-    boxTraces: [],
-    quiverTraces: [],
-    quiver3Traces: [],
-    areaTraces: [],
-    areaBaseValue: 0,
-    patchTraces: [],
-  };
-}
 
 /** Reverse the row-major [rows,cols] dataset back to numbl's column-major flat. */
 function rowMajorToColMajor(
@@ -149,7 +128,7 @@ function buildTrace(
 
 function buildAxes(f: H5ReadFile, axPath: string): AxesState {
   const g = f.get(axPath)!;
-  const ax = freshAxes();
+  const ax = createDefaultAxes();
   const A = g.attrs;
   const has = (n: string) => n in A;
   const v = (n: string) => A[n]?.value;
@@ -199,7 +178,7 @@ function buildAxes(f: H5ReadFile, axPath: string): AxesState {
       const cat = KIND_TO_CATEGORY[kind];
       if (!cat) continue;
       if (cat.single) (ax as Record<string, unknown>)[cat.field] = trace;
-      else (ax[cat.field as keyof AxesState] as unknown[]).push(trace);
+      else (ax[cat.field] as unknown[]).push(trace);
     }
   }
   return ax;

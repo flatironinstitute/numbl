@@ -3,6 +3,12 @@
  *  and the reader is importFigureHdf5.ts. Keeping these tables in one place
  *  keeps the two directions in sync. */
 
+import {
+  TRACE_FIELDS,
+  TRACE_FIELD_NAMES,
+  type TraceField,
+} from "../numbl-core/plotting/axesTraces.js";
+
 /** Version written as the root `numbl_figure_version` attribute. Bump on
  *  incompatible schema changes. */
 export const FIGURE_HDF5_VERSION = 1;
@@ -23,32 +29,24 @@ export const GRID_FIELDS: Record<string, string[]> = {
 };
 
 /** Maps a trace's `kind` attribute to the AxesState field it belongs in.
- *  `single` marks the one-per-axes traces (imagesc/pie/heatmap). */
+ *  `single` marks the one-per-axes traces (imagesc/pie/heatmap). Derived from
+ *  the per-field declarations in axesTraces.ts. */
 export const KIND_TO_CATEGORY: Record<
   string,
-  { field: string; single?: boolean }
-> = {
-  plot: { field: "traces" },
-  plot3: { field: "plot3Traces" },
-  area: { field: "areaTraces" },
-  patch: { field: "patchTraces" },
-  surf: { field: "surfTraces" },
-  surface: { field: "surfTraces" },
-  mesh: { field: "surfTraces" },
-  imagesc: { field: "imagescTrace", single: true },
-  pcolor: { field: "pcolorTraces" },
-  contour: { field: "contourTraces" },
-  bar: { field: "barTraces" },
-  barh: { field: "barhTraces" },
-  bar3: { field: "bar3Traces" },
-  bar3h: { field: "bar3hTraces" },
-  errorbar: { field: "errorBarTraces" },
-  boxchart: { field: "boxTraces" },
-  piechart: { field: "pieTrace", single: true },
-  heatmap: { field: "heatmapTrace", single: true },
-  quiver: { field: "quiverTraces" },
-  quiver3: { field: "quiver3Traces" },
-};
+  { field: TraceField; single?: boolean }
+> = Object.fromEntries(
+  TRACE_FIELD_NAMES.flatMap(field => {
+    const spec = TRACE_FIELDS[field];
+    const cat =
+      spec.multiplicity === "one" ? { field, single: true } : { field };
+    return spec.kinds.map(kind => [kind, cat]);
+  })
+);
+
+/** The `kind` written for each AxesState trace field (its first listed kind). */
+export function exportKind(field: TraceField): string {
+  return TRACE_FIELDS[field].kinds[0];
+}
 
 /** Trace boolean fields, stored as 0/1 int attributes; coerced back on read. */
 export const TRACE_BOOLEAN_FIELDS = new Set([

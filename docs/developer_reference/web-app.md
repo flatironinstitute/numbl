@@ -31,7 +31,7 @@ MATLAB code that calls `input(...)` expects to block until the user types a resp
 
 ## Plot viewer
 
-Figures render in a separate Vite-built bundle that the browser app embeds (and the CLI's `--plot` flag serves over HTTP). See [plotting.md](plotting.md). Unit tests do not exercise this bundle — changes under the graphics source tree need a rebuild before they show up.
+Figures render in-page with `FigureView` (`src/graphics/`), which the web app imports from source and compiles with the rest of the app. The separate plot viewer bundle (`dist-plot-viewer/`) wraps the same component for the CLI's `--plot` flag; it is not used by the web app, but it must be rebuilt after renderer changes. See [plotting.md](plotting.md).
 
 ## Static site viewer
 

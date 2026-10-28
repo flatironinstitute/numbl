@@ -1,43 +1,18 @@
-import type {
-  PlotTrace,
-  Plot3Trace,
-  PatchTrace,
-  SurfTrace,
-  ImagescTrace,
-  PcolorTrace,
-  ContourTrace,
-  BarTrace,
-  Bar3Trace,
-  ErrorBarTrace,
-  BoxTrace,
-  PieTrace,
-  HeatmapTrace,
-  QuiverTrace,
-  Quiver3Trace,
-  PlotInstruction,
-} from "./types.js";
+import type { PlotInstruction } from "./types.js";
+import {
+  TRACE_FIELDS,
+  TRACE_FIELD_NAMES,
+  emptyAxesTraces,
+  type AxesTraces,
+  type TraceField,
+} from "./axesTraces.js";
 
-export type AxesState = {
+/** One axes. The plotted data lives in the per-kind trace fields declared in
+ *  `AxesTraces` (axesTraces.ts); the rest is labels and appearance. */
+export type AxesState = AxesTraces & {
   holdOn: boolean;
-  traces: PlotTrace[];
-  plot3Traces: Plot3Trace[];
-  surfTraces: SurfTrace[];
-  imagescTrace?: ImagescTrace;
-  pcolorTraces: PcolorTrace[];
-  contourTraces: ContourTrace[];
-  barTraces: BarTrace[];
-  barhTraces: BarTrace[];
-  bar3Traces: Bar3Trace[];
-  bar3hTraces: Bar3Trace[];
-  errorBarTraces: ErrorBarTrace[];
-  boxTraces: BoxTrace[];
-  pieTrace?: PieTrace;
-  heatmapTrace?: HeatmapTrace;
-  quiverTraces: QuiverTrace[];
-  quiver3Traces: Quiver3Trace[];
-  areaTraces: PlotTrace[];
+  /** Baseline of the stacked `area` traces. */
   areaBaseValue: number;
-  patchTraces: PatchTrace[];
   title?: string;
   xlabel?: string;
   ylabel?: string;
@@ -90,28 +65,13 @@ export type FiguresState = {
 /** Actions accepted by the figures reducer: any PlotInstruction, plus "clear" for UI resets. */
 export type FiguresAction = PlotInstruction | { type: "clear" };
 
-const defaultAxes: AxesState = {
-  holdOn: false,
-  traces: [],
-  plot3Traces: [],
-  surfTraces: [],
-  pcolorTraces: [],
-  contourTraces: [],
-  barTraces: [],
-  barhTraces: [],
-  bar3Traces: [],
-  bar3hTraces: [],
-  errorBarTraces: [],
-  boxTraces: [],
-  quiverTraces: [],
-  quiver3Traces: [],
-  areaTraces: [],
-  areaBaseValue: 0,
-  patchTraces: [],
-};
+/** A fresh, empty axes (new arrays each call, so callers may mutate). */
+export function createDefaultAxes(): AxesState {
+  return { holdOn: false, areaBaseValue: 0, ...emptyAxesTraces() };
+}
 
 function getAxes(fig: FigureState): AxesState {
-  return fig.axes[fig.currentAxesIndex] || { ...defaultAxes };
+  return fig.axes[fig.currentAxesIndex] || createDefaultAxes();
 }
 
 function setAxes(fig: FigureState, axes: AxesState): FigureState {
@@ -151,68 +111,27 @@ function updateAxes(
   };
 }
 
-/** Add traces with hold-state logic: clear other trace types unless holdOn. */
+/** Add traces with hold-state logic: with hold off, every trace field not in
+ *  `update` is cleared (except fields marked `keptWithoutHold`). */
 function addTraces(
   state: FiguresState,
-  update: Partial<
-    Pick<
-      AxesState,
-      | "traces"
-      | "plot3Traces"
-      | "surfTraces"
-      | "imagescTrace"
-      | "pcolorTraces"
-      | "contourTraces"
-      | "barTraces"
-      | "barhTraces"
-      | "bar3Traces"
-      | "bar3hTraces"
-      | "errorBarTraces"
-      | "boxTraces"
-      | "pieTrace"
-      | "heatmapTrace"
-      | "quiverTraces"
-      | "quiver3Traces"
-      | "areaTraces"
-      | "areaBaseValue"
-      | "patchTraces"
-    >
-  >
+  update: Partial<AxesTraces> & { areaBaseValue?: number }
 ): FiguresState {
   const fig = ensureFig(state);
   const axes = getAxes(fig);
   const hold = axes.holdOn;
+  const next: AxesState = { ...axes };
+  const out = next as Record<TraceField, unknown>;
+  for (const f of TRACE_FIELD_NAMES) {
+    const spec = TRACE_FIELDS[f];
+    if (update[f] !== undefined) out[f] = update[f];
+    else if (hold || spec.keptWithoutHold) continue;
+    else out[f] = spec.multiplicity === "many" ? [] : undefined;
+  }
+  next.areaBaseValue = update.areaBaseValue ?? axes.areaBaseValue;
   return {
     ...state,
-    figs: {
-      ...state.figs,
-      [state.currentHandle]: setAxes(fig, {
-        ...axes,
-        traces: update.traces ?? (hold ? axes.traces : []),
-        plot3Traces: update.plot3Traces ?? (hold ? axes.plot3Traces : []),
-        surfTraces: update.surfTraces ?? (hold ? axes.surfTraces : []),
-        pcolorTraces: update.pcolorTraces ?? (hold ? axes.pcolorTraces : []),
-        contourTraces: update.contourTraces ?? (hold ? axes.contourTraces : []),
-        barTraces: update.barTraces ?? (hold ? axes.barTraces : []),
-        barhTraces: update.barhTraces ?? (hold ? axes.barhTraces : []),
-        bar3Traces: update.bar3Traces ?? (hold ? axes.bar3Traces : []),
-        bar3hTraces: update.bar3hTraces ?? (hold ? axes.bar3hTraces : []),
-        errorBarTraces:
-          update.errorBarTraces ?? (hold ? axes.errorBarTraces : []),
-        boxTraces: update.boxTraces ?? (hold ? axes.boxTraces : []),
-        pieTrace: update.pieTrace ?? (hold ? axes.pieTrace : undefined),
-        heatmapTrace:
-          update.heatmapTrace ?? (hold ? axes.heatmapTrace : undefined),
-        quiverTraces: update.quiverTraces ?? (hold ? axes.quiverTraces : []),
-        quiver3Traces: update.quiver3Traces ?? (hold ? axes.quiver3Traces : []),
-        areaTraces: update.areaTraces ?? (hold ? axes.areaTraces : []),
-        areaBaseValue: update.areaBaseValue ?? axes.areaBaseValue,
-        patchTraces: update.patchTraces ?? (hold ? axes.patchTraces : []),
-        ...(update.imagescTrace !== undefined
-          ? { imagescTrace: update.imagescTrace }
-          : {}),
-      }),
-    },
+    figs: { ...state.figs, [state.currentHandle]: setAxes(fig, next) },
   };
 }
 
@@ -572,9 +491,9 @@ export const figuresReducer = (
       const fig = ensureFig(state);
       const prev = getAxes(fig);
       const cleared: AxesState = action.reset
-        ? { ...defaultAxes }
+        ? createDefaultAxes()
         : {
-            ...defaultAxes,
+            ...createDefaultAxes(),
             title: prev.title,
             xlabel: prev.xlabel,
             ylabel: prev.ylabel,
@@ -613,7 +532,7 @@ export const figuresReducer = (
         currentAxesIndex: action.index,
       };
       if (!newFig.axes[action.index]) {
-        newFig.axes = { ...newFig.axes, [action.index]: { ...defaultAxes } };
+        newFig.axes = { ...newFig.axes, [action.index]: createDefaultAxes() };
       }
       return {
         ...state,

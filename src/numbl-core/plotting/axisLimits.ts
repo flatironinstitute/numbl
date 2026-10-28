@@ -14,175 +14,46 @@
  */
 
 import type { AxesState } from "./figuresReducer.js";
-import { imagescExtent } from "./imagescExtent.js";
-
-type Extent = { min: number; max: number };
+import {
+  TRACE_FIELD_NAMES,
+  traceFieldContent,
+  traceFieldSpec,
+  type Extent,
+  type Extents,
+  type TraceField,
+} from "./axesTraces.js";
 
 const EMPTY: Extent = { min: Infinity, max: -Infinity };
 
-function include(e: Extent, v: number): void {
-  if (Number.isFinite(v)) {
-    if (v < e.min) e.min = v;
-    if (v > e.max) e.max = v;
-  }
+function fieldIs3D<F extends TraceField>(axes: AxesState, field: F): boolean {
+  const v = traceFieldContent(axes, field);
+  return v !== undefined && traceFieldSpec(field).is3D(v);
 }
 
-function includeAll(e: Extent, vs: ArrayLike<number> | undefined): void {
-  if (!vs) return;
-  for (let i = 0; i < vs.length; i++) include(e, vs[i]);
-}
-
-/** A patch is 3-D content only when its vertices span a non-trivial z range;
- *  a flat patch (e.g. trimesh(...,0*x,...) under view(2)) stays 2-D. Mirrors
- *  the renderer's routing in FigureView. */
-function patchIs3D(axes: AxesState): boolean {
-  for (const p of axes.patchTraces ?? []) {
-    if (!p.is3D) continue;
-    let lo = Infinity;
-    let hi = -Infinity;
-    for (const v of p.vertices) {
-      const z = v[2] ?? 0;
-      if (z < lo) lo = z;
-      if (z > hi) hi = z;
-    }
-    if (hi - lo > 1e-9) return true;
-  }
-  return false;
-}
-
-/** Does this axes hold any 3-D content (so limits are a 6-vector)? */
+/** Does this axes hold any 3-D content (so it is drawn by the 3-D view and
+ *  its limits are a 6-vector)? A patch counts only when its vertices span a
+ *  non-trivial z range; a flat patch (e.g. trimesh(...,0*x,...) under
+ *  view(2)) stays 2-D. */
 export function axesIs3D(axes: AxesState): boolean {
-  return (
-    (axes.surfTraces?.length ?? 0) > 0 ||
-    (axes.plot3Traces?.length ?? 0) > 0 ||
-    (axes.bar3Traces?.length ?? 0) > 0 ||
-    (axes.bar3hTraces?.length ?? 0) > 0 ||
-    (axes.quiver3Traces?.length ?? 0) > 0 ||
-    patchIs3D(axes)
-  );
+  return TRACE_FIELD_NAMES.some(f => fieldIs3D(axes, f));
+}
+
+function addFieldExtents<F extends TraceField>(
+  axes: Partial<AxesState>,
+  field: F,
+  ext: Extents
+): void {
+  const v = axes[field];
+  if (v === undefined || v === null) return;
+  traceFieldSpec(field).extents(v, ext, axes);
 }
 
 /** Raw data extents (no padding) across every renderable trace type.
  *  Non-finite values are ignored; an empty axis has min > max. */
-export function dataExtents(axes: Partial<AxesState>): {
-  x: Extent;
-  y: Extent;
-  z: Extent;
-} {
-  const x: Extent = { ...EMPTY };
-  const y: Extent = { ...EMPTY };
-  const z: Extent = { ...EMPTY };
-
-  for (const t of axes.traces ?? []) {
-    includeAll(x, t.x);
-    includeAll(y, t.y);
-  }
-  for (const t of axes.plot3Traces ?? []) {
-    includeAll(x, t.x);
-    includeAll(y, t.y);
-    includeAll(z, t.z);
-  }
-  for (const t of [...(axes.surfTraces ?? [])]) {
-    includeAll(x, t.x);
-    includeAll(y, t.y);
-    includeAll(z, t.z);
-  }
-  if (axes.imagescTrace) {
-    const ext = imagescExtent(axes.imagescTrace);
-    include(x, ext.x[0]);
-    include(x, ext.x[1]);
-    include(y, ext.y[0]);
-    include(y, ext.y[1]);
-  }
-  for (const t of axes.pcolorTraces ?? []) {
-    includeAll(x, t.x);
-    includeAll(y, t.y);
-  }
-  for (const t of axes.contourTraces ?? []) {
-    includeAll(x, t.x);
-    includeAll(y, t.y);
-  }
-  for (const t of axes.patchTraces ?? []) {
-    for (const v of t.vertices) {
-      include(x, v[0]);
-      include(y, v[1]);
-      include(z, v[2] ?? 0);
-    }
-  }
-  for (const bt of axes.barTraces ?? []) {
-    const hw = bt.width / 2;
-    for (let i = 0; i < bt.x.length; i++) {
-      include(x, bt.x[i] - hw);
-      include(x, bt.x[i] + hw);
-      include(y, bt.y[i]);
-    }
-    include(y, 0);
-  }
-  for (const bt of axes.barhTraces ?? []) {
-    const hh = bt.width / 2;
-    for (let i = 0; i < bt.x.length; i++) {
-      include(y, bt.x[i] - hh);
-      include(y, bt.x[i] + hh);
-      include(x, bt.y[i]);
-    }
-    include(x, 0);
-  }
-  for (const bt of [...(axes.bar3Traces ?? []), ...(axes.bar3hTraces ?? [])]) {
-    includeAll(x, bt.x);
-    includeAll(y, bt.y);
-    includeAll(z, bt.z);
-    include(z, 0);
-  }
-  for (const et of axes.errorBarTraces ?? []) {
-    for (let i = 0; i < et.x.length; i++) {
-      include(x, et.xNeg ? et.x[i] - et.xNeg[i] : et.x[i]);
-      include(x, et.xPos ? et.x[i] + et.xPos[i] : et.x[i]);
-      include(y, et.y[i] - et.yNeg[i]);
-      include(y, et.y[i] + et.yPos[i]);
-    }
-  }
-  for (const bt of axes.boxTraces ?? []) {
-    const hw = bt.width / 2;
-    include(x, bt.x - hw);
-    include(x, bt.x + hw);
-    include(y, bt.whiskerLow);
-    include(y, bt.whiskerHigh);
-    for (const o of bt.outliers) include(y, o);
-  }
-  if (axes.areaTraces && axes.areaTraces.length > 0) {
-    const base = axes.areaBaseValue ?? 0;
-    include(y, base);
-    const n = axes.areaTraces[0].x.length;
-    for (let i = 0; i < n; i++) {
-      let cum = base;
-      for (const t of axes.areaTraces) {
-        if (i < t.x.length) {
-          include(x, t.x[i]);
-          cum += t.y[i] - base;
-          include(y, cum);
-        }
-      }
-    }
-  }
-  for (const qt of axes.quiverTraces ?? []) {
-    for (let i = 0; i < qt.x.length; i++) {
-      include(x, qt.x[i]);
-      include(x, qt.x[i] + qt.u[i]);
-      include(y, qt.y[i]);
-      include(y, qt.y[i] + qt.v[i]);
-    }
-  }
-  for (const qt of axes.quiver3Traces ?? []) {
-    for (let i = 0; i < qt.x.length; i++) {
-      include(x, qt.x[i]);
-      include(x, qt.x[i] + qt.u[i]);
-      include(y, qt.y[i]);
-      include(y, qt.y[i] + qt.v[i]);
-      include(z, qt.z[i]);
-      include(z, qt.z[i] + qt.w[i]);
-    }
-  }
-  return { x, y, z };
+export function dataExtents(axes: Partial<AxesState>): Extents {
+  const ext: Extents = { x: { ...EMPTY }, y: { ...EMPTY }, z: { ...EMPTY } };
+  for (const f of TRACE_FIELD_NAMES) addFieldExtents(axes, f, ext);
+  return ext;
 }
 
 /** Pad an automatic extent the way a default 2-D view is drawn. `tight`

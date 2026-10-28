@@ -1,12 +1,12 @@
 import { Component, useRef, useEffect, useCallback } from "react";
 import type { ErrorInfo, ReactNode } from "react";
-import type { PlotTrace, PatchTrace } from "../numbl-core/plotting/types.js";
 import type {
   AxesState,
   FigureState,
 } from "../numbl-core/plotting/figuresReducer.js";
 import { SurfView } from "./SurfView.js";
 import { drawPlot } from "./drawPlot.js";
+import { axesIs3D } from "../numbl-core/plotting/axisLimits.js";
 import { buildUihtmlSrcDoc } from "./uihtmlSrcDoc.js";
 
 class AxesErrorBoundary extends Component<
@@ -163,37 +163,12 @@ export function FigureView({ figure }: FigureViewProps) {
   );
 }
 
-/** True when a 3-D patch has a non-trivial z extent. A flat patch (all z
- *  equal, including the 2-D case where z defaults to 0) renders correctly in
- *  the 2-D canvas, so it should not force the 3-D viewer. */
-function hasZVariation(patch: PatchTrace): boolean {
-  if (!patch.is3D) return false;
-  let lo = Infinity;
-  let hi = -Infinity;
-  for (const v of patch.vertices) {
-    const z = v[2] ?? 0;
-    if (z < lo) lo = z;
-    if (z > hi) hi = z;
-  }
-  return hi - lo > 1e-9;
-}
-
 function SingleAxesView({ axes }: { axes: AxesState }) {
-  // A patch with varying z-coordinates (e.g. trimesh(T,x,y,z)) makes the axes
-  // 3-D, the same as a surf/plot3/bar3 trace — otherwise it renders flattened
-  // in the 2-D canvas, dropping z. A flat patch (z all equal, e.g. simpplot's
-  // trimesh(...,0*x,...) under view(2)) stays in the 2-D canvas, which the
-  // 3-D viewer's free-orbit camera cannot reproduce.
-  const patch3D = (axes.patchTraces ?? []).filter(hasZVariation);
-  const has3D =
-    (axes.surfTraces && axes.surfTraces.length > 0) ||
-    (axes.plot3Traces && axes.plot3Traces.length > 0) ||
-    (axes.bar3Traces && axes.bar3Traces.length > 0) ||
-    (axes.bar3hTraces && axes.bar3hTraces.length > 0) ||
-    (axes.quiver3Traces && axes.quiver3Traces.length > 0) ||
-    patch3D.length > 0;
-
-  if (has3D) {
+  // Axes with 3-D content (surf, plot3, bar3, quiver3, or a patch with
+  // varying z such as trimesh(T,x,y,z)) go to the 3-D viewer. A flat patch
+  // (z all equal, e.g. simpplot's trimesh(...,0*x,...) under view(2)) stays in
+  // the 2-D canvas, which the 3-D viewer's free-orbit camera cannot reproduce.
+  if (axesIs3D(axes)) {
     return (
       <SurfView
         surfTraces={axes.surfTraces ?? []}
@@ -212,187 +187,18 @@ function SingleAxesView({ axes }: { axes: AxesState }) {
     );
   }
 
-  return (
-    <PlotCanvas
-      traces={axes.traces}
-      title={axes.title}
-      xlabel={axes.xlabel}
-      ylabel={axes.ylabel}
-      legend={axes.legend}
-      gridOn={axes.gridOn}
-      boxOn={axes.boxOn}
-      imagescTrace={axes.imagescTrace}
-      pcolorTraces={axes.pcolorTraces}
-      contourTraces={axes.contourTraces}
-      colormap={axes.colormap}
-      colormapData={axes.colormapData}
-      axisMode={axes.axisMode}
-      axisScale={axes.axisScale}
-      barTraces={axes.barTraces}
-      barhTraces={axes.barhTraces}
-      errorBarTraces={axes.errorBarTraces}
-      boxTraces={axes.boxTraces}
-      pieTrace={axes.pieTrace}
-      heatmapTrace={axes.heatmapTrace}
-      quiverTraces={axes.quiverTraces}
-      areaTraces={axes.areaTraces}
-      areaBaseValue={axes.areaBaseValue}
-      patchTraces={axes.patchTraces}
-      shading={axes.shading}
-      colorbar={axes.colorbar}
-      colorbarLocation={axes.colorbarLocation}
-      caxis={axes.caxis}
-      xlim={axes.xlim}
-      ylim={axes.ylim}
-      yDir={axes.yDir}
-      axisVisible={axes.axisVisible}
-    />
-  );
+  return <PlotCanvas axes={axes} />;
 }
 
-function PlotCanvas({
-  traces,
-  title,
-  xlabel,
-  ylabel,
-  legend,
-  gridOn,
-  boxOn,
-  imagescTrace,
-  pcolorTraces,
-  contourTraces,
-  colormap,
-  colormapData,
-  axisMode,
-  axisScale,
-  barTraces,
-  barhTraces,
-  errorBarTraces,
-  boxTraces,
-  pieTrace,
-  heatmapTrace,
-  quiverTraces,
-  areaTraces,
-  areaBaseValue,
-  patchTraces,
-  shading,
-  colorbar,
-  colorbarLocation,
-  caxis,
-  xlim,
-  ylim,
-  yDir,
-  axisVisible,
-}: {
-  traces: PlotTrace[];
-  title?: string;
-  xlabel?: string;
-  ylabel?: string;
-  legend?: string[];
-  gridOn?: boolean;
-  boxOn?: boolean;
-  imagescTrace?: AxesState["imagescTrace"];
-  pcolorTraces?: AxesState["pcolorTraces"];
-  contourTraces?: AxesState["contourTraces"];
-  colormap?: string;
-  colormapData?: number[][];
-  axisMode?: string;
-  axisScale?: AxesState["axisScale"];
-  barTraces?: AxesState["barTraces"];
-  barhTraces?: AxesState["barhTraces"];
-  errorBarTraces?: AxesState["errorBarTraces"];
-  boxTraces?: AxesState["boxTraces"];
-  pieTrace?: AxesState["pieTrace"];
-  heatmapTrace?: AxesState["heatmapTrace"];
-  quiverTraces?: AxesState["quiverTraces"];
-  areaTraces?: AxesState["areaTraces"];
-  areaBaseValue?: number;
-  patchTraces?: AxesState["patchTraces"];
-  shading?: AxesState["shading"];
-  colorbar?: boolean;
-  colorbarLocation?: string;
-  caxis?: [number, number];
-  xlim?: AxesState["xlim"];
-  ylim?: AxesState["ylim"];
-  yDir?: AxesState["yDir"];
-  axisVisible?: boolean;
-}) {
+function PlotCanvas({ axes }: { axes: AxesState }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
   const redraw = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    drawPlot(
-      canvas,
-      traces,
-      title,
-      xlabel,
-      ylabel,
-      legend,
-      gridOn,
-      imagescTrace,
-      contourTraces,
-      colormap,
-      axisMode,
-      axisScale,
-      barTraces,
-      barhTraces,
-      errorBarTraces,
-      boxTraces,
-      pieTrace,
-      heatmapTrace,
-      areaTraces,
-      areaBaseValue,
-      pcolorTraces,
-      shading,
-      colorbar,
-      colorbarLocation,
-      caxis,
-      colormapData,
-      quiverTraces,
-      xlim,
-      ylim,
-      yDir,
-      axisVisible,
-      boxOn,
-      patchTraces
-    );
-  }, [
-    traces,
-    title,
-    xlabel,
-    ylabel,
-    legend,
-    gridOn,
-    imagescTrace,
-    contourTraces,
-    colormap,
-    colormapData,
-    axisMode,
-    axisScale,
-    barTraces,
-    barhTraces,
-    errorBarTraces,
-    boxTraces,
-    pieTrace,
-    heatmapTrace,
-    areaTraces,
-    areaBaseValue,
-    pcolorTraces,
-    shading,
-    colorbar,
-    colorbarLocation,
-    caxis,
-    quiverTraces,
-    xlim,
-    ylim,
-    yDir,
-    axisVisible,
-    boxOn,
-    patchTraces,
-  ]);
-
+    drawPlot(canvas, axes);
+  }, [axes]);
   useEffect(() => {
     const canvas = canvasRef.current;
     const container = containerRef.current;
