@@ -84,12 +84,13 @@ describe("ExecSession", () => {
 
   it("keeps warning state, PRNG stream, tic, appdata and spparms", () => {
     const s = new ExecSession();
-    // --opt 0: the JIT's own warning builtin does not handle 'off' yet.
-    run(s, "warning('off', 'my:id');", { optimization: "0" });
-    const out = run(s, "warning('my:id', 'hidden'); warning('shown');", {
-      optimization: "0",
-    }).output.join("");
-    expect(out).toBe("Warning: shown\n");
+    for (const optimization of ["0", "1"] as const) {
+      run(s, "warning('off', 'my:id');", { optimization });
+      const out = run(s, "warning('my:id', 'hidden'); warning('shown');", {
+        optimization,
+      }).output.join("");
+      expect(out).toBe("Warning: shown\n");
+    }
 
     run(s, "rng(3); a = rand;");
     const b = value(s, "b = rand;", "b");
@@ -148,10 +149,9 @@ describe("ExecSession", () => {
   it("isolates two sessions from each other", () => {
     const a = new ExecSession();
     const b = new ExecSession();
-    const o0: ExecOptions = { optimization: "0" };
-    run(a, "global G; G = 1; rng(3); warning('off', 'my:id');", o0);
-    run(b, "global G; G = 2; rng(5); setappdata(0, 'k', 1);", o0);
-    run(b, "tic; spparms('spumoni', 2); x = rand;", o0);
+    run(a, "global G; G = 1; rng(3); warning('off', 'my:id');");
+    run(b, "global G; G = 2; rng(5); setappdata(0, 'k', 1);");
+    run(b, "tic; spparms('spumoni', 2); x = rand;");
 
     // a's stream continues from rng(3) whatever b did.
     const ref = executeCode("rng(3); r = rand;", opts).variableValues.r;
@@ -161,8 +161,8 @@ describe("ExecSession", () => {
     expect(value(a, "k = isappdata(0, 'k');", "k")).toBe(false);
     expect(value(a, "v = spparms('spumoni');", "v")).toBe(0);
     const warn = "warning('my:id', 'w');";
-    expect(run(a, warn, o0).output.join("")).toBe("");
-    expect(run(b, warn, o0).output.join("")).toBe("Warning: w\n");
+    expect(run(a, warn).output.join("")).toBe("");
+    expect(run(b, warn).output.join("")).toBe("Warning: w\n");
   });
 });
 
