@@ -22,8 +22,7 @@ import type { Expr, Span } from "../parser/index.js";
 import { TypeError, UnsupportedConstruct } from "./errors.js";
 import type { IRExpr, IndexSliceArg } from "./ir.js";
 import {
-  isColVecTy,
-  isRowVecTy,
+  linearSliceOrient,
   isScalarRealNumeric,
   isNumeric,
   shapeNumel,
@@ -142,8 +141,6 @@ export function lowerIndexSlice(
       // For an index slot the parser-side range step must be a NumLit,
       // enforced by lowerSliceArg. The range count is known when the
       // endpoints are exact; otherwise the runtime axis stays unknown.
-      const isRowVec = isRowVecTy(baseTy);
-      const isColVec = isColVecTy(baseTy);
       const countDim: DimInfo = (() => {
         const n = exactRangeCount(slot);
         return n === undefined
@@ -151,11 +148,18 @@ export function lowerIndexSlice(
           : { kind: "exact", value: n };
       })();
       const oneDim: DimInfo = { kind: "exact", value: 1 };
-      const resultDims: DimInfo[] = isColVec
-        ? [countDim, oneDim]
-        : isRowVec
-          ? [oneDim, countDim]
-          : [oneDim, countDim];
+      // A range index is itself a row, so a non-vector base yields a row.
+      // When the base orientation is unknown (a runtime-sized `zeros(n,1)`
+      // has no exact leading dim) both axes stay unknown and codegen picks
+      // the shape from the runtime base — claiming either orientation here
+      // transposes the result.
+      const orient = linearSliceOrient(baseTy, "row");
+      const resultDims: DimInfo[] =
+        orient === "col"
+          ? [countDim, oneDim]
+          : orient === "row"
+            ? [oneDim, countDim]
+            : [{ kind: "unknown" }, { kind: "unknown" }];
       resultTy = wantComplex
         ? tensorComplexFromDims(resultDims)
         : tensorDoubleFromDims(resultDims);
@@ -163,16 +167,17 @@ export function lowerIndexSlice(
       // Single-slot linear logical-mask read. The length is `sum(mask)`
       // — only known at runtime. Result shape follows the same rule
       // as single-slot Range: row-vec base → row, col-vec base → col,
-      // matrix / N-D base → column vector (numbl matches MATLAB here).
-      const isRowVec = isRowVecTy(baseTy);
-      const isColVec = isColVecTy(baseTy);
+      // matrix / N-D base → column vector (numbl matches MATLAB here),
+      // and an unknown base orientation defers to codegen.
       const unkDim: DimInfo = { kind: "unknown" };
       const oneDim: DimInfo = { kind: "exact", value: 1 };
-      const resultDims: DimInfo[] = isRowVec
-        ? [oneDim, unkDim]
-        : isColVec
-          ? [unkDim, oneDim]
-          : [unkDim, oneDim];
+      const orient = linearSliceOrient(baseTy, "col");
+      const resultDims: DimInfo[] =
+        orient === "row"
+          ? [oneDim, unkDim]
+          : orient === "col"
+            ? [unkDim, oneDim]
+            : [unkDim, unkDim];
       resultTy = wantComplex
         ? tensorComplexFromDims(resultDims)
         : tensorDoubleFromDims(resultDims);

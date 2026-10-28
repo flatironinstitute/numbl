@@ -39,10 +39,10 @@ import type {
 } from "../lowering/ir.js";
 import { UnsupportedConstruct } from "../lowering/errors.js";
 import {
-  isColVecTy,
   isOwned,
   isRowVecTy,
   isScalar,
+  linearSliceOrient,
 } from "../lowering/types.js";
 import { getBuiltin } from "../builtins/index.js";
 import { requireEmitJs } from "../builtins/registry.js";
@@ -1000,7 +1000,6 @@ function emitIndexSliceJs(
   if (e.index.length === 1) {
     const slot = e.index[0];
     const baseNum = e.base.ty.kind === "Numeric" ? e.base.ty : undefined;
-    const isColVec = baseNum !== undefined && isColVecTy(baseNum);
     const isRowVec = baseNum !== undefined && isRowVecTy(baseNum);
     // A slice that is statically a single element — `v(2:2)`, `v(:)` on a
     // 1×1 base, or `v([k])` — is typed scalar at the consume site (`y = …`
@@ -1063,8 +1062,29 @@ function emitIndexSliceJs(
       const s = emitExpr(slot.start, state);
       const st = emitExpr(slot.step, state);
       const en = emitExpr(slot.end, state);
-      const rows = isColVec ? "_mtoc2_n" : "1";
-      const cols = isColVec ? "1" : "_mtoc2_n";
+      // A range index is a row, so a non-vector base yields a row. When
+      // the base orientation is not statically known — a runtime-sized
+      // `zeros(n, 1)` is a column with no exact leading dim — decide from
+      // the base's own shape at runtime rather than guessing.
+      const orient =
+        baseNum !== undefined ? linearSliceOrient(baseNum, "row") : undefined;
+      const colTest =
+        `${baseName}.shape[0] !== 1 && ` +
+        `${baseName}.shape.every((_s, _i) => _i === 0 || _s === 1)`;
+      const orientDecl =
+        orient === undefined ? `const _mtoc2_col = ${colTest}; ` : "";
+      const rows =
+        orient === "col"
+          ? "_mtoc2_n"
+          : orient === "row"
+            ? "1"
+            : "(_mtoc2_col ? _mtoc2_n : 1)";
+      const cols =
+        orient === "col"
+          ? "1"
+          : orient === "row"
+            ? "_mtoc2_n"
+            : "(_mtoc2_col ? 1 : _mtoc2_n)";
       // Per-element 1-based bounds check against the source's linear
       // length. Mirrors numbl's RuntimeError on out-of-range slice
       // indices (e.g. `oob(0:3)` → index 0 fails the lower-bound
@@ -1073,6 +1093,7 @@ function emitIndexSliceJs(
         `(() => { ` +
         `const _mtoc2_s = ${s}; const _mtoc2_e = ${en}; const _mtoc2_st = ${st}; ` +
         `const _mtoc2_n = mtoc2_loop_count(_mtoc2_s, _mtoc2_e, _mtoc2_st); ` +
+        orientDecl +
         `const _mtoc2_t = ${allocFn}(2, [${rows}, ${cols}]); ` +
         `const _mtoc2_len = ${baseName}.data.length; ` +
         `for (let _mtoc2_k = 0; _mtoc2_k < _mtoc2_n; _mtoc2_k++) { ` +
@@ -1115,10 +1136,30 @@ function emitIndexSliceJs(
       // positions of truthy elements, then gather. Result orientation
       // follows the base: row base → row, otherwise column.
       const mask = emitExpr(slot.expr, state);
-      const rows = isRowVec ? "1" : "_mtoc2_n";
-      const cols = isRowVec ? "_mtoc2_n" : "1";
+      // As for Range: an unknown base orientation is decided from the
+      // base's runtime shape instead of being guessed.
+      const maskOrient =
+        baseNum !== undefined ? linearSliceOrient(baseNum, "col") : undefined;
+      const maskColTest =
+        `${baseName}.shape[0] !== 1 && ` +
+        `${baseName}.shape.every((_s, _i) => _i === 0 || _s === 1)`;
+      const maskOrientDecl =
+        maskOrient === undefined ? `const _mtoc2_col = ${maskColTest}; ` : "";
+      const rows =
+        maskOrient === "row"
+          ? "1"
+          : maskOrient === "col"
+            ? "_mtoc2_n"
+            : "(_mtoc2_col ? _mtoc2_n : 1)";
+      const cols =
+        maskOrient === "row"
+          ? "_mtoc2_n"
+          : maskOrient === "col"
+            ? "1"
+            : "(_mtoc2_col ? 1 : _mtoc2_n)";
       return (
         `(() => { ` +
+        maskOrientDecl +
         `const _mtoc2_m = ${mask}; ` +
         `const _mtoc2_md = _mtoc2_m.data; ` +
         `const _mtoc2_blen = ${baseName}.data.length; ` +

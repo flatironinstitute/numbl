@@ -12,16 +12,32 @@
 
 import type { IRExpr, IRStmt, IndexSliceArg } from "../lowering/ir.js";
 import {
-  isColVecTy,
-  isRowVecTy,
   isNumeric,
   isScalar,
+  linearSliceOrient,
   type Type,
 } from "../lowering/types.js";
 import { formatDouble } from "./cHelpers.js";
 import { dimsProductExpr, formatNdOffset, locStringOf } from "./cFormat.js";
 import { useRuntimeByName, type RuntimeState } from "./runtime.js";
 import { emitExpr } from "./emitExpr.js";
+
+/** Declare `_mtoc2_col`: whether the base is a column vector at
+ *  runtime, i.e. every axis after the first is 1 and the first is not.
+ *  Used by single-slot linear slices whose base orientation is not
+ *  statically known (`linearSliceOrient` returned `undefined`), so the
+ *  result shape can follow MATLAB's rule instead of a compile-time
+ *  guess. A 1×1 base reports false and so follows the index, matching
+ *  MATLAB. */
+function emitIsColVecDecl(baseCName: string, ty: Type): string {
+  const ndim = isNumeric(ty) ? ty.dims.length : 2;
+  const trailingOnes = Array.from(
+    { length: Math.max(0, ndim - 1) },
+    (_, i) => `${baseCName}.dims[${i + 1}] == 1`
+  );
+  const cond = [`${baseCName}.dims[0] != 1`, ...trailingOnes].join(" && ");
+  return `int _mtoc2_col = (${cond}) ? 1 : 0;`;
+}
 
 /** Compute the column-major linear buffer offset for a scalar
  *  IndexLoad / IndexStore: 1-arg linear, 2-arg row/col, or N-arg N-D.
@@ -391,13 +407,23 @@ export function emitIndexSliceProducer(
       srcIndexFor = emitLinearRangeSetup(slot, baseCName, lines, "", state);
       count = "_mtoc2_n";
       // Single-slot range: row-vec → row, col-vec → col, matrix/N-D → row.
-      const isColVec = e.base.ty.kind === "Numeric" && isColVecTy(e.base.ty);
-      if (isColVec) {
+      // An unknown base orientation (a runtime-sized `zeros(n, 1)` has no
+      // exact leading dim) is resolved from the runtime shape; guessing
+      // either way transposes the result.
+      const orient =
+        e.base.ty.kind === "Numeric"
+          ? linearSliceOrient(e.base.ty, "row")
+          : undefined;
+      if (orient === "col") {
         resultRows = "_mtoc2_n";
         resultCols = "1";
-      } else {
+      } else if (orient === "row") {
         resultRows = "1";
         resultCols = "_mtoc2_n";
+      } else {
+        lines.push(emitIsColVecDecl(baseCName, e.base.ty));
+        resultRows = "(_mtoc2_col ? _mtoc2_n : 1)";
+        resultCols = "(_mtoc2_col ? 1 : _mtoc2_n)";
       }
     } else if (slot.kind === "LogicalMask") {
       // Single-slot linear logical-mask read: scan the mask once,
@@ -416,13 +442,20 @@ export function emitIndexSliceProducer(
       );
       count = "_mtoc2_n";
       srcIndexFor = linMask.srcIndexFor;
-      const isRowBase = e.base.ty.kind === "Numeric" && isRowVecTy(e.base.ty);
-      if (isRowBase) {
+      const maskOrient =
+        e.base.ty.kind === "Numeric"
+          ? linearSliceOrient(e.base.ty, "col")
+          : undefined;
+      if (maskOrient === "row") {
         resultRows = "1";
         resultCols = "_mtoc2_n";
-      } else {
+      } else if (maskOrient === "col") {
         resultRows = "_mtoc2_n";
         resultCols = "1";
+      } else {
+        lines.push(emitIsColVecDecl(baseCName, e.base.ty));
+        resultRows = "(_mtoc2_col ? _mtoc2_n : 1)";
+        resultCols = "(_mtoc2_col ? 1 : _mtoc2_n)";
       }
       linearCleanup = linMask.cleanup;
     } else {
