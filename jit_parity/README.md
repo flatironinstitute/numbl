@@ -83,6 +83,8 @@ the diagnosis and the divergence observed at discovery time.
   `printf`/`fputs(stdout)` instead of the host-write callback (reordering at
   opt2); alphabetical field order instead of insertion order; and nested
   struct/cell members (now **declined** to the interpreter's recursive render).
+  G07: warnings from compiled code ignored the warning state (the host now
+  checks it; the state-changing forms decline).
 - **R**: runtime errors raised inside JIT'd code, uncaught (message,
   location and call stack on stderr) and inside `try` (`ME.message`,
   `ME.identifier`, `ME.stack`): out-of-bounds reads, shape mismatches,

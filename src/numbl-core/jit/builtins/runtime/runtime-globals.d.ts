@@ -1,5 +1,5 @@
 // Ambient declarations for host hooks that runtime .js snippets
-// reference as free variables. `$write`, `$plotDispatch`, `$rand` and
+// reference as free variables. `$write`, `$warning`, `$plotDispatch`, `$rand` and
 // `$elemwise` are module-scoped bindings in the emitted JS module,
 // assigned from `$h` by its factory (see `codegen/emitJs.ts`), so each
 // compiled module talks to its own host. `$matmulAccel` is a genuine
@@ -35,6 +35,10 @@ declare global {
 
   /** Append text to stdout. No implicit newline. */
   var $write: (s: string) => void;
+
+  /** Show warning `msg` unless the warning state turns off `identifier`
+   *  ("" for a warning without one). */
+  var $warning: (identifier: string, msg: string) => void;
 
   /** Optional host plot hook; without it plot calls are written to
    *  `$write` as records. */

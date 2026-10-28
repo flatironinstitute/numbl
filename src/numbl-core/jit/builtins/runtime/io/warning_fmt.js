@@ -1,16 +1,17 @@
-// JS sibling of `warning_fmt.h`. Format the message and write
-// `Warning: <msg>\n` via `$write`. Matches numbl
-// (`runtime/specialBuiltins.ts:190` — `rt.output("Warning: " + msg + "\n")`).
+// JS sibling of `warning_fmt.h`: hand a warning to the host (`$warning`),
+// which checks the warning state for `identifier` ("" for none) and writes
+// `Warning: <msg>\n`. `jit_warning_fmt` formats the message;
+// `jit_warning_text` takes it literally (a lone `warning(msg)`).
 
 import { jit_sprintf_format } from "./format_engine.js";
 
-export function jit_warning_fmt(fmt, ...args) {
-  $write("Warning: " + jit_sprintf_format(fmt, args) + "\n");
+export function jit_warning_fmt(identifier, fmt, ...args) {
+  $warning(identifier, jit_sprintf_format(fmt, args));
 }
 
-export function jit_warning_fmt_id(_id, fmt, ...args) {
-  // The id is informational — numbl threads it to lastwarn state,
-  // which the JIT doesn't expose. Drop it here so the visible output
-  // matches the bare form.
-  $write("Warning: " + jit_sprintf_format(fmt, args) + "\n");
+export function jit_warning_text(identifier, msg) {
+  $warning(
+    identifier,
+    typeof msg === "object" && msg !== null ? msg.value : String(msg)
+  );
 }

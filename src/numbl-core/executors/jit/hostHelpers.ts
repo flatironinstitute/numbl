@@ -2,7 +2,9 @@
  * Build the `$h` helpers object that JS-JIT emitted code receives.
  *
  *  - `write(s)` — output sink. Routed to `rt.output(...)` so `disp` /
- *    `fprintf` / `warning` etc. land in numbl's output stream.
+ *    `fprintf` etc. land in numbl's output stream.
+ *  - `warning(id, msg)` — `jitWarning`: shows a warning unless the
+ *    warning state turns it off.
  *  - `plotDispatch(name, args)` — host hook for plot builtins.
  *    The emitted `jit_plot_dispatch(...)` calls this in
  *    preference to the JSON-on-stdout wire format.
@@ -110,6 +112,7 @@ const elemwiseHost: JitElemwiseHost = {
 
 export interface JitHostHelpers {
   write: (s: string) => void;
+  warning: (identifier: string, msg: string) => void;
   plotDispatch: (name: string, args: unknown[]) => void;
   /** One uniform double in [0, 1). Backed by numbl's process-global PRNG
    *  (the same `rngRandom` the interpreter uses), so JIT'd and interpreted
@@ -127,6 +130,8 @@ export interface JitHostHelpers {
 export function buildHostHelpers(rt: Runtime): JitHostHelpers {
   return {
     write: (s: string) => rt.output(s),
+    warning: (identifier: string, msg: string) =>
+      jitWarning(rt, identifier, msg),
     rand: () => rngRandom(),
     elemwise: elemwiseHost,
     cancel: rt.cancelFlag ?? new Int32Array(1),
@@ -148,9 +153,22 @@ export function buildHostHelpers(rt: Runtime): JitHostHelpers {
   };
 }
 
+/** A warning from compiled code, shown as the interpreter's `warning`
+ *  would: unless the warning state turns off `identifier` ("" for a
+ *  warning without one) or all warnings. */
+function jitWarning(rt: Runtime, identifier: string, msg: string): void {
+  const off = rt.warningsOff;
+  if (off.has("all") || (identifier !== "" && off.has(identifier))) return;
+  rt.output("Warning: " + msg + "\n");
+}
+
 /** Prefix of a plot record that compiled C writes to its output (see
  *  `runtime/plot/plot_dispatch.h`). */
 const PLOT_RECORD_PREFIX = "\x1ejit:plot\t";
+
+/** Prefix of a warning record (see `runtime/io/warning_fmt.h`): the
+ *  identifier and message follow as tab-separated JSON string bodies. */
+const WARNING_RECORD_PREFIX = "\x1ejit:warning\t";
 
 /** Decode one argument of a C plot record. */
 function decodePlotArg(a: unknown): RuntimeValue {
@@ -168,7 +186,8 @@ function decodePlotArg(a: unknown): RuntimeValue {
 }
 
 /** The output sink for a compiled C call: passes program output to
- *  `rt.output` and turns plot records into plot instructions. A record may
+ *  `rt.output`, turns plot records into plot instructions and shows
+ *  warning records. A record may
  *  arrive in several chunks; it ends at a newline. Call `flush` after the C
  *  call returns. */
 export function cOutputSink(rt: Runtime): {
@@ -196,6 +215,14 @@ export function cOutputSink(rt: Runtime): {
       const line = pending + s.slice(0, nl);
       pending = null;
       s = s.slice(nl + 1);
+      if (line.startsWith(WARNING_RECORD_PREFIX)) {
+        const [id, msg] = line
+          .slice(WARNING_RECORD_PREFIX.length)
+          .split("\t")
+          .map(part => JSON.parse(`"${part}"`) as string);
+        jitWarning(rt, id, msg);
+        continue;
+      }
       if (!line.startsWith(PLOT_RECORD_PREFIX)) {
         rt.output(line + "\n");
         continue;
