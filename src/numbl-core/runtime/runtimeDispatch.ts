@@ -1124,7 +1124,7 @@ export function subsasgnBuiltin(
       result = rt.setMemberReturn(intermediates[i], fieldName, result);
     } else if (entry.type === "()") {
       const indices = extractSubsIndices(entry.subs);
-      result = rt.indexStore(intermediates[i], indices, result);
+      result = rt.indexStore(intermediates[i], indices, result, false, true);
     } else if (entry.type === "{}") {
       const indices = extractSubsIndices(entry.subs);
       result = rt.indexCellStore(intermediates[i], indices, result);

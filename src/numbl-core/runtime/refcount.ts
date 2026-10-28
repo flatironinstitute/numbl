@@ -87,6 +87,13 @@ export abstract class Refcounted {
     if (rt && rt.currentScope) rt.currentScope.adopt(this);
   }
 
+  /** Copy-on-write clone: a fresh wrapper (rc=0, modulo scope adoption)
+   *  with its own buffers / container array but sharing child values,
+   *  which the new container's constructor incref's. Kinds with reference
+   *  semantics (function handles, handle-class objects, graphics handles)
+   *  return `this`. Abstract so every new value kind must decide. */
+  abstract shallowClone(): Refcounted;
+
   incref(): void {
     this._rc++;
   }

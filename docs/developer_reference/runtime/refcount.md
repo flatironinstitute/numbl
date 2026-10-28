@@ -44,7 +44,7 @@ A `RefScope` ([`runtime/refcount.ts`](../../../src/numbl-core/runtime/refcount.t
 
 ## Copy-on-write on indexed stores
 
-The lvalue chain walker `evalLValueBase` ([`interpreter/interpreterExec.ts`](../../../src/numbl-core/interpreter/interpreterExec.ts)) descends top-down through `Member` / `Index` / `IndexCell` levels. At each container level, if `isShared(parent)` it allocates a fresh copy via `cowCopy` ([`runtime/cow.ts`](../../../src/numbl-core/runtime/cow.ts)) and calls `writeLValueBase` to rebind it in the grandparent. After the walk, the chain from env root to the leaf's parent is uniquely owned.
+The lvalue chain walker `evalLValueBase` ([`interpreter/interpreterExec.ts`](../../../src/numbl-core/interpreter/interpreterExec.ts)) descends top-down through `Member` / `Index` / `IndexCell` levels. At each container level, if `isShared(parent)` it allocates a fresh copy via `cowCopy` ([`runtime/cow.ts`](../../../src/numbl-core/runtime/cow.ts)), which calls the value's `shallowClone()` (abstract on `Refcounted`, so every value kind must implement it), then calls `writeLValueBase` to rebind it in the grandparent. After the walk, the chain from env root to the leaf's parent is uniquely owned.
 
 The leaf-level mutation then runs an `isShared` check of its own:
 

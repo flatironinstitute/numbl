@@ -1274,9 +1274,10 @@ export class Runtime {
     base: unknown,
     indices: unknown[],
     rhs: unknown,
-    skipSubsasgn = false
+    skipSubsasgn = false,
+    storeBack = false
   ): unknown {
-    return _indexStore(this, base, indices, rhs, skipSubsasgn);
+    return _indexStore(this, base, indices, rhs, skipSubsasgn, storeBack);
   }
 
   /** Built-in index store for V(i).field = rhs patterns.
@@ -1291,7 +1292,7 @@ export class Runtime {
     if (isRuntimeClassInstance(mv)) {
       return value;
     }
-    return _indexStore(this, base, indices, value);
+    return _indexStore(this, base, indices, value, false, true);
   }
 
   /** Check if a value is a class instance of the given class name.
