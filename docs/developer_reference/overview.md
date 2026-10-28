@@ -35,6 +35,7 @@ A single entry point (the `executeCode` function) accepts source, options, and a
 - [architecture.md](architecture.md) — the pipeline and how components connect.
 - [compiler/lexer-parser.md](compiler/lexer-parser.md) — tokenization and parsing.
 - [compiler/interpreter.md](compiler/interpreter.md) — the AST walker and workspace resolution.
+- [compiler/function-resolution.md](compiler/function-resolution.md): what a name means in a scope, and the function body a call runs.
 - [compiler/type-system.md](compiler/type-system.md) — `JitType`, unification, type refinement.
 - [executors.md](executors.md) — pluggable executor registry that unifies the interpreter and JIT dispatch hooks.
 - [jit/overview.md](jit/overview.md) — when the JIT runs, opt levels, bailouts.

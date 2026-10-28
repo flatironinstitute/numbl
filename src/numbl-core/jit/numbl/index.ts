@@ -27,7 +27,7 @@ export type {
 // ── Resolver / code index (workspace function dispatch) ─────────────────
 
 export type { CodeIndex } from "../../workspace/codeIndex.js";
-export { resolveFunction } from "../../functionResolve.js";
+export { resolveFunction } from "../../resolution/resolveFunction.js";
 
 export type { CallSite } from "../../runtime/runtimeHelpers.js";
 export type { ItemType } from "../../itemTypes.js";

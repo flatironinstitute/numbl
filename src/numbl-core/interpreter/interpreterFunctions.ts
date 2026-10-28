@@ -18,16 +18,21 @@ import {
 } from "../runtime/types.js";
 import { RTV } from "../runtime/constructors.js";
 import { ensureRuntimeValue } from "../runtime/runtimeHelpers.js";
-import type { CallSite } from "../runtime/runtimeHelpers.js";
 import { RuntimeError, CancellationError } from "../runtime/error.js";
 import { inferDispatchType } from "./builtins/types.js";
 import { invokeBuiltin, NOT_A_BUILTIN } from "../runtime/runtimeDispatch.js";
 import { toString, toNumber } from "../runtime/convert.js";
 import {
-  resolveFunction,
-  resolutionArgType,
+  resolveName,
+  targetOf,
+  definingFile,
+  functionBodyFor,
+  constructorBodyFor,
+  oldStyleConstructorBodyFor,
+  type NameResolution,
   type ResolvedTarget,
-} from "../functionResolve.js";
+  type FunctionBody,
+} from "../resolution/index.js";
 import { parseMFile, type AbstractSyntaxTree } from "../parser/index.js";
 import { SyntaxError } from "../parser/errors.js";
 import type { ClassInfo } from "../workspace/classInfo.js";
@@ -48,6 +53,8 @@ import type { Interpreter } from "./interpreter.js";
 
 // ── Function calls ───────────────────────────────────────────────────────
 
+/** Call the function `name` resolves to in the current scope (a call
+ *  expression or bare name; variables are handled by the caller). */
 export function callFunction(
   this: Interpreter,
   name: string,
@@ -55,37 +62,63 @@ export function callFunction(
   nargout: number
 ): unknown {
   this.rt.checkCancel();
+  const r = resolveName(name, this.currentScope(), {
+    args,
+    variables: false,
+  });
+  return this.callResolved(r, args, nargout);
+}
 
-  // 1. Nested functions (share parent scope)
-  const nested = this.env.getNestedFunction(name);
-  if (nested) {
-    return this.callNestedFunction(nested.fn, nested.env, args, nargout);
-  }
+/** Call a function named by a string (`feval('f', ...)`, runtime dispatch by
+ *  name). Like `callFunction`, but, as in MATLAB, nested functions are not
+ *  visible. */
+export function callByName(
+  this: Interpreter,
+  name: string,
+  args: unknown[],
+  nargout: number
+): unknown {
+  this.rt.checkCancel();
+  const r = resolveName(name, this.currentScope(), {
+    args,
+    variables: false,
+    nested: false,
+  });
+  return this.callResolved(r, args, nargout);
+}
 
-  // 2. Resolve using function index
-  const argTypes = args.map(resolutionArgType);
-  const callSite: CallSite = {
-    file: this.currentFile,
-    ...(this.currentClassName ? { className: this.currentClassName } : {}),
-    ...(this.currentMethodName ? { methodName: this.currentMethodName } : {}),
-  };
-  const target = resolveFunction(name, argTypes, callSite, this.functionIndex);
-  // A name that resolves to a builtin (not shadowed by a local, workspace or
-  // class function) may be an interpreter special.
-  if (!target || target.kind === "builtin") {
-    const result = callInterpreterSpecial.call(this, name, args, nargout);
-    if (result !== FALL_THROUGH) return result;
+/** Call what a name resolved to. */
+export function callResolved(
+  this: Interpreter,
+  r: NameResolution,
+  args: unknown[],
+  nargout: number
+): unknown {
+  switch (r.kind) {
+    case "nested":
+      return this.callNestedFunction(r.fn, r.env, args, nargout);
+    case "constant":
+      this.pendingInputNames = undefined;
+      return r.value;
+    case "special": {
+      const result = callInterpreterSpecial.call(this, r.name, args, nargout);
+      if (result !== FALL_THROUGH) return result;
+      if (r.target) return this.interpretTarget(r.target, args, nargout);
+      break;
+    }
+    case "variable":
+    case "enumMember":
+    case "notFound":
+      break;
+    default:
+      return this.interpretTarget(r.target, args, nargout);
   }
-  if (target) {
-    return this.interpretTarget(target, args, nargout);
-  }
-
-  throw new RuntimeError(`Undefined function or variable '${name}'`);
+  throw new RuntimeError(`Undefined function or variable '${r.name}'`);
 }
 
 /** Run the interpreter special builtin `name` (one that needs the caller's
- *  scope, such as eval or exist). Returns FALL_THROUGH if there is none or it
- *  declines, in which case the registered builtin handles the call. */
+ *  scope, such as eval or exist). Returns FALL_THROUGH if it declines, in
+ *  which case the registered builtin handles the call. */
 function callInterpreterSpecial(
   this: Interpreter,
   name: string,
@@ -104,7 +137,13 @@ function callInterpreterSpecial(
       workspaceEnv: this.workspaceEnv,
       evalInLocalScope: (codeArg, fileName, nargout) =>
         this.evalInLocalScope(codeArg, fileName, nargout),
-      callFunction: (n, a, no) => this.callFunction(n, a, no),
+      callByName: (n, a, no) => this.callByName(n, a, no),
+      lookupName: n => {
+        const scope = this.currentScope();
+        const r = resolveName(n, scope);
+        return { resolution: r, file: definingFile(r, scope) };
+      },
+      declaredNargin: n => this.declaredNargin(n),
       rt: this.rt,
       optimization: this.optimization,
       lookupWorkspaceFile: n => {
@@ -146,7 +185,7 @@ function callInterpreterSpecial(
   return FALL_THROUGH;
 }
 
-// ── nargin of a function handle ──────────────────────────────────────────
+// ── nargin of a named function ───────────────────────────────────────────
 
 /** MATLAB `nargin`: the declared input count, negated when the last
  *  parameter is `varargin`. */
@@ -156,96 +195,18 @@ function narginFromParams(params: string[]): number {
   return hasVarargin ? -params.length : params.length;
 }
 
-/** Scan a file's AST for the top-level function `funcName` and return its
- *  declared parameters. */
-function paramsInFile(
-  interp: Interpreter,
-  fileName: string,
-  funcName: string
-): string[] | undefined {
-  const ast = interp.code.getCachedAST(fileName);
-  for (const stmt of ast.body) {
-    if (stmt.type === "Function" && stmt.name === funcName) return stmt.params;
-  }
-  return undefined;
-}
-
-/** Declared input count of the user function a `@name` handle points to,
- *  resolved the same way a call to `name` would resolve. Returns undefined
- *  when the target is a builtin or otherwise has no resolvable user-function
- *  AST (caller falls back to probing / 0). Used to populate
- *  `nargin(@name)`. */
+/** Declared input count of the user function `name` resolves to in the
+ *  current scope (backs `nargin(@name)` and `nargin('name')`). Undefined
+ *  for builtins, constructors, `.numbl.js` functions and unknown names. */
 export function declaredNargin(
   this: Interpreter,
   name: string
 ): number | undefined {
-  // Nested functions share the parent scope (checked first, like callFunction).
-  const nested = this.env.getNestedFunction(name);
-  if (nested) return narginFromParams(nested.fn.params);
-
-  const callSite: CallSite = {
-    file: this.currentFile,
-    ...(this.currentClassName ? { className: this.currentClassName } : {}),
-    ...(this.currentMethodName ? { methodName: this.currentMethodName } : {}),
-  };
-  const target = resolveFunction(name, [], callSite, this.functionIndex);
-  if (!target) return undefined;
-
-  let params: string[] | undefined;
-  switch (target.kind) {
-    case "localFunction": {
-      const { source } = target;
-      if (source.from === "main") {
-        params = this.code.mainLocalFunctions.get(target.name)?.params;
-      } else if (source.from === "workspaceFile") {
-        params =
-          this.findFunctionInWorkspaceFile(source.wsName, target.name)
-            ?.params ?? undefined;
-      } else if (source.from === "classFile") {
-        params =
-          this.findFunctionInClassFile(
-            source.className,
-            target.name,
-            source.methodScope
-          )?.params ?? undefined;
-      } else if (source.from === "privateFile") {
-        params = paramsInFile(this, source.callerFile, target.name);
-      }
-      break;
-    }
-    case "workspaceFunction": {
-      const dotIdx = target.name.lastIndexOf(".");
-      const primaryName =
-        dotIdx >= 0 ? target.name.slice(dotIdx + 1) : target.name;
-      params =
-        this.findFunctionInWorkspaceFile(target.name, primaryName)?.params ??
-        undefined;
-      if (params === undefined) {
-        const entry = this.code.filesByFuncName.get(target.name);
-        if (entry) {
-          const ast = this.code.getCachedAST(entry.fileName);
-          for (const stmt of ast.body) {
-            if (stmt.type === "Function") {
-              params = stmt.params;
-              break;
-            }
-          }
-        }
-      }
-      break;
-    }
-    case "privateFunction": {
-      const entry = this.code.getPrivateFileEntry(
-        target.callerFile,
-        target.name
-      );
-      if (entry) params = paramsInFile(this, entry.fileName, target.name);
-      break;
-    }
-    // Builtins, class constructors/methods, JS user functions: no
-    // resolvable plain user-function AST here — leave undefined.
-  }
-  return params !== undefined ? narginFromParams(params) : undefined;
+  const r = resolveName(name, this.currentScope(), { variables: false });
+  if (r.kind === "nested") return narginFromParams(r.fn.params);
+  const target = targetOf(r);
+  const body = target && functionBodyFor(this.code, target);
+  return body ? narginFromParams(body.fn.params) : undefined;
 }
 
 // ── Target interpretation ────────────────────────────────────────────────
@@ -263,7 +224,14 @@ export function interpretTarget(
       throw new RuntimeError(`Unknown builtin: '${target.name}'`);
     }
     case "localFunction":
-      return this.interpretLocalFunction(target, args, nargout);
+    case "privateFunction": {
+      const body = functionBodyFor(this.code, target);
+      if (!body) {
+        const what = target.kind === "privateFunction" ? "Private" : "Local";
+        throw new RuntimeError(`${what} function '${target.name}' not found`);
+      }
+      return this.callBody(body, args, nargout);
+    }
     case "workspaceFunction":
       return this.interpretWorkspaceFunction(target, args, nargout);
     case "jsUserFunction":
@@ -272,9 +240,20 @@ export function interpretTarget(
       return this.interpretClassMethod(target, args, nargout);
     case "workspaceClassConstructor":
       return this.instantiateClass(target.className, args, nargout);
-    case "privateFunction":
-      return this.interpretPrivateFunction(target, args, nargout);
   }
+}
+
+/** Call a function body in its own file and class context. */
+export function callBody(
+  this: Interpreter,
+  body: FunctionBody,
+  args: unknown[],
+  nargout: number,
+  narginOverride?: number
+): unknown {
+  return this.withFileContext(body.file, body.className, body.methodName, () =>
+    this.callUserFunction(body.fn, args, nargout, narginOverride)
+  );
 }
 
 // ── JS user function interpretation ──────────────────────────────────────
@@ -317,83 +296,6 @@ export function interpretJsUserFunction(
   });
 }
 
-// ── Local function interpretation ────────────────────────────────────────
-
-export function interpretLocalFunction(
-  this: Interpreter,
-  target: Extract<ResolvedTarget, { kind: "localFunction" }>,
-  args: unknown[],
-  nargout: number
-): unknown {
-  const { source } = target;
-
-  if (source.from === "main") {
-    const fn = this.findMainLocalFunction(target.name);
-    if (!fn)
-      throw new RuntimeError(`Local function '${target.name}' not found`);
-    return this.callUserFunction(fn, args, nargout);
-  }
-
-  if (source.from === "workspaceFile") {
-    const fn = this.findFunctionInWorkspaceFile(source.wsName, target.name);
-    if (!fn)
-      throw new RuntimeError(
-        `Local function '${target.name}' not found in workspace file '${source.wsName}'`
-      );
-    return this.withFileContext(
-      this.getWorkspaceFileName(source.wsName),
-      undefined,
-      undefined,
-      () => this.callUserFunction(fn, args, nargout)
-    );
-  }
-
-  if (source.from === "classFile") {
-    const fn = this.findFunctionInClassFile(
-      source.className,
-      target.name,
-      source.methodScope
-    );
-    if (!fn)
-      throw new RuntimeError(
-        `Local function '${target.name}' not found in class file '${source.className}'`
-      );
-    // Use the external method file as context if methodScope points to one
-    const classInfo = this.code.classes.get(source.className);
-    const extFile = classInfo?.externalMethodFiles.get(
-      source.methodScope ?? ""
-    );
-    const fileCtx =
-      extFile?.fileName ?? this.getClassFileName(source.className);
-    return this.withFileContext(
-      fileCtx,
-      source.className,
-      source.methodScope,
-      () => this.callUserFunction(fn, args, nargout)
-    );
-  }
-
-  if (source.from === "privateFile") {
-    const ast = this.code.getCachedAST(source.callerFile);
-    for (const stmt of ast.body) {
-      if (stmt.type === "Function" && stmt.name === target.name) {
-        const fn = funcDefFromStmt(stmt);
-        return this.withFileContext(
-          source.callerFile,
-          undefined,
-          undefined,
-          () => this.callUserFunction(fn, args, nargout)
-        );
-      }
-    }
-    throw new RuntimeError(
-      `Local function '${target.name}' not found in private file`
-    );
-  }
-
-  throw new RuntimeError(`Unknown local function source`);
-}
-
 // ── Workspace function interpretation ────────────────────────────────────
 
 export function interpretWorkspaceFunction(
@@ -402,67 +304,32 @@ export function interpretWorkspaceFunction(
   args: unknown[],
   nargout: number
 ): unknown {
-  const dotIdx = target.name.lastIndexOf(".");
-  const primaryName = dotIdx >= 0 ? target.name.slice(dotIdx + 1) : target.name;
-
-  let fn = this.findFunctionInWorkspaceFile(target.name, primaryName);
-  // MATLAB: if the declared function name doesn't match the file name, the
-  // file name still wins — the first top-level function in the file is what
-  // `<filename>(...)` calls.  Fall back to that here so mismatched-name
-  // function files don't get silently treated as scripts below.
-  //
-  // Only for a *function file*, though: a file is one exactly when its first
-  // statement is a function declaration. A script may also define local
-  // functions (MATLAB R2016b and later), and there the first `function` in the
-  // file is a local one — calling it in place of running the script binds no
-  // arguments, so its body fails on the first parameter read.
-  if (!fn) {
-    const entry = this.code.filesByFuncName.get(target.name);
-    if (entry) {
-      const ast = this.code.getCachedAST(entry.fileName);
-      for (const stmt of ast.body) {
-        if (stmt.type === "Function") {
-          fn = funcDefFromStmt(stmt);
-          break;
-        }
-        if (stmt.type !== "ClassDef" && stmt.type !== "Import") break;
-      }
-    }
-  }
-  if (!fn) {
-    const entry = this.code.filesByFuncName.get(target.name);
-    if (entry) {
-      // No top-level function in the file → it's a script. MATLAB runs a
-      // script invoked by name in the *caller's* workspace (variables are
-      // shared), not in an isolated scope, so execute the body in `this.env`.
-      // A script takes no arguments and returns no value; it produces no
-      // `ans` of its own in the caller.
-      if (args.length > 0 || nargout > 0) {
-        const err = new RuntimeError(
-          `Execution of script ${target.name} as a function is not supported:\n${entry.fileName}`
-        );
-        err.identifier = "MATLAB:scriptNotAFunction";
-        throw err;
-      }
-      const ast = this.code.getCachedAST(entry.fileName);
-      this.withFileContext(entry.fileName, undefined, undefined, () => {
-        for (const stmt of ast.body) {
-          if (stmt.type === "Function") continue;
-          const signal = this.execStmt(stmt);
-          if (signal instanceof ReturnSignal) break;
-        }
-      });
-      return undefined;
-    }
+  const body = functionBodyFor(this.code, target);
+  if (body) return this.callBody(body, args, nargout);
+  const entry = this.code.filesByFuncName.get(target.name);
+  if (!entry)
     throw new RuntimeError(`Workspace function '${target.name}' not found`);
+  // No function body: the file is a script. MATLAB runs a script invoked by
+  // name in the *caller's* workspace (variables are shared), not in an
+  // isolated scope, so execute the body in `this.env`. A script takes no
+  // arguments and returns no value; it produces no `ans` of its own in the
+  // caller.
+  if (args.length > 0 || nargout > 0) {
+    const err = new RuntimeError(
+      `Execution of script ${target.name} as a function is not supported:\n${entry.fileName}`
+    );
+    err.identifier = "MATLAB:scriptNotAFunction";
+    throw err;
   }
-
-  return this.withFileContext(
-    this.getWorkspaceFileName(target.name),
-    undefined,
-    undefined,
-    () => this.callUserFunction(fn, args, nargout)
-  );
+  const ast = this.code.getCachedAST(entry.fileName);
+  this.withFileContext(entry.fileName, undefined, undefined, () => {
+    for (const stmt of ast.body) {
+      if (stmt.type === "Function") continue;
+      const signal = this.execStmt(stmt);
+      if (signal instanceof ReturnSignal) break;
+    }
+  });
+  return undefined;
 }
 
 // ── Class method interpretation ──────────────────────────────────────────
@@ -485,76 +352,31 @@ export function interpretClassMethod(
     return this.interpretConstructor(classInfo, args, nargout);
   }
 
-  const methodFn = this.findMethodInClass(classInfo, methodName);
-  if (!methodFn) {
-    const extFn = this.findExternalMethod(classInfo, methodName);
-    if (extFn) {
-      const actualArgs =
-        target.stripInstance && args.length > 0 ? args.slice(1) : args;
-      return this.withFileContext(
-        classInfo.externalMethodFiles.get(methodName)?.fileName ??
-          classInfo.fileName,
-        definingClass,
-        methodName,
-        () => this.callUserFunction(extFn, actualArgs, nargout)
+  const body = functionBodyFor(this.code, target);
+  if (body) {
+    const actualArgs =
+      target.stripInstance && args.length > 0 ? args.slice(1) : args;
+    return this.callBody(body, actualArgs, nargout);
+  }
+  // Implicit static `ClassName.empty(m,n)`: every MATLAB class inherits
+  // an `empty` method producing an empty object array.
+  if (methodName === "empty") {
+    const dims: number[] = [];
+    for (const a of args) {
+      const rv = ensureRuntimeValue(a);
+      if (isRuntimeTensor(rv)) for (const d of rv.data) dims.push(d);
+      else dims.push(toNumber(rv));
+    }
+    if (dims.length === 1) dims.push(dims[0]);
+    if (dims.length === 0) dims.push(0, 0);
+    if (!dims.some(d => d === 0)) {
+      throw new RuntimeError(
+        `${className}.empty: at least one dimension must be zero`
       );
     }
-    // Implicit static `ClassName.empty(m,n)`: every MATLAB class inherits
-    // an `empty` method producing an empty object array.
-    if (methodName === "empty") {
-      const dims: number[] = [];
-      for (const a of args) {
-        const rv = ensureRuntimeValue(a);
-        if (isRuntimeTensor(rv)) for (const d of rv.data) dims.push(d);
-        else dims.push(toNumber(rv));
-      }
-      if (dims.length === 1) dims.push(dims[0]);
-      if (dims.length === 0) dims.push(0, 0);
-      if (!dims.some(d => d === 0)) {
-        throw new RuntimeError(
-          `${className}.empty: at least one dimension must be zero`
-        );
-      }
-      return RTV.classInstanceArray(className, [], [dims[0], dims[1]]);
-    }
-    throw new RuntimeError(
-      `No method '${methodName}' for class '${className}'`
-    );
+    return RTV.classInstanceArray(className, [], [dims[0], dims[1]]);
   }
-
-  const actualArgs =
-    target.stripInstance && args.length > 0 ? args.slice(1) : args;
-
-  return this.withFileContext(
-    classInfo.fileName,
-    definingClass,
-    methodName,
-    () => this.callUserFunction(methodFn, actualArgs, nargout)
-  );
-}
-
-// ── Private function interpretation ──────────────────────────────────────
-
-export function interpretPrivateFunction(
-  this: Interpreter,
-  target: Extract<ResolvedTarget, { kind: "privateFunction" }>,
-  args: unknown[],
-  nargout: number
-): unknown {
-  const entry = this.code.getPrivateFileEntry(target.callerFile, target.name);
-  if (!entry)
-    throw new RuntimeError(`Private function '${target.name}' not found`);
-
-  const ast = this.code.getCachedAST(entry.fileName);
-  for (const stmt of ast.body) {
-    if (stmt.type === "Function" && stmt.name === target.name) {
-      const fn = funcDefFromStmt(stmt);
-      return this.withFileContext(entry.fileName, undefined, undefined, () =>
-        this.callUserFunction(fn, args, nargout)
-      );
-    }
-  }
-  throw new RuntimeError(`Private function '${target.name}' not found`);
+  throw new RuntimeError(`No method '${methodName}' for class '${className}'`);
 }
 
 // ── Class instantiation ──────────────────────────────────────────────────
@@ -695,18 +517,12 @@ export function instantiateClass(
   // function that builds its own instance via `class(struct, 'Name')`. Call it
   // directly with the user args — do NOT pre-create/prepend an instance.
   if (classInfo.isOldStyle) {
-    const ctorName = classInfo.constructorName ?? className;
-    const ctorFn = this.findExternalMethod(classInfo, ctorName);
-    if (!ctorFn)
+    const body = oldStyleConstructorBodyFor(this.code, classInfo);
+    if (!body)
       throw new RuntimeError(
         `Constructor for old-style class '${className}' not found`
       );
-    const fileName =
-      classInfo.externalMethodFiles.get(ctorName)?.fileName ??
-      classInfo.fileName;
-    return this.withFileContext(fileName, className, ctorName, () =>
-      this.callUserFunction(ctorFn, args, nargout)
-    );
+    return this.callBody(body, args, nargout);
   }
 
   const { propertyNames, propertyDefaults } =
@@ -740,52 +556,10 @@ export function interpretConstructor(
   args: unknown[],
   nargout: number
 ): unknown {
-  const constructorName = classInfo.constructorName;
-  if (!constructorName) return args[0];
-
-  for (const member of classInfo.ast?.members ?? []) {
-    if (member.type !== "Methods") continue;
-    for (const methodStmt of member.body) {
-      if (
-        methodStmt.type === "Function" &&
-        methodStmt.name === constructorName
-      ) {
-        const outputName =
-          methodStmt.outputs.length > 0 ? methodStmt.outputs[0] : "obj";
-        const fn: FunctionDef = {
-          ...funcDefFromStmt(methodStmt),
-          params: [outputName, ...methodStmt.params],
-        };
-        // nargin in constructor counts user args, not obj
-        const userArgCount = args.length - 1;
-        return this.withFileContext(
-          classInfo.fileName,
-          classInfo.qualifiedName,
-          constructorName,
-          () => this.callUserFunction(fn, args, nargout, userArgCount)
-        );
-      }
-    }
-  }
-
-  const extFn = this.findExternalMethod(classInfo, constructorName);
-  if (extFn) {
-    const outputName = extFn.outputs.length > 0 ? extFn.outputs[0] : "obj";
-    const fn: FunctionDef = {
-      ...extFn,
-      params: [outputName, ...extFn.params],
-    };
-    const userArgCount = args.length - 1;
-    return this.withFileContext(
-      classInfo.externalMethodFiles.get(constructorName)?.fileName ??
-        classInfo.fileName,
-      classInfo.qualifiedName,
-      constructorName,
-      () => this.callUserFunction(fn, args, nargout, userArgCount)
-    );
-  }
-
-  return args[0];
+  const body = constructorBodyFor(this.code, classInfo);
+  if (!body) return args[0];
+  // nargin in the constructor counts the user args, not the instance.
+  return this.callBody(body, args, nargout, args.length - 1);
 }
 
 // ── Call user function (core execution) ──────────────────────────────────
@@ -1098,174 +872,6 @@ export function withFileContext<T>(
     this.currentClassName = savedClassName;
     this.currentMethodName = savedMethodName;
   }
-}
-
-// ── AST lookup helpers ───────────────────────────────────────────────────
-
-export function getWorkspaceFileName(
-  this: Interpreter,
-  funcName: string
-): string {
-  const entry = this.code.filesByFuncName.get(funcName);
-  return entry?.fileName ?? funcName + ".m";
-}
-
-export function getClassFileName(this: Interpreter, className: string): string {
-  const info = this.code.classes.get(className);
-  return info?.fileName ?? className + ".m";
-}
-
-export function findMainLocalFunction(
-  this: Interpreter,
-  funcName: string
-): FunctionDef | null {
-  const cacheKey = `main:${funcName}`;
-  const cached = this.functionDefCache.get(cacheKey);
-  if (cached) return cached;
-  const stmt = this.code.mainLocalFunctions.get(funcName);
-  if (!stmt) return null;
-  const fn = funcDefFromStmt(stmt);
-  this.functionDefCache.set(cacheKey, fn);
-  return fn;
-}
-
-export function findFunctionInWorkspaceFile(
-  this: Interpreter,
-  wsName: string,
-  funcName: string
-): FunctionDef | null {
-  const cacheKey = `ws:${wsName}:${funcName}`;
-  const cached = this.functionDefCache.get(cacheKey);
-  if (cached) return cached;
-
-  const entry = this.code.filesByFuncName.get(wsName);
-  if (!entry) return null;
-
-  const ast = this.code.getCachedAST(entry.fileName);
-  for (const stmt of ast.body) {
-    if (stmt.type === "Function" && stmt.name === funcName) {
-      const fn = funcDefFromStmt(stmt);
-      this.functionDefCache.set(cacheKey, fn);
-      return fn;
-    }
-  }
-  return null;
-}
-
-export function findFunctionInClassFile(
-  this: Interpreter,
-  className: string,
-  funcName: string,
-  methodScope?: string
-): FunctionDef | null {
-  const cacheKey = `cls:${className}:${funcName}:${methodScope ?? ""}`;
-  const cached = this.functionDefCache.get(cacheKey);
-  if (cached) return cached;
-
-  const classInfo = this.code.classes.get(className);
-  if (!classInfo) return null;
-
-  // If methodScope is an external method, look ONLY in that file's subfunctions
-  if (methodScope && classInfo.externalMethodFiles.has(methodScope)) {
-    const mf = classInfo.externalMethodFiles.get(methodScope)!;
-    const methodAst = this.code.getCachedAST(mf.fileName);
-    for (const stmt of methodAst.body) {
-      if (stmt.type === "Function" && stmt.name === funcName) {
-        const fn = funcDefFromStmt(stmt);
-        this.functionDefCache.set(cacheKey, fn);
-        return fn;
-      }
-    }
-    // Fall through to main classdef file if not found in external method file
-  }
-
-  // Look in main classdef file's subfunctions
-  const ast = this.code.getCachedAST(classInfo.fileName);
-  for (const stmt of ast.body) {
-    if (stmt.type === "Function" && stmt.name === funcName) {
-      const fn = funcDefFromStmt(stmt);
-      this.functionDefCache.set(cacheKey, fn);
-      return fn;
-    }
-  }
-
-  // If no methodScope specified, also search all external method files
-  if (!methodScope) {
-    for (const [, mf] of classInfo.externalMethodFiles) {
-      const methodAst = this.code.getCachedAST(mf.fileName);
-      for (const stmt of methodAst.body) {
-        if (stmt.type === "Function" && stmt.name === funcName) {
-          const fn = funcDefFromStmt(stmt);
-          this.functionDefCache.set(cacheKey, fn);
-          return fn;
-        }
-      }
-    }
-  }
-
-  return null;
-}
-
-export function findMethodInClass(
-  this: Interpreter,
-  classInfo: ClassInfo,
-  methodName: string
-): FunctionDef | null {
-  const cacheKey = `method:${classInfo.name}:${methodName}`;
-  const cached = this.functionDefCache.get(cacheKey);
-  if (cached) return cached;
-
-  // Old-style @folder classes (classInfo.ast === null) define all methods as
-  // external files — skip the in-classdef scan and let the caller fall back
-  // to findExternalMethod.
-  for (const member of classInfo.ast?.members ?? []) {
-    if (member.type !== "Methods") continue;
-    for (const methodStmt of member.body) {
-      if (methodStmt.type === "Function" && methodStmt.name === methodName) {
-        const fn = funcDefFromStmt(methodStmt);
-        this.functionDefCache.set(cacheKey, fn);
-        return fn;
-      }
-    }
-  }
-
-  for (const sc of classInfo.superClasses) {
-    const parentInfo = this.code.classes.get(sc);
-    const fn = parentInfo && this.findMethodInClass(parentInfo, methodName);
-    if (fn) return fn;
-  }
-
-  return null;
-}
-
-export function findExternalMethod(
-  this: Interpreter,
-  classInfo: ClassInfo,
-  methodName: string
-): FunctionDef | null {
-  const mf = classInfo.externalMethodFiles.get(methodName);
-  if (!mf) {
-    for (const sc of classInfo.superClasses) {
-      const parentInfo = this.code.classes.get(sc);
-      const fn = parentInfo && this.findExternalMethod(parentInfo, methodName);
-      if (fn) return fn;
-    }
-    return null;
-  }
-
-  const ast = this.code.getCachedAST(mf.fileName);
-  // Dispatch is by file name: the method is the file's primary (first
-  // top-level) function regardless of its internal name. MATLAB tolerates a
-  // function whose declared name differs from the file name (e.g. a
-  // copy-paste mismatch); prefer a name match for safety but fall back to
-  // the primary function.
-  let primary: FunctionDef | null = null;
-  for (const stmt of ast.body) {
-    if (stmt.type !== "Function") continue;
-    if (stmt.name === methodName) return funcDefFromStmt(stmt);
-    if (!primary) primary = funcDefFromStmt(stmt);
-  }
-  return primary;
 }
 
 /** Evaluate a property's default value expression. MATLAB reports an

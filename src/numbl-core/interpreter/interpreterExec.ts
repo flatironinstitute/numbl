@@ -24,7 +24,6 @@ import { binop, uplus } from "../runtime/runtimeOperators.js";
 import { enumEqualityOp } from "../runtime/runtimeEnum.js";
 import { mPow } from "../helpers/arithmetic.js";
 import { getIBuiltinNargin } from "./builtins/types.js";
-import { getConstant } from "../helpers/constants.js";
 import { buildLineTable, offsetToLineFast } from "../runtime/error.js";
 import { COLON_SENTINEL, END_SENTINEL } from "../runtime/sentinels.js";
 import { numel } from "../runtime/utils.js";
@@ -34,8 +33,12 @@ import {
   switchMatch as runtimeSwitchMatch,
   range as runtimeRange,
 } from "../runtime/runtimeOperators.js";
-import { resolveFunction, type ResolvedTarget } from "../functionResolve.js";
-import type { FunctionIndex } from "../workspace/functionIndex.js";
+import {
+  resolveName,
+  resolveQualified,
+  targetOf,
+  type Scope,
+} from "../resolution/index.js";
 
 import {
   BreakSignal,
@@ -497,13 +500,7 @@ export function evalExprNargout(
     case "Ident": {
       const val = this.env.get(expr.name);
       if (val !== undefined) return val;
-      // Constant (pi, eps, ...)? Use the non-throwing lookup — the old
-      // throw/catch built a RuntimeError (with a V8 stack capture) for
-      // every non-variable identifier, which is a hot path: any bare
-      // function-name reference, evaluated per loop iteration, paid for
-      // a thrown-and-immediately-caught exception.
-      const c = getConstant(expr.name);
-      if (c !== undefined && !shadowsBuiltin(this, expr.name)) return c;
+      // A function called without arguments, or a constant (pi, ...).
       return this.callFunction(expr.name, [], nargout);
     }
 
@@ -553,34 +550,24 @@ export function evalExprNargout(
     }
 
     case "MethodCall": {
+      // `pkg.fn(args)`, `pkg.Class(args)`, `Class.method(args)`, ...
       const dottedBase = this.tryExtractDottedName(expr.base);
-      if (dottedBase && !this.env.has(dottedBase.split(".")[0])) {
-        const args = this.evalArgs(expr.args);
-        const qualifiedName = `${dottedBase}.${expr.name}`;
-        if (this.functionIndex.workspaceFunctions.has(qualifiedName)) {
-          return this.callFunction(qualifiedName, args, nargout);
+      if (dottedBase) {
+        const r = resolveQualified(
+          [...dottedBase.split("."), expr.name],
+          this.currentScope()
+        );
+        if (r.kind === "enumMember") {
+          const member = this.interpretEnumMember(r.className, r.memberName)!;
+          if (expr.args.length === 0) return member;
+          return this.rt.index(
+            member,
+            this.evalIndicesWithEnd(member, expr.args)
+          );
         }
-        if (this.functionIndex.workspaceClasses.has(qualifiedName)) {
-          return this.instantiateClass(qualifiedName, args, nargout);
-        }
-        if (
-          this.functionIndex.classStaticMethods.get(dottedBase)?.has(expr.name)
-        ) {
-          const target: ResolvedTarget = {
-            kind: "classMethod",
-            className: dottedBase,
-            methodName: expr.name,
-            stripInstance: false,
-          };
-          return this.interpretTarget(target, args, nargout);
-        }
-        if (this.functionIndex.workspaceClasses.has(dottedBase)) {
-          const target: ResolvedTarget = {
-            kind: "classMethod",
-            className: dottedBase,
-            methodName: expr.name,
-            stripInstance: false,
-          };
+        const target = targetOf(r);
+        if (target) {
+          const args = this.evalArgs(expr.args);
           return this.interpretTarget(target, args, nargout);
         }
       }
@@ -928,51 +915,12 @@ export function evalFuncCall(
     return this.rt.index(varVal, args, nargout, skipSubsref);
   }
   const args = this.evalArgs(expr.args);
-  // Constant called as zero-arg function? e.g. eps(), pi(), inf()
-  if (args.length === 0) {
-    const c = getConstant(expr.name);
-    if (c !== undefined && !shadowsBuiltin(this, expr.name)) return c;
-  }
   // Record call-site argument names so the callee's inputname() can read
   // them. Set after evalArgs (which may itself make calls) and consumed at
   // the start of callUserFunction.
   this.pendingInputNames =
     expr.args.length > 0 ? computeInputNames(expr.args, this.env) : undefined;
   return this.callFunction(expr.name, args, nargout);
-}
-
-/** Names known to be shadowed (true) or not (false) by a user function in
- *  the scope identified by `index`, `file` and `cls`. */
-let shadowScope: {
-  index: FunctionIndex | null;
-  file: string;
-  cls: string | undefined;
-  names: Map<string, boolean>;
-} = { index: null, file: "", cls: undefined, names: new Map() };
-
-/** True if `name` resolves to a nested, local, workspace or class function
- *  in the current scope, which takes precedence over a builtin constant such
- *  as `pi`. */
-function shadowsBuiltin(interp: Interpreter, name: string): boolean {
-  if (interp.env.getNestedFunction(name)) return true;
-  const index = interp.functionIndex;
-  const file = interp.currentFile;
-  const cls = interp.currentClassName;
-  if (
-    shadowScope.index !== index ||
-    shadowScope.file !== file ||
-    shadowScope.cls !== cls
-  ) {
-    shadowScope = { index, file, cls, names: new Map() };
-  }
-  let shadowed = shadowScope.names.get(name);
-  if (shadowed === undefined) {
-    const callSite = { file, ...(cls ? { className: cls } : {}) };
-    const target = resolveFunction(name, [], callSite, index);
-    shadowed = !!target && target.kind !== "builtin";
-    shadowScope.names.set(name, shadowed);
-  }
-  return shadowed;
 }
 
 // ── Member access ────────────────────────────────────────────────────────
@@ -982,38 +930,18 @@ export function evalMember(
   expr: Extract<Expr, { type: "Member" }>,
   nargout: number
 ): unknown {
+  // `pkg.fn`, `pkg.Class`, `Class.staticMethod`, `Class.EnumMember`, ...
+  // Any other `Class.name` (e.g. a constant property) evaluates `Class`.
   const dottedName = this.tryExtractDottedName(expr);
   if (dottedName) {
-    const rootName = dottedName.split(".")[0];
-    if (!this.env.has(rootName)) {
-      if (this.functionIndex.workspaceFunctions.has(dottedName)) {
-        return this.callFunction(dottedName, [], nargout);
-      }
-      if (this.functionIndex.workspaceClasses.has(dottedName)) {
-        return this.instantiateClass(dottedName, [], nargout);
-      }
-      const lastDot = dottedName.lastIndexOf(".");
-      if (lastDot > 0) {
-        const prefix = dottedName.slice(0, lastDot);
-        const methodName = dottedName.slice(lastDot + 1);
-        // Enumeration member access: `ClassName.MemberName`.
-        const enumMember = this.interpretEnumMember(prefix, methodName);
-        if (enumMember !== null) return enumMember;
-        if (
-          this.functionIndex.classStaticMethods.get(prefix)?.has(methodName) ||
-          // Implicit static `ClassName.empty` (handled by interpretClassMethod)
-          (methodName === "empty" &&
-            this.functionIndex.workspaceClasses.has(prefix))
-        ) {
-          const target: ResolvedTarget = {
-            kind: "classMethod",
-            className: prefix,
-            methodName,
-            stripInstance: false,
-          };
-          return this.interpretTarget(target, [], nargout);
-        }
-      }
+    const r = resolveQualified(dottedName.split("."), this.currentScope());
+    switch (r.kind) {
+      case "enumMember":
+        return this.interpretEnumMember(r.className, r.memberName);
+      case "packageFunction":
+      case "classConstructor":
+      case "staticMethod":
+        return this.interpretTarget(r.target, [], nargout);
     }
   }
   const base = this.evalExpr(expr.base);
@@ -1190,37 +1118,11 @@ export function evalAnonFunc(
 // ── Function handles ─────────────────────────────────────────────────────
 
 export function makeFuncHandle(this: Interpreter, name: string): RuntimeValue {
-  // Handle dotted names. @ClassName.method is a static-method handle; anything
-  // else (e.g. @pkg.fn or @pkg.subpkg.fn) is a package-function handle that
-  // dispatches through the normal function-resolution path.
-  const dotIdx = name.indexOf(".");
-  if (dotIdx > 0) {
-    const className = name.slice(0, dotIdx);
-    const methodName = name.slice(dotIdx + 1);
-    if (this.code.classes.get(className)) {
-      const fn = RTV.func(name, "builtin");
-      fn.jsFn = (nargout: unknown, ...rest: unknown[]) => {
-        const actualArgs = Array.isArray(rest[0])
-          ? (rest[0] as unknown[])
-          : rest;
-        const narg = typeof nargout === "number" ? nargout : 1;
-        const target: ResolvedTarget = {
-          kind: "classMethod",
-          className,
-          methodName,
-          stripInstance: false,
-        };
-        return this.interpretTarget(target, actualArgs, narg);
-      };
-      fn.jsFnExpectsNargout = true;
-      return fn;
-    }
-    // Not a class — fall through to the package/workspace handle path below.
-  }
-
-  const capturedFile = this.currentFile;
-  const capturedClassName = this.currentClassName;
-  const capturedMethodName = this.currentMethodName;
+  // The handle resolves `name` when called, from the scope it was created
+  // in: that file, class and method, and environment (for nested
+  // functions). A dotted name is a package function or class, or a static
+  // method (`@Class.method`), honoring imports.
+  const scope = this.currentScope();
   const capturedEnv = this.env;
 
   // If `name` resolves to a nested function defined here or in an ancestor,
@@ -1229,26 +1131,25 @@ export function makeFuncHandle(this: Interpreter, name: string): RuntimeValue {
   // strand the handle if it escapes via an output / persistent / global.
   // Builtin/user-function handles don't need this marker; their dispatch
   // doesn't depend on `capturedEnv`'s vars.
-  const isNested = capturedEnv.markChainForNestedHandle(name);
+  const isNested =
+    !name.includes(".") && capturedEnv.markChainForNestedHandle(name);
 
   const fn = RTV.func(name, "builtin");
   fn.jsFn = (nargout: unknown, ...rest: unknown[]) => {
     const actualArgs = Array.isArray(rest[0]) ? (rest[0] as unknown[]) : rest;
     const narg = typeof nargout === "number" ? nargout : 1;
-    const nested = capturedEnv.getNestedFunction(name);
-    if (nested) {
-      return this.withFileContext(
-        capturedFile,
-        capturedClassName,
-        capturedMethodName,
-        () => this.callNestedFunction(nested.fn, nested.env, actualArgs, narg)
-      );
-    }
     return this.withFileContext(
-      capturedFile,
-      capturedClassName,
-      capturedMethodName,
-      () => this.callFunction(name, actualArgs, narg)
+      scope.file,
+      scope.className,
+      scope.methodName,
+      () => {
+        this.rt.checkCancel();
+        const r = resolveName(name, scope, {
+          args: actualArgs,
+          variables: false,
+        });
+        return this.callResolved(r, actualArgs, narg);
+      }
     );
   };
   fn.jsFnExpectsNargout = true;
@@ -1269,20 +1170,31 @@ export function makeFuncHandle(this: Interpreter, name: string): RuntimeValue {
   // When the handle dies, release those captures by clearing the env.
   if (isNested) {
     fn.releaseExtra = () => capturedEnv.clearLocals();
-  } else {
+  } else if (!isMethodHandle(name, scope)) {
     // A plain `@name` handle to a workspace/local/package function (no
-    // captured env). Retain its AST + file so the JIT can inline it as
-    // an in-scope `@name` constant when it crosses a compile boundary.
+    // captured env). Retain its AST + file so the JIT can inline it as an
+    // in-scope `@name` constant when it crosses a compile boundary.
     // Nested-function handles are excluded: they depend on capturedEnv,
     // which the inlined form can't reconstruct.
     fn.handleAst = {
       type: "FuncHandle",
       name,
-      span: { file: capturedFile, start: 0, end: 0 },
+      span: { file: scope.file, start: 0, end: 0 },
     };
-    fn.handleDefFile = capturedFile;
+    fn.handleDefFile = scope.file;
   }
   return fn;
+}
+
+/** Whether `@name` is a handle to a class member (`@Class.staticMethod`). */
+function isMethodHandle(name: string, scope: Scope): boolean {
+  if (!name.includes(".")) return false;
+  const kind = resolveQualified(name.split("."), scope, {
+    variables: false,
+  }).kind;
+  return (
+    kind === "staticMethod" || kind === "classMember" || kind === "enumMember"
+  );
 }
 
 // ── Tensor/Cell literal construction ─────────────────────────────────────

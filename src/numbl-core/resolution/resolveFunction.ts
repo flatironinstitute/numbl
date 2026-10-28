@@ -1,19 +1,23 @@
 /**
- * Unified function resolution.
+ * Function-index tier of name resolution.
  *
- * Single source of truth for resolving a function name + arg types + call site
- * to a definitive target. Used by both codegen (compile-time) and JIT (runtime).
+ * Resolves a function name + argument types + call site to a single target
+ * using the `FunctionIndex`: imports, local functions of the calling file,
+ * private functions, class methods (by object argument), workspace and
+ * `.numbl.js` functions, class constructors and builtins. `resolveName`
+ * (resolveName.ts) layers variables, nested functions, constants and
+ * interpreter specials on top. The JIT calls this directly.
  */
 
-import type { FunctionIndex } from "./workspace/functionIndex.js";
-import { callerPrivateScope } from "./workspace/searchPaths.js";
-import type { CallSite } from "./runtime/runtimeHelpers.js";
-import type { ItemType } from "./itemTypes.js";
+import type { FunctionIndex } from "../workspace/functionIndex.js";
+import { callerPrivateScope } from "../workspace/searchPaths.js";
+import type { CallSite } from "../runtime/runtimeHelpers.js";
+import type { ItemType } from "../itemTypes.js";
 import {
   type RuntimeValue,
   isRuntimeClassInstance,
   isRuntimeClassInstanceArray,
-} from "./runtime/types.js";
+} from "../runtime/types.js";
 
 // ── Resolution target types ──────────────────────────────────────────
 // Describes WHAT function to compile, determined by the call site context.

@@ -47,9 +47,7 @@ import {
   mElemDiv,
 } from "../../numbl-core/helpers/arithmetic.js";
 import { ensureRuntimeValue } from "./runtimeHelpers.js";
-import type { CallSite } from "./runtimeHelpers.js";
 import type { Runtime } from "./runtime.js";
-import { resolutionArgType } from "../functionResolve.js";
 import { allocFloat64Array } from "./alloc.js";
 import { coerceToTensor } from "../helpers/shape-utils.js";
 
@@ -264,17 +262,12 @@ export function dispatch(
   const callerFile = rt.$file;
   const callerLine = rt.$line;
   try {
-    // 1. JIT compile on demand (local → class method → workspace).
-    //    This runs BEFORE builtins so that class method overloads
-    //    (e.g., horzcat, vertcat, plus) take precedence.
-    if (rt.compileSpecialized) {
-      const argTypes = args.map(resolutionArgType);
-      const callSite: CallSite = {
-        file: callerFile ?? "",
-        ...(targetClassName ? { targetClassName } : {}),
-      };
+    // 1. User functions and class methods, resolved from the running
+    //    code's scope. This runs BEFORE builtins so that class method
+    //    overloads (e.g., horzcat, vertcat, plus) take precedence.
+    if (rt.resolveNamedCall) {
       if (rt.profilingEnabled) rt.profileEnter("jit");
-      const fn = rt.compileSpecialized(name, argTypes, callSite);
+      const fn = rt.resolveNamedCall(name, args, targetClassName);
       if (fn) {
         const dispName = targetClassName ? `${targetClassName}.${name}` : name;
         if (rt.profilingEnabled) {
