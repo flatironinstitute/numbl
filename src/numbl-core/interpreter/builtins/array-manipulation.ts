@@ -33,9 +33,16 @@ import {
   isRuntimeClassInstanceArray,
   isRuntimeString,
   isRuntimeStringArray,
+  isRuntimeStruct,
+  isRuntimeStructArray,
   stringArrayValue,
+  structArrayValue,
 } from "../../runtime/types.js";
-import { builtin } from "./builtin.js";
+import { builtin, type BuiltinSpec } from "./builtin.js";
+import {
+  structCat,
+  cellCatAlongDim,
+} from "../../runtime/tensor-construction.js";
 import { builtinError } from "./args.js";
 import { coerceToTensor } from "../../helpers/shape-utils.js";
 import {
@@ -179,6 +186,40 @@ function rejectComplex(v: RuntimeValue, id: string, message: string): void {
     throw builtinError(id, message);
 }
 
+// ── Struct arrays ────────────────────────────────────────────────────────
+
+/** Register a shape builtin that also accepts struct arrays: the numeric
+ *  operation runs on the linear indices of the elements, and the result
+ *  picks the elements at those indices. */
+function structAwareBuiltin(spec: BuiltinSpec): void {
+  const apply = spec.apply;
+  builtin({
+    ...spec,
+    apply: (args, nargout, ctx) => {
+      const v = args[0];
+      if (!isRuntimeStruct(v) && !isRuntimeStructArray(v))
+        return apply(args, nargout, ctx);
+      const names = isRuntimeStruct(v) ? [...v.fields.keys()] : v.fieldNames;
+      const elems = isRuntimeStruct(v) ? [v] : v.elements;
+      const shape = isRuntimeStruct(v) ? [1, 1] : v.shape;
+      const idx = allocFloat64Array(elems.length);
+      for (let i = 0; i < idx.length; i++) idx[i] = i;
+      const r = apply(
+        [RTV.tensor(idx, shape.slice()), ...args.slice(1)],
+        nargout,
+        ctx
+      );
+      if (typeof r === "number") return elems[r];
+      if (typeof r !== "object" || Array.isArray(r) || !isRuntimeTensor(r))
+        throw new RuntimeError(`${spec.name}: unsupported struct array input`);
+      const out = Array.from(r.data, i => elems[i]);
+      const outShape =
+        r.shape.length >= 2 ? r.shape.slice() : [1, r.shape[0] ?? 1];
+      return structArrayValue(names.slice(), out, outShape);
+    },
+  });
+}
+
 // ── reshape ──────────────────────────────────────────────────────────
 
 // Size / replication args must be integers — MATLAB errors on a
@@ -227,7 +268,7 @@ function parseReshapeDims(args: RuntimeValue[], total: number): number[] {
   return shape;
 }
 
-builtin({
+structAwareBuiltin({
   name: "reshape",
   nargin: [2, Infinity],
   apply: args => {
@@ -630,6 +671,10 @@ builtin({
     if (dim === 1) return vertcat(...arrays);
     if (dim === 2) return horzcat(...arrays);
     const dimIdx = dim - 1;
+    if (arrays.some(a => isRuntimeStruct(a) || isRuntimeStructArray(a)))
+      return structCat(arrays, dimIdx);
+    if (arrays.some(a => isRuntimeCell(a)))
+      return cellCatAlongDim(arrays, dimIdx);
     const allLogical = arrays.every(
       a => isRuntimeLogical(a) || (isRuntimeTensor(a) && a._isLogical)
     );
@@ -716,7 +761,7 @@ builtin({
 
 // ── fliplr / flipud / flip ───────────────────────────────────────────
 
-builtin({
+structAwareBuiltin({
   name: "fliplr",
   nargin: 1,
   mfile: true,
@@ -732,7 +777,7 @@ builtin({
   },
 });
 
-builtin({
+structAwareBuiltin({
   name: "flipud",
   nargin: 1,
   mfile: true,
@@ -748,7 +793,7 @@ builtin({
   },
 });
 
-builtin({
+structAwareBuiltin({
   name: "flip",
   nargin: [1, 2],
   apply: args => {
@@ -773,7 +818,7 @@ builtin({
 
 // ── rot90 ────────────────────────────────────────────────────────────
 
-builtin({
+structAwareBuiltin({
   name: "rot90",
   nargin: [1, 2],
   mfile: true,
@@ -866,7 +911,7 @@ function repmatObjects(
     : RTV.classInstanceArray(className, out, [newRows, newCols]);
 }
 
-builtin({
+structAwareBuiltin({
   name: "repmat",
   nargin: [2, Infinity],
   mfile: true,
@@ -1254,7 +1299,7 @@ builtin({
 
 // ── squeeze ──────────────────────────────────────────────────────────
 
-builtin({
+structAwareBuiltin({
   name: "squeeze",
   nargin: 1,
   mfile: true,
@@ -1356,7 +1401,7 @@ function shiftAmounts(v: RuntimeValue): number[] {
   return [Math.round(toNumber(v))];
 }
 
-builtin({
+structAwareBuiltin({
   name: "circshift",
   nargin: [2, 3],
   apply: args => {
@@ -1425,7 +1470,7 @@ builtin({
 
 // ── permute / ipermute ───────────────────────────────────────────────
 
-builtin({
+structAwareBuiltin({
   name: "permute",
   nargin: 2,
   apply: args => {
@@ -1477,7 +1522,7 @@ builtin({
   },
 });
 
-builtin({
+structAwareBuiltin({
   name: "ipermute",
   nargin: 2,
   mfile: true,

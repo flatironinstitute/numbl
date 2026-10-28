@@ -846,7 +846,10 @@ export class Runtime {
       }
       const structs = infos.map(info => Runtime.whosStruct(info));
       if (structs.length === 1) return structs[0];
-      return RTV.structArray([...structs[0].fields.keys()], structs);
+      return RTV.structArray([...structs[0].fields.keys()], structs, [
+        structs.length,
+        1,
+      ]);
     }
 
     // Display mode

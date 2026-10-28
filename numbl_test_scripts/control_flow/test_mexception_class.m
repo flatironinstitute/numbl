@@ -18,7 +18,7 @@ assert(strcmp(ME.message, 'bad value 3'));
 assert(iscell(ME.cause) && isempty(ME.cause));
 assert(isempty(ME.Correction));
 assert(isstruct(ME.stack));
-assert(numel(ME.stack) >= 1);
+assert(numel(ME.stack) >= 2 && iscolumn(ME.stack));
 assert(strcmp(ME.stack(1).name, 'mex_inner'));
 assert(ME.stack(1).line > 0);
 assert(~isempty(strfind(ME.stack(1).file, 'test_mexception_class')));
@@ -76,7 +76,7 @@ end
 M = MException('a:b', 'x=%d, y=%s', 5, 'z');
 assert(strcmp(class(M), 'MException'));
 assert(strcmp(M.message, 'x=5, y=z'));
-assert(isempty(M.stack));
+assert(isempty(M.stack) && isequal(size(M.stack), [0 1]));
 assert(strcmp(getReport(M), 'x=5, y=z'));
 % The message is always a format string, even without values.
 M0 = MException('a:b', 'no value %d');

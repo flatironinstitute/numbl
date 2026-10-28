@@ -44,7 +44,7 @@ const STACK_FIELDS = ["file", "name", "line"];
 
 /** Empty MATLAB-style stack field: 0x1 struct with file/name/line fields. */
 export function emptyStackField(): RuntimeValue {
-  return RTV.structArray(STACK_FIELDS, []);
+  return RTV.structArray(STACK_FIELDS, [], [0, 1]);
 }
 
 export function makeMException(
@@ -195,7 +195,7 @@ export function buildStackField(e: RuntimeError): RuntimeValue {
     );
   }
 
-  return RTV.structArray(STACK_FIELDS, elements);
+  return RTV.structArray(STACK_FIELDS, elements, [elements.length, 1]);
 }
 
 /** Point a RuntimeError's location and call stack at the frames of a stack

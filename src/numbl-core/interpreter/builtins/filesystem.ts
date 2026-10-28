@@ -407,7 +407,7 @@ builtin({
       );
     });
 
-    return RTV.structArray(fieldNames, elements);
+    return RTV.structArray(fieldNames, elements, [elements.length, 1]);
   },
 });
 

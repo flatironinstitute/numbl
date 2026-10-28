@@ -102,23 +102,14 @@ function formatStringArray(v: RuntimeStringArray): string {
   return lines.join("\n");
 }
 
+/** MATLAB's size header and field names (element values are not shown). */
 const formatStructArray = (v: RuntimeStructArray): string => {
-  const elements = v.elements;
-  const fieldNames = v.fieldNames;
-  const formattedElements = elements
-    .map((element, index) => {
-      const elementStr = fieldNames
-        .map(fieldName => {
-          const fieldValue = element.fields.get(fieldName);
-          if (fieldValue == undefined) return `${fieldName}: <undefined>`;
-          return `${fieldName}: ${displayValue(fieldValue)}`;
-        })
-        .join("\n");
-      return `  ${index + 1}: [${elementStr}]`;
-    })
-    .join("\n");
-
-  return `struct array with fields:\n${fieldNames.join("\n")}\n\n${formattedElements}`;
+  const size = v.shape.join("x");
+  const empty = v.elements.length === 0 ? " empty" : "";
+  if (v.fieldNames.length === 0)
+    return `  ${size}${empty} struct array with no fields.`;
+  const names = v.fieldNames.map(f => `    ${f}`).join("\n");
+  return `  ${size}${empty} struct array with fields:\n\n${names}`;
 };
 
 function formatComplex(re: number, im: number): string {

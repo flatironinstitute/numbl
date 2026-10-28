@@ -517,10 +517,19 @@ export function planIndex(
         return mkPlan(cols, a - 1, rows, null, 0, [1, cols]);
     }
   }
+  const { dims, ss } = readSubs(shape, subs);
+  return selPlan(buildSelection(dims, ss), readShape(ss));
+}
+
+/** Resolve and bounds-check `k >= 2` read subscripts. */
+function readSubs(
+  shape: readonly number[],
+  subs: readonly RuntimeValue[]
+): { dims: number[]; ss: Sub[] } {
+  const k = subs.length;
   const dims = effectiveDims(shape, k);
   const collapsed = collapses(shape, k);
   const ss = new Array<Sub>(k);
-  const outShape: number[] = [];
   for (let d = 0; d < k; d++) {
     const s = resolveSub(subs[d], dims[d], d + 1);
     if (s.max > dims[d]) {
@@ -536,9 +545,70 @@ export function planIndex(
       );
     }
     ss[d] = s;
-    outShape.push(s.count);
   }
-  return selPlan(buildSelection(dims, ss), trimShape(outShape));
+  return { dims, ss };
+}
+
+function readShape(ss: readonly Sub[]): number[] {
+  const out: number[] = [];
+  for (let d = 0; d < ss.length; d++) out.push(ss[d].count);
+  return trimShape(out);
+}
+
+// ── Per-dimension plans ──────────────────────────────────────────────────
+
+/** A subscript plan kept per dimension instead of as linear offsets, for
+ *  containers whose storage is not a flat array (sparse matrices). Only
+ *  for two or more subscripts. */
+export interface DimsPlan {
+  /** 0-based positions selected along each subscripted dimension. */
+  pos: Int32Array[];
+  /** Read: result shape. Store: target dimensions after any growth (one
+   *  per subscript). Delete: shape after deletion. */
+  shape: number[];
+  /** Delete: nothing is deleted. */
+  noop: boolean;
+}
+
+function subPositions(s: Sub): Int32Array {
+  const out = new Int32Array(s.count);
+  for (let j = 0; j < s.count; j++) out[j] = subAt(s, j);
+  return out;
+}
+
+function dimsPlan(ss: readonly Sub[], shape: number[]): DimsPlan {
+  return { pos: ss.map(subPositions), shape, noop: false };
+}
+
+/** `planIndex` for `k >= 2` subscripts, per dimension. */
+export function planIndexDims(
+  shape: readonly number[],
+  subs: readonly RuntimeValue[]
+): DimsPlan {
+  const { ss } = readSubs(shape, subs);
+  return dimsPlan(ss, readShape(ss));
+}
+
+/** `planStore` for `k >= 2` subscripts, per dimension. */
+export function planStoreDims(
+  shape: readonly number[],
+  subs: readonly RuntimeValue[],
+  rhsNumel: number,
+  rhsShape: readonly number[]
+): DimsPlan {
+  const r = storeSubs(shape, subs, rhsNumel, rhsShape);
+  return dimsPlan(r.ss, r.newDims);
+}
+
+/** `planDelete` for `k >= 2` subscripts, per dimension: the kept
+ *  positions along each dimension. */
+export function planDeleteDims(
+  shape: readonly number[],
+  subs: readonly RuntimeValue[]
+): DimsPlan {
+  const r = deleteSubs(shape, subs);
+  if (r === null) return { pos: [], shape: shapeCopy(shape), noop: true };
+  return dimsPlan(r.ss, r.shape);
 }
 
 // ── Store ────────────────────────────────────────────────────────────────
@@ -635,6 +705,31 @@ export function planStore(
   }
   if (k === 0) throw new RuntimeError("Assignment requires at least one index");
 
+  const { newDims, ss, grows, collapsed } = storeSubs(
+    shape,
+    subs,
+    rhsNumel,
+    rhsShape
+  );
+  const plan = selPlan(buildSelection(newDims, ss), SCALAR_SHAPE_OUT);
+  if (grows) {
+    const full = collapsed
+      ? newDims.slice(0, k - 1).concat(shape.slice(k - 1))
+      : newDims;
+    plan.grow = trimShape(full);
+  }
+  return plan;
+}
+
+/** Resolve `k >= 2` store subscripts: colon extents, growth and the RHS
+ *  size check. */
+function storeSubs(
+  shape: readonly number[],
+  subs: readonly RuntimeValue[],
+  rhsNumel: number,
+  rhsShape: readonly number[]
+): { newDims: number[]; ss: Sub[]; grows: boolean; collapsed: boolean } {
+  const k = subs.length;
   const dims = effectiveDims(shape, k);
   const collapsed = collapses(shape, k);
   const ss = new Array<Sub | null>(k);
@@ -677,14 +772,7 @@ export function planStore(
     }
   }
 
-  const plan = selPlan(buildSelection(newDims, subsR), SCALAR_SHAPE_OUT);
-  if (grows) {
-    const full = collapsed
-      ? newDims.slice(0, k - 1).concat(shape.slice(k - 1))
-      : newDims;
-    plan.grow = trimShape(full);
-  }
-  return plan;
+  return { newDims, ss: subsR, grows, collapsed };
 }
 
 // ── Delete ───────────────────────────────────────────────────────────────
@@ -749,7 +837,18 @@ export function planDelete(
     );
   }
   if (k === 0) throw new RuntimeError("Deletion requires at least one index");
+  const r = deleteSubs(shape, subs);
+  if (r === null) return noopDelete(shape);
+  return selPlan(buildSelection(r.dims, r.ss), r.shape);
+}
 
+/** Resolve `k >= 2` deletion subscripts to the kept positions along each
+ *  dimension and the resulting shape; null when nothing is deleted. */
+function deleteSubs(
+  shape: readonly number[],
+  subs: readonly RuntimeValue[]
+): { dims: number[]; ss: Sub[]; shape: number[] } | null {
+  const k = subs.length;
   const dims = effectiveDims(shape, k);
   let target = -1;
   let nonColon = 0;
@@ -759,17 +858,20 @@ export function planDelete(
       if (target < 0) target = d;
     }
   }
+  const ss = new Array<Sub>(k);
+  for (let d = 0; d < k; d++) ss[d] = rangeSub(0, dims[d], true);
   if (nonColon === 0) {
     const out = dims.slice();
     out[0] = 0;
-    return mkPlan(0, 0, 1, null, 0, trimShape(out));
+    ss[0] = rangeSub(0, 0, true);
+    return { dims, ss, shape: trimShape(out) };
   }
   if (nonColon > 1) {
     // Deleting nothing is harmless even with several subscripts.
     for (let d = 0; d < k; d++) {
       if (subs[d] !== COLON_INDEX) {
         const s = resolveSub(subs[d], dims[d], d + 1);
-        if (s.count === 0) return noopDelete(shape);
+        if (s.count === 0) return null;
       }
     }
     throw new RuntimeError(
@@ -780,10 +882,8 @@ export function planDelete(
   if (s.max > dims[target]) throw new RuntimeError(DELETE_OOB);
   const del = new Uint8Array(dims[target]);
   const nDel = markPositions(s, del);
-  if (nDel === 0) return noopDelete(shape);
+  if (nDel === 0) return null;
   const nKeep = dims[target] - nDel;
-  const ss = new Array<Sub>(k);
-  for (let d = 0; d < k; d++) ss[d] = rangeSub(0, dims[d], true);
   ss[target] = {
     pos: keptPositions(del, nKeep),
     bias: 0,
@@ -797,7 +897,7 @@ export function planDelete(
   if (nKeep > 0) ss[target].start = ss[target].pos![0];
   const out = dims.slice();
   out[target] = nKeep;
-  return selPlan(buildSelection(dims, ss), trimShape(out));
+  return { dims, ss, shape: trimShape(out) };
 }
 
 // ── Resize ───────────────────────────────────────────────────────────────

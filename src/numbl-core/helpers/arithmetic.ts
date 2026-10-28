@@ -19,6 +19,10 @@ import {
   RuntimeClassInstanceArray,
   isRuntimeStringArray,
   RuntimeStringArray,
+  isRuntimeStruct,
+  isRuntimeStructArray,
+  RuntimeStructArray,
+  type RuntimeStruct,
   stringArrayValue,
   kstr,
 } from "../runtime/types.js";
@@ -1474,6 +1478,20 @@ function transposeClassInstanceArray(
   return new RuntimeClassInstanceArray(v.className, out, [c, r]);
 }
 
+/** Transpose a 2-D struct array by permuting its elements. */
+function transposeStructArray(v: RuntimeStructArray): RuntimeValue {
+  if (v.shape.length > 2)
+    throw new RuntimeError("Transpose on ND array is not defined.");
+  const [r, c] = v.shape;
+  const out = new Array<RuntimeStruct>(v.elements.length);
+  for (let i = 0; i < r; i++) {
+    for (let j = 0; j < c; j++) {
+      out[i * c + j] = v.elements[j * r + i];
+    }
+  }
+  return new RuntimeStructArray(v.fieldNames.slice(), out, [c, r]);
+}
+
 /** Transpose a string array by permuting elements (strings have no
  *  elementwise conjugate). */
 function transposeStringArray(v: RuntimeStringArray): RuntimeValue {
@@ -1501,6 +1519,8 @@ export function mTranspose(v: RuntimeValue): RuntimeValue {
   // after method dispatch declines. A scalar instance is an identity.
   if (isRuntimeClassInstance(v)) return v;
   if (isRuntimeClassInstanceArray(v)) return transposeClassInstanceArray(v);
+  if (isRuntimeStruct(v)) return v;
+  if (isRuntimeStructArray(v)) return transposeStructArray(v);
   if (!isRuntimeTensor(v))
     throw new RuntimeError("Cannot transpose non-numeric value");
   return transposeCore(v, false);
@@ -1520,6 +1540,8 @@ export function mConjugateTranspose(v: RuntimeValue): RuntimeValue {
   // identical to mTranspose. A scalar instance is an identity.
   if (isRuntimeClassInstance(v)) return v;
   if (isRuntimeClassInstanceArray(v)) return transposeClassInstanceArray(v);
+  if (isRuntimeStruct(v)) return v;
+  if (isRuntimeStructArray(v)) return transposeStructArray(v);
   if (!isRuntimeTensor(v))
     throw new RuntimeError("Cannot transpose non-numeric value");
   return transposeCore(v, true);
