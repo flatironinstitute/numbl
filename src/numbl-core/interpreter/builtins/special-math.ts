@@ -5,14 +5,12 @@
 import {
   isRuntimeChar,
   isRuntimeComplexNumber,
-  isRuntimeLogical,
-  isRuntimeNumber,
+  isRuntimeSparseMatrix,
   isRuntimeTensor,
 } from "../../runtime/types.js";
+import { sparseToDense } from "../../helpers/sparse-arithmetic.js";
 import type { RuntimeValue, RuntimeTensor } from "../../runtime/types.js";
 import { RTV, RuntimeError } from "../../runtime/index.js";
-import { toNumber } from "../../runtime/convert.js";
-import { registerIBuiltin } from "./types.js";
 import {
   airyAi,
   airyAiPrime,
@@ -26,69 +24,97 @@ import {
 } from "../../helpers/bessel.js";
 import { tensorOps, OpBessel } from "../../ops/index.js";
 import { allocFloat64Array } from "../../runtime/alloc.js";
+import { builtin } from "./builtin.js";
+import { builtinError, realScalarArg } from "./args.js";
+import { floatArg, hasImag, realFloatArg } from "./math-args.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
-function binaryApply(
-  a: RuntimeValue,
-  b: RuntimeValue,
-  fn: (x: number, y: number) => number
-): RuntimeValue {
-  const aIsT = isRuntimeTensor(a);
-  const bIsT = isRuntimeTensor(b);
-  if (aIsT && bIsT) {
-    const result = allocFloat64Array(a.data.length);
-    for (let i = 0; i < a.data.length; i++)
-      result[i] = fn(a.data[i], b.data[i]);
-    return RTV.tensor(result, a.shape);
-  }
-  if (aIsT) {
-    const bv = toNumber(b);
-    const result = allocFloat64Array(a.data.length);
-    for (let i = 0; i < a.data.length; i++) result[i] = fn(a.data[i], bv);
-    return RTV.tensor(result, a.shape);
-  }
-  if (bIsT) {
-    const av = toNumber(a);
-    const result = allocFloat64Array(b.data.length);
-    for (let i = 0; i < b.data.length; i++) result[i] = fn(av, b.data[i]);
-    return RTV.tensor(result, b.shape);
-  }
-  return RTV.num(fn(toNumber(a), toNumber(b)));
+type Real = number | RuntimeTensor;
+
+/** Unwrap a 1-element tensor to a number. */
+function asScalar(a: Real): Real {
+  return isRuntimeTensor(a) && a.data.length === 1 ? a.data[0] : a;
 }
+
+/** Apply fn element-wise to (a, b): scalar/array pairs, or two arrays of
+ *  the same size (`mismatch` is raised otherwise). */
+function pairApply<T>(
+  a0: Real,
+  b0: Real,
+  fn: (x: number, y: number) => T,
+  mismatch: () => RuntimeError
+): { values: T[]; shape: number[] } {
+  const a = asScalar(a0);
+  const b = asScalar(b0);
+  if (typeof a === "number" && typeof b === "number")
+    return { values: [fn(a, b)], shape: [1, 1] };
+  if (typeof a === "number") {
+    const t = b as RuntimeTensor;
+    return { values: Array.from(t.data, y => fn(a, y)), shape: t.shape };
+  }
+  if (typeof b === "number")
+    return { values: Array.from(a.data, x => fn(x, b)), shape: a.shape };
+  if (
+    a.data.length !== b.data.length ||
+    a.shape.length !== b.shape.length ||
+    a.shape.some((d, k) => d !== b.shape[k])
+  )
+    throw mismatch();
+  return {
+    values: Array.from(a.data, (x, k) => fn(x, b.data[k])),
+    shape: a.shape,
+  };
+}
+
+function realResult(r: { values: number[]; shape: number[] }): RuntimeValue {
+  if (r.values.length === 1 && r.shape.every(d => d === 1)) return r.values[0];
+  return RTV.tensor(allocFloat64Array(r.values), r.shape);
+}
+
+function complexResult(r: {
+  values: { re: number; im: number }[];
+  shape: number[];
+}): RuntimeValue {
+  if (r.values.length === 1 && r.shape.every(d => d === 1)) {
+    const v = r.values[0];
+    return v.im === 0 ? v.re : RTV.complex(v.re, v.im);
+  }
+  const re = allocFloat64Array(r.values.length);
+  const im = allocFloat64Array(r.values.length);
+  let anyImag = false;
+  r.values.forEach((v, k) => {
+    re[k] = v.re;
+    im[k] = v.im;
+    if (v.im !== 0) anyImag = true;
+  });
+  return RTV.tensor(re, r.shape, anyImag ? im : undefined);
+}
+
+/** The NU and Z arguments of the Bessel functions: real NU, and real Z
+ *  (complex Z is not implemented). */
+function besselArgs(
+  name: string,
+  nuArg: RuntimeValue,
+  zArg: RuntimeValue
+): { nu: Real; z: Real } {
+  const nu = realFloatArg(nuArg, () =>
+    builtinError(`MATLAB:${name}:nonRealNU`, "NU must be real.")
+  );
+  const zf = floatArg(zArg);
+  if (hasImag(zf))
+    throw new RuntimeError(`${name}: complex Z is not supported`);
+  const z = realFloatArg(zf, () => new RuntimeError(""));
+  return { nu, z };
+}
+
+const sizeMismatch = (name: string) => () =>
+  builtinError(
+    `MATLAB:${name}:NUAndZSizeMismatch`,
+    "NU and Z must be the same size or one must be a scalar."
+  );
 
 // ── Bessel functions ─────────────────────────────────────────────────────
-
-/** Output type resolver for besselj/bessely/besseli/besselk.
- *  Scalar args → scalar output; any tensor arg → tensor of matching
- *  complexity. Unknown fall-through → unknown. */
-function besselRealResolveType(
-  argTypes: import("../../jitTypes.js").JitType[]
-): import("../../jitTypes.js").JitType {
-  if (argTypes.length < 2) return { kind: "unknown" };
-  const [nu, z] = argTypes;
-  const nuTensor = nu.kind === "tensor";
-  const zTensor = z.kind === "tensor";
-  const scalarKinds = new Set(["number", "boolean", "complex_or_number"]);
-  const nuScalar = scalarKinds.has(nu.kind);
-  const zScalar = scalarKinds.has(z.kind);
-  if (!nuTensor && !zTensor && nuScalar && zScalar) {
-    // All-scalar: J/Y/I/K on real args → real. If either arg may be complex,
-    // the result is complex-or-number.
-    const anyComplex =
-      nu.kind === "complex_or_number" || z.kind === "complex_or_number";
-    return anyComplex ? { kind: "complex_or_number" } : { kind: "number" };
-  }
-  if ((nuTensor || zTensor) && (nuScalar || nuTensor) && (zScalar || zTensor)) {
-    const anyComplex =
-      (nu.kind === "tensor" && nu.isComplex === true) ||
-      (z.kind === "tensor" && z.isComplex === true) ||
-      nu.kind === "complex_or_number" ||
-      z.kind === "complex_or_number";
-    return { kind: "tensor", isComplex: anyComplex };
-  }
-  return { kind: "unknown" };
-}
 
 const besselDefs: [
   string,
@@ -96,71 +122,50 @@ const besselDefs: [
   (z: number) => number,
   number /* OpBessel op code for the tensor fast path */,
 ][] = [
-  ["besselj", besselj, z => Math.exp(-Math.abs(z)), OpBessel.J],
-  ["bessely", bessely, z => Math.exp(-Math.abs(z)), OpBessel.Y],
+  // J and Y are scaled by exp(-abs(imag(z))), which is 1 for real z.
+  ["besselj", besselj, () => 1, OpBessel.J],
+  ["bessely", bessely, () => 1, OpBessel.Y],
   ["besseli", besseli, z => Math.exp(-Math.abs(z)), OpBessel.I],
   ["besselk", besselk, z => Math.exp(z), OpBessel.K],
 ];
 
 for (const [name, fn, scaleFn, opCode] of besselDefs) {
-  registerIBuiltin({
+  // J and Y need no scaling for real z.
+  const scalesReal = name === "besseli" || name === "besselk";
+  builtin({
     name,
-    resolve: argTypes => ({
-      // Output shape mirrors the "combined" shape of nu and z for scalar/tensor
-      // mixes. Real J/Y with negative real z is NaN (or may go complex for Y
-      // at non-integer orders), but for the common JIT cases (scalar nu, real
-      // tensor z with z >= 0) the result is a real tensor. Conservative:
-      // scalar×scalar → number; any tensor arg → tensor (complex if any input
-      // tensor is complex); anything else → unknown.
-      outputTypes: [besselRealResolveType(argTypes)],
-      apply: args => {
-        if (args.length < 2 || args.length > 3)
-          throw new RuntimeError(`${name} requires 2 or 3 arguments`);
-        const scale = args.length === 3 ? toNumber(args[2]) : 0;
-        const nuArg = args[0];
-        const zArg = args[1];
-        // Fast tensor path: scalar nu, real tensor z.
-        if (
-          !isRuntimeTensor(nuArg) &&
-          isRuntimeTensor(zArg) &&
-          !(zArg as RuntimeTensor).imag
-        ) {
-          const nu = toNumber(nuArg);
-          const zT = zArg as RuntimeTensor;
-          const out = allocFloat64Array(zT.data.length);
-          tensorOps.besselReal(
-            opCode,
-            nu,
-            zT.data.length,
-            zT.data as Float64Array,
-            scale === 1 ? 1 : 0,
-            out as Float64Array
-          );
-          return RTV.tensor(out, zT.shape);
-        }
-        return binaryApply(nuArg, zArg, (nu, z) => {
-          const val = fn(nu, z);
-          return scale === 1 ? val * scaleFn(z) : val;
-        });
-      },
-    }),
+    nargin: [2, 3],
+    apply: args => {
+      const { nu, z } = besselArgs(name, args[0], args[1]);
+      const scale = args.length === 3 ? realScalarArg(args[2]) : 0;
+      const scaled = scale === 1 && scalesReal;
+      const nuS = asScalar(nu);
+      // Fast tensor path: scalar nu, real tensor z.
+      if (typeof nuS === "number" && isRuntimeTensor(z) && z.data.length > 1) {
+        const out = allocFloat64Array(z.data.length);
+        tensorOps.besselReal(
+          opCode,
+          nuS,
+          z.data.length,
+          z.data as Float64Array,
+          scaled ? 1 : 0,
+          out as Float64Array
+        );
+        return RTV.tensor(out, z.shape);
+      }
+      return realResult(
+        pairApply(
+          nu,
+          z,
+          (n, x) => {
+            const val = fn(n, x);
+            return scaled ? val * scaleFn(x) : val;
+          },
+          sizeMismatch(name)
+        )
+      );
+    },
   });
-}
-
-/** Output type resolver for besselh.  Result is always complex. */
-function besselhResolveType(
-  argTypes: import("../../jitTypes.js").JitType[]
-): import("../../jitTypes.js").JitType {
-  if (argTypes.length < 2 || argTypes.length > 4) return { kind: "unknown" };
-  const nu = argTypes[0];
-  // besselh(nu, z) or besselh(nu, K, z[, scale])
-  const z = argTypes.length === 2 ? argTypes[1] : argTypes[2];
-  const anyTensor = nu.kind === "tensor" || z.kind === "tensor";
-  if (anyTensor) {
-    return { kind: "tensor", isComplex: true };
-  }
-  // Scalar args → complex scalar.
-  return { kind: "complex_or_number" };
 }
 
 // ── besselh: Hankel function (Bessel function of the third kind) ─────────
@@ -195,99 +200,55 @@ function besselhScalar(
   return { re, im };
 }
 
-function binaryApplyComplex(
-  a: RuntimeValue,
-  b: RuntimeValue,
-  fn: (x: number, y: number) => { re: number; im: number },
-  name: string
-): RuntimeValue {
-  const aIsT = isRuntimeTensor(a);
-  const bIsT = isRuntimeTensor(b);
-  const buildTensor = (
-    len: number,
-    shape: number[],
-    iter: (i: number) => { re: number; im: number }
-  ): RuntimeValue => {
-    const re = allocFloat64Array(len);
-    const im = allocFloat64Array(len);
-    let hasImag = false;
-    for (let i = 0; i < len; i++) {
-      const r = iter(i);
-      re[i] = r.re;
-      im[i] = r.im;
-      if (r.im !== 0) hasImag = true;
-    }
-    return RTV.tensor(re, shape, hasImag ? im : undefined);
-  };
-  if (aIsT && bIsT) {
-    if (a.data.length !== b.data.length)
-      throw new RuntimeError(`${name}: array dimensions must agree`);
-    return buildTensor(a.data.length, a.shape, i => fn(a.data[i], b.data[i]));
-  }
-  if (aIsT) {
-    const bv = toNumber(b);
-    return buildTensor(a.data.length, a.shape, i => fn(a.data[i], bv));
-  }
-  if (bIsT) {
-    const av = toNumber(a);
-    return buildTensor(b.data.length, b.shape, i => fn(av, b.data[i]));
-  }
-  const r = fn(toNumber(a), toNumber(b));
-  return r.im === 0 ? RTV.num(r.re) : RTV.complex(r.re, r.im);
-}
-
-registerIBuiltin({
+builtin({
   name: "besselh",
-  resolve: argTypes => ({
-    // besselh always returns complex (H = J ± i*Y). Scalar args → complex
-    // scalar; any tensor arg → complex tensor.
-    outputTypes: [besselhResolveType(argTypes)],
-    apply: args => {
-      if (args.length < 2 || args.length > 4)
-        throw new RuntimeError("besselh requires 2 to 4 arguments");
-      const nuArg = args[0];
-      let k = 1;
-      let zArg: RuntimeValue;
-      let scale = false;
-      if (args.length === 2) {
-        zArg = args[1];
-      } else {
-        k = Math.round(toNumber(args[1]));
-        if (k !== 1 && k !== 2)
-          throw new RuntimeError("besselh: K must be 1 or 2");
-        zArg = args[2];
-        if (args.length === 4) scale = toNumber(args[3]) === 1;
+  // besselh(nu, z), besselh(nu, K, z), besselh(nu, K, z, scale)
+  nargin: [2, 4],
+  apply: args => {
+    let k = 1;
+    let zArg: RuntimeValue;
+    let scale = false;
+    if (args.length === 2) {
+      zArg = args[1];
+    } else {
+      const kErr = () =>
+        builtinError("MATLAB:besselh:KNotOneOrTwo", "K must be 1 or 2.");
+      try {
+        k = realScalarArg(args[1]);
+      } catch {
+        throw kErr();
       }
-      // Fast tensor path: scalar nu, real tensor z.
-      if (
-        !isRuntimeTensor(nuArg) &&
-        isRuntimeTensor(zArg) &&
-        !(zArg as RuntimeTensor).imag
-      ) {
-        const nu = toNumber(nuArg);
-        const zT = zArg as RuntimeTensor;
-        const len = zT.data.length;
-        const outRe = allocFloat64Array(len);
-        const outIm = allocFloat64Array(len);
-        tensorOps.besselH(
-          k,
-          nu,
-          len,
-          zT.data as Float64Array,
-          scale ? 1 : 0,
-          outRe as Float64Array,
-          outIm as Float64Array
-        );
-        return RTV.tensor(outRe, zT.shape, outIm);
-      }
-      return binaryApplyComplex(
-        nuArg,
-        zArg,
-        (nu, z) => besselhScalar(nu, k, z, scale),
-        "besselh"
+      if (k !== 1 && k !== 2) throw kErr();
+      zArg = args[2];
+      if (args.length === 4) scale = realScalarArg(args[3]) === 1;
+    }
+    const { nu, z } = besselArgs("besselh", args[0], zArg);
+    const nuS = asScalar(nu);
+    // Fast tensor path: scalar nu, real tensor z.
+    if (typeof nuS === "number" && isRuntimeTensor(z) && z.data.length > 1) {
+      const len = z.data.length;
+      const outRe = allocFloat64Array(len);
+      const outIm = allocFloat64Array(len);
+      tensorOps.besselH(
+        k,
+        nuS,
+        len,
+        z.data as Float64Array,
+        scale ? 1 : 0,
+        outRe as Float64Array,
+        outIm as Float64Array
       );
-    },
-  }),
+      return RTV.tensor(outRe, z.shape, outIm);
+    }
+    return complexResult(
+      pairApply(
+        nu,
+        z,
+        (n, x) => besselhScalar(n, k, x, scale),
+        sizeMismatch("besselh")
+      )
+    );
+  },
 });
 
 // ── Airy functions ───────────────────────────────────────────────────────
@@ -301,68 +262,92 @@ function scaleAiry(n: number, x: number, val: number): number {
   return x >= 0 ? val * Math.exp(-zeta) : val;
 }
 
+/** (2/3) z^(3/2) on the principal branch. */
+function airyZeta(re: number, im: number): { re: number; im: number } {
+  const r = Math.pow(Math.hypot(re, im), 1.5);
+  const th = 1.5 * Math.atan2(im, re);
+  return { re: (2 / 3) * r * Math.cos(th), im: (2 / 3) * r * Math.sin(th) };
+}
+
+/** Airy function k of complex z, with MATLAB's scaling: Ai, Ai' times
+ *  exp(zeta) and Bi, Bi' times exp(-abs(real(zeta))). */
+function airyComplex(
+  k: number,
+  re: number,
+  im: number,
+  scaled: boolean
+): { re: number; im: number } {
+  const r = airyAllComplex(re, im)[airyComplexKeys[k]];
+  if (!scaled) return r;
+  const z = airyZeta(re, im);
+  if (k >= 2) {
+    const f = Math.exp(-Math.abs(z.re));
+    return { re: r.re * f, im: r.im * f };
+  }
+  const m = Math.exp(z.re);
+  const c = m * Math.cos(z.im);
+  const s = m * Math.sin(z.im);
+  return { re: r.re * c - r.im * s, im: r.re * s + r.im * c };
+}
+
 function applyAiryElementwise(
   xArg: RuntimeValue,
   n: number,
   scaled: boolean
 ): RuntimeValue {
-  if (isRuntimeComplexNumber(xArg)) {
-    const all = airyAllComplex(xArg.re, xArg.im);
-    const r = all[airyComplexKeys[n]];
+  const x = floatArg(xArg);
+  if (isRuntimeComplexNumber(x) && x.im !== 0) {
+    const r = airyComplex(n, x.re, x.im, scaled);
     return r.im === 0 ? RTV.num(r.re) : RTV.complex(r.re, r.im);
   }
-  if (isRuntimeTensor(xArg) && xArg.imag !== undefined) {
-    const len = xArg.data.length;
+  if (hasImag(x)) {
+    const t = isRuntimeSparseMatrix(x)
+      ? sparseToDense(x)
+      : (x as RuntimeTensor);
+    const im = t.imag!;
+    const len = t.data.length;
     const resultRe = allocFloat64Array(len);
     const resultIm = allocFloat64Array(len);
     for (let i = 0; i < len; i++) {
-      const all = airyAllComplex(xArg.data[i], xArg.imag[i]);
-      const r = all[airyComplexKeys[n]];
+      const r = airyComplex(n, t.data[i], im[i], scaled);
       resultRe[i] = r.re;
       resultIm[i] = r.im;
     }
-    const isReal = resultIm.every(x => x === 0);
-    return RTV.tensor(resultRe, xArg.shape, isReal ? undefined : resultIm);
+    const isReal = resultIm.every(v => v === 0);
+    return RTV.tensor(resultRe, t.shape, isReal ? undefined : resultIm);
   }
+  const xr = realFloatArg(x, () => new RuntimeError("airy: unexpected input"));
   const fn = airyFns[n];
-  if (isRuntimeTensor(xArg)) {
-    const result = allocFloat64Array(xArg.data.length);
-    for (let i = 0; i < xArg.data.length; i++) {
-      const val = fn(xArg.data[i]);
-      result[i] = scaled ? scaleAiry(n, xArg.data[i], val) : val;
+  if (isRuntimeTensor(xr)) {
+    const result = allocFloat64Array(xr.data.length);
+    for (let i = 0; i < xr.data.length; i++) {
+      const val = fn(xr.data[i]);
+      result[i] = scaled ? scaleAiry(n, xr.data[i], val) : val;
     }
-    return RTV.tensor(result, xArg.shape);
+    return RTV.tensor(result, xr.shape);
   }
-  const x = toNumber(xArg);
-  const val = fn(x);
-  return RTV.num(scaled ? scaleAiry(n, x, val) : val);
+  const val = fn(xr);
+  return RTV.num(scaled ? scaleAiry(n, xr, val) : val);
 }
 
-registerIBuiltin({
+builtin({
   name: "airy",
-  resolve: () => ({
-    outputTypes: [{ kind: "unknown" }],
-    apply: args => {
-      if (args.length < 1 || args.length > 3)
-        throw new RuntimeError("airy requires 1 to 3 arguments");
-
-      let nArg: RuntimeValue | undefined;
-      let xArg: RuntimeValue;
-      let scaled = false;
-
-      if (args.length === 1) {
-        xArg = args[0];
-      } else {
-        nArg = args[0];
-        xArg = args[1];
-        if (args.length === 3) scaled = toNumber(args[2]) === 1;
-      }
-
-      const n = nArg === undefined ? 0 : Math.round(toNumber(nArg));
-      if (n < 0 || n > 3) throw new RuntimeError("K must be 0, 1, 2, or 3.");
-      return applyAiryElementwise(xArg, n, scaled);
-    },
-  }),
+  // airy(z), airy(k, z), airy(k, z, scale)
+  nargin: [1, 3],
+  apply: args => {
+    if (args.length === 1) return applyAiryElementwise(args[0], 0, false);
+    const kErr = () =>
+      builtinError("MATLAB:airy:InvalidOrder", "K must be 0, 1, 2, or 3.");
+    let n: number;
+    try {
+      n = realScalarArg(args[0]);
+    } catch {
+      throw kErr();
+    }
+    if (!(n === 0 || n === 1 || n === 2 || n === 3)) throw kErr();
+    const scaled = args.length === 3 && realScalarArg(args[2]) === 1;
+    return applyAiryElementwise(args[1], n, scaled);
+  },
 });
 
 // ── ellipj ───────────────────────────────────────────────────────────────
@@ -401,94 +386,39 @@ function ellipjScalar(
   return { sn, cn, dn };
 }
 
-registerIBuiltin({
+builtin({
   name: "ellipj",
-  resolve: (_argTypes, nargout) => {
-    const outTypes = [];
-    for (let i = 0; i < Math.max(nargout, 1); i++)
-      outTypes.push({ kind: "unknown" as const });
-    return {
-      outputTypes: outTypes,
-      apply: (args, nargout) => {
-        if (args.length < 2 || args.length > 3)
-          throw new RuntimeError("ellipj requires 2 or 3 arguments");
-        const uArg = args[0];
-        const mArg = args[1];
-        const tol =
-          args.length >= 3 ? toNumber(args[2]) : 2.220446049250313e-16;
-        const uIsT = isRuntimeTensor(uArg);
-        const mIsT = isRuntimeTensor(mArg);
-        const effNargout = Math.max(nargout, 1);
-
-        const buildResult = (
-          snArr: Float64Array,
-          cnArr: Float64Array,
-          dnArr: Float64Array,
-          shape: number[]
-        ): RuntimeValue | RuntimeValue[] => {
-          const results: RuntimeValue[] = [];
-          if (effNargout >= 1) results.push(RTV.tensor(snArr, [...shape]));
-          if (effNargout >= 2) results.push(RTV.tensor(cnArr, [...shape]));
-          if (effNargout >= 3) results.push(RTV.tensor(dnArr, [...shape]));
-          return results.length === 1 ? results[0] : results;
-        };
-
-        if (!uIsT && !mIsT) {
-          const r = ellipjScalar(toNumber(uArg), toNumber(mArg), tol);
-          if (effNargout === 1) return RTV.num(r.sn);
-          const results: RuntimeValue[] = [RTV.num(r.sn)];
-          if (effNargout >= 2) results.push(RTV.num(r.cn));
-          if (effNargout >= 3) results.push(RTV.num(r.dn));
-          return results;
-        }
-
-        if (uIsT && !mIsT) {
-          const mv = toNumber(mArg);
-          const len = uArg.data.length;
-          const snArr = allocFloat64Array(len);
-          const cnArr = allocFloat64Array(len);
-          const dnArr = allocFloat64Array(len);
-          for (let i = 0; i < len; i++) {
-            const r = ellipjScalar(uArg.data[i], mv, tol);
-            snArr[i] = r.sn;
-            cnArr[i] = r.cn;
-            dnArr[i] = r.dn;
-          }
-          return buildResult(snArr, cnArr, dnArr, uArg.shape);
-        }
-
-        if (!uIsT && mIsT) {
-          const uv = toNumber(uArg);
-          const mT = mArg as RuntimeTensor;
-          const len = mT.data.length;
-          const snArr = allocFloat64Array(len);
-          const cnArr = allocFloat64Array(len);
-          const dnArr = allocFloat64Array(len);
-          for (let i = 0; i < len; i++) {
-            const r = ellipjScalar(uv, mT.data[i], tol);
-            snArr[i] = r.sn;
-            cnArr[i] = r.cn;
-            dnArr[i] = r.dn;
-          }
-          return buildResult(snArr, cnArr, dnArr, mT.shape);
-        }
-
-        // tensor-tensor
-        const uT = uArg as RuntimeTensor;
-        const mT = mArg as RuntimeTensor;
-        const len = uT.data.length;
-        const snArr = allocFloat64Array(len);
-        const cnArr = allocFloat64Array(len);
-        const dnArr = allocFloat64Array(len);
-        for (let i = 0; i < len; i++) {
-          const r = ellipjScalar(uT.data[i], mT.data[i], tol);
-          snArr[i] = r.sn;
-          cnArr[i] = r.cn;
-          dnArr[i] = r.dn;
-        }
-        return buildResult(snArr, cnArr, dnArr, uT.shape);
-      },
-    };
+  // [sn, cn, dn] = ellipj(u, m), ellipj(u, m, tol)
+  nargin: [0, 3],
+  nargout: 3,
+  mfile: true,
+  apply: (args, nargout) => {
+    if (args.length < 2)
+      throw builtinError(
+        "MATLAB:ellipj:NotEnoughInputs",
+        "Not enough input arguments."
+      );
+    const complexErr = () =>
+      builtinError(
+        "MATLAB:ellipj:ComplexInputs",
+        "Input arguments must be real."
+      );
+    const u = realFloatArg(args[0], complexErr);
+    const m = realFloatArg(args[1], complexErr);
+    const tol =
+      args.length >= 3 ? realScalarArg(args[2]) : 2.220446049250313e-16;
+    const r = pairApply(
+      u,
+      m,
+      (uv, mv) => ellipjScalar(uv, mv, tol),
+      () => new RuntimeError("ellipj: U and M must be the same size")
+    );
+    const pick = (key: "sn" | "cn" | "dn") =>
+      realResult({ values: r.values.map(v => v[key]), shape: r.shape });
+    if (nargout <= 1) return pick("sn");
+    const results: RuntimeValue[] = [pick("sn"), pick("cn")];
+    if (nargout >= 3) results.push(pick("dn"));
+    return results;
   },
 });
 
@@ -538,88 +468,87 @@ function legendreAllOrders(n: number, x: number): number[] {
   return result;
 }
 
-registerIBuiltin({
+builtin({
   name: "legendre",
-  resolve: () => ({
-    outputTypes: [{ kind: "unknown" }],
-    apply: args => {
-      if (args.length < 2 || args.length > 3)
-        throw new RuntimeError("legendre requires 2 or 3 arguments");
+  // legendre(n, x), legendre(n, x, normalization)
+  nargin: [2, 3],
+  mfile: true,
+  apply: args => {
+    let n: number;
+    try {
+      n = Math.round(realScalarArg(args[0]));
+    } catch {
+      throw builtinError(
+        "MATLAB:legendre:InvalidN",
+        "N must be a positive scalar integer."
+      );
+    }
+    if (n < 0 || !isFinite(n))
+      throw new RuntimeError("Degree n must be a non-negative integer");
 
-      const n = Math.round(toNumber(args[0]));
-      if (n < 0 || !isFinite(n))
-        throw new RuntimeError("Degree n must be a non-negative integer");
-
-      let normalization = "unnorm";
-      if (args.length === 3) {
-        const normArg = args[2];
-        if (isRuntimeChar(normArg)) {
-          normalization = normArg.value;
-        } else if (typeof normArg === "string") {
-          normalization = normArg;
-        } else {
-          throw new RuntimeError(
-            "Third argument must be a normalization string"
-          );
-        }
-        if (
-          normalization !== "unnorm" &&
-          normalization !== "sch" &&
-          normalization !== "norm"
-        )
-          throw new RuntimeError(
-            "Normalization must be 'unnorm', 'sch', or 'norm'"
-          );
-      }
-
-      const xArg = args[1];
-      let xValues: number[];
-      let xShape: number[];
-      if (isRuntimeNumber(xArg)) {
-        xValues = [xArg as number];
-        xShape = [1, 1];
-      } else if (isRuntimeLogical(xArg)) {
-        xValues = [xArg ? 1 : 0];
-        xShape = [1, 1];
-      } else if (isRuntimeTensor(xArg)) {
-        xValues = Array.from(xArg.data);
-        xShape = xArg.shape;
+    let normalization = "unnorm";
+    if (args.length === 3) {
+      const normArg = args[2];
+      if (isRuntimeChar(normArg)) {
+        normalization = normArg.value;
+      } else if (typeof normArg === "string") {
+        normalization = normArg;
       } else {
-        throw new RuntimeError("X must be a numeric value");
+        throw new RuntimeError("Third argument must be a normalization string");
       }
+      if (
+        normalization !== "unnorm" &&
+        normalization !== "sch" &&
+        normalization !== "norm"
+      )
+        throw new RuntimeError(
+          "Normalization must be 'unnorm', 'sch', or 'norm'"
+        );
+    }
 
-      const numX = xValues.length;
-      const numOrders = n + 1;
-      const outSize = numOrders * numX;
-      const result = allocFloat64Array(outSize);
+    const xErr = () =>
+      builtinError(
+        "MATLAB:legendre:InvalidX",
+        "X must be real and in the range (-1,1)."
+      );
+    if (isRuntimeChar(args[1])) throw xErr();
+    let xr: number | RuntimeTensor;
+    try {
+      xr = realFloatArg(args[1], xErr);
+    } catch {
+      throw xErr();
+    }
+    const xValues = typeof xr === "number" ? [xr] : Array.from(xr.data);
+    const xShape = typeof xr === "number" ? [1, 1] : xr.shape;
 
-      for (let xi = 0; xi < numX; xi++) {
-        const x = xValues[xi];
-        const pmn = legendreAllOrders(n, x);
-        for (let m = 0; m <= n; m++) {
-          let val = pmn[m];
-          if (normalization === "sch") {
-            if (m > 0) {
-              val *=
-                Math.pow(-1, m) *
-                Math.sqrt((2 * factorialVal(n - m)) / factorialVal(n + m));
-            }
-          } else if (normalization === "norm") {
+    const numX = xValues.length;
+    const numOrders = n + 1;
+    const outSize = numOrders * numX;
+    const result = allocFloat64Array(outSize);
+
+    for (let xi = 0; xi < numX; xi++) {
+      const x = xValues[xi];
+      const pmn = legendreAllOrders(n, x);
+      for (let m = 0; m <= n; m++) {
+        let val = pmn[m];
+        if (normalization === "sch") {
+          if (m > 0) {
             val *=
               Math.pow(-1, m) *
-              Math.sqrt(
-                ((n + 0.5) * factorialVal(n - m)) / factorialVal(n + m)
-              );
+              Math.sqrt((2 * factorialVal(n - m)) / factorialVal(n + m));
           }
-          result[xi * numOrders + m] = val;
+        } else if (normalization === "norm") {
+          val *=
+            Math.pow(-1, m) *
+            Math.sqrt(((n + 0.5) * factorialVal(n - m)) / factorialVal(n + m));
         }
+        result[xi * numOrders + m] = val;
       }
+    }
 
-      if (isRuntimeNumber(xArg) || isRuntimeLogical(xArg))
-        return RTV.tensor(result, [numOrders, 1]);
-      if (xShape.length === 2 && (xShape[0] === 1 || xShape[1] === 1))
-        return RTV.tensor(result, [numOrders, numX]);
-      return RTV.tensor(result, [numOrders, ...xShape]);
-    },
-  }),
+    if (typeof xr === "number") return RTV.tensor(result, [numOrders, 1]);
+    if (xShape.length === 2 && (xShape[0] === 1 || xShape[1] === 1))
+      return RTV.tensor(result, [numOrders, numX]);
+    return RTV.tensor(result, [numOrders, ...xShape]);
+  },
 });

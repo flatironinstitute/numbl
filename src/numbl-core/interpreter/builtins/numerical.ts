@@ -1,11 +1,7 @@
 /**
- * Numerical builtins for the interpreter system:
- * conv, deconv, polyval, polyfit, trapz, cumtrapz, gradient,
- * interp1, roots, poly, cov, corrcoef, accumarray.
- *
- * These are thin wrappers that delegate to the legacy implementations
- * (which are already well-tested) while registering as IBuiltins for
- * proper JIT type inference.
+ * Numerical builtins: eps, conv, conv2, deconv, polyval, polyfit, trapz,
+ * cumtrapz, gradient, accumarray, interp1, roots, poly, cov, corrcoef,
+ * histc, discretize, mkpp, ppval, fnint/ppint.
  */
 
 import {
@@ -20,32 +16,105 @@ import {
   isRuntimeLogical,
   isRuntimeTensor,
   isRuntimeChar,
+  isRuntimeComplexNumber,
+  isRuntimeSparseMatrix,
   isRuntimeString,
   isRuntimeFunction,
   isRuntimeStruct,
+  type RuntimeTensor,
 } from "../../runtime/types.js";
-import { defineBuiltin } from "./types.js";
-import type { JitType } from "../../jitTypes.js";
+import { builtin } from "./builtin.js";
+import {
+  builtinError,
+  numericArg,
+  realScalarArg,
+  type NumericArg,
+} from "./args.js";
+import { floatArg, hasImag, realDenseArg } from "./math-args.js";
+import { unaryRealResult } from "./types.js";
+import { sparseToDense } from "../../helpers/sparse-arithmetic.js";
 import { getLapackBridge } from "../../native/lapack-bridge.js";
 import { linsolveLapack } from "../../helpers/linsolve.js";
 import { allocFloat64Array, withScratch } from "../../runtime/alloc.js";
 
-function toFloatArray(v: RuntimeValue): Float64Array {
-  if (isRuntimeNumber(v)) return allocFloat64Array([v as number]);
-  if (isRuntimeLogical(v)) return allocFloat64Array([v ? 1 : 0]);
-  if (isRuntimeTensor(v)) return allocFloat64Array(v.data);
-  throw new RuntimeError("Expected numeric argument");
+const isText = (v: RuntimeValue) => isRuntimeChar(v) || isRuntimeString(v);
+const textOf = (v: RuntimeValue) =>
+  (isRuntimeChar(v) ? v.value : String(v)).toLowerCase();
+
+const complexUnsupported = (name: string) => () =>
+  new RuntimeError(`${name}: complex input is not supported`);
+
+/** The values of a real numeric or logical argument. Char is accepted
+ *  only with `allowChar` (as its character codes), and complex input
+ *  raises an error instead of dropping the imaginary part. */
+function toFloatArray(
+  v: RuntimeValue,
+  name: string,
+  allowChar = false
+): Float64Array {
+  if (isRuntimeChar(v) && !allowChar)
+    throw new RuntimeError(`${name}: char input is not supported`);
+  let a: number | RuntimeTensor;
+  try {
+    a = realDenseArg(v, complexUnsupported(name));
+  } catch (e) {
+    if (hasImagValue(v)) throw e;
+    throw new RuntimeError(`${name}: expected a numeric argument`);
+  }
+  return typeof a === "number"
+    ? allocFloat64Array([a])
+    : allocFloat64Array(a.data);
+}
+
+function hasImagValue(v: RuntimeValue): boolean {
+  return (
+    (isRuntimeComplexNumber(v) && v.im !== 0) ||
+    (isRuntimeTensor(v) && !!v.imag && v.imag.some(x => x !== 0))
+  );
+}
+
+/** The values of a numeric or logical (not char) argument, with its
+ *  imaginary part (undefined when real). */
+function toComplexArrays(
+  v: RuntimeValue,
+  name: string
+): { re: Float64Array; im: Float64Array | undefined } {
+  if (isRuntimeChar(v))
+    throw new RuntimeError(`${name}: char input is not supported`);
+  let a: NumericArg;
+  try {
+    a = numericArg(v);
+  } catch {
+    throw new RuntimeError(`${name}: expected a numeric argument`);
+  }
+  if (isRuntimeSparseMatrix(a)) a = sparseToDense(a);
+  if (typeof a === "number")
+    return { re: allocFloat64Array([a]), im: undefined };
+  if (isRuntimeComplexNumber(a))
+    return {
+      re: allocFloat64Array([a.re]),
+      im: a.im !== 0 ? allocFloat64Array([a.im]) : undefined,
+    };
+  return {
+    re: allocFloat64Array(a.data),
+    im: hasImag(a) ? allocFloat64Array(a.imag!) : undefined,
+  };
+}
+
+/** A tensor from real and (optional) imaginary parts. */
+function complexTensor(
+  re: Float64Array,
+  im: Float64Array | undefined,
+  shape: number[]
+): RuntimeValue {
+  const anyImag = !!im && im.some(x => x !== 0);
+  return RTV.tensor(re, shape, anyImag ? im : undefined);
 }
 
 function isColumnVector(v: RuntimeValue): boolean {
   if (isRuntimeTensor(v))
     return v.shape[0] > 1 && (v.shape.length < 2 || v.shape[1] === 1);
   return false;
-}
-
-function varargMatch(argTypes: JitType[]): JitType[] | null {
-  if (argTypes.length < 1) return null;
-  return [{ kind: "unknown" }];
 }
 
 // ── eps ──────────────────────────────────────────────────────────────
@@ -66,128 +135,104 @@ function epsOfScalar(x: number): number {
 const DOUBLE_EPS = 2.220446049250313e-16; // 2^-52
 const SINGLE_EPS = 1.1920928955078125e-7; // 2^-23
 
-defineBuiltin({
+const epsClassError = () =>
+  builtinError(
+    "MATLAB:eps:invalidClassName",
+    'Class name must be a class that supports EPS, such as "double" or "single".'
+  );
+
+builtin({
   name: "eps",
-  cases: [
-    // eps() — no args
-    {
-      match: argTypes => {
-        if (argTypes.length !== 0) return null;
-        return [{ kind: "number" }];
-      },
-      apply: () => DOUBLE_EPS,
-    },
-    // eps('double') or eps('single')
-    {
-      match: argTypes => {
-        if (argTypes.length !== 1) return null;
-        if (argTypes[0].kind !== "char" && argTypes[0].kind !== "string")
-          return null;
-        return [{ kind: "number" }];
-      },
-      apply: args => {
-        const v = args[0];
-        const s = isRuntimeChar(v)
-          ? v.value
-          : isRuntimeString(v)
-            ? (v as string)
-            : "";
-        if (s === "double") return DOUBLE_EPS;
-        if (s === "single") return SINGLE_EPS;
-        throw new RuntimeError(`eps: unknown data type '${s}'`);
-      },
-    },
-    // eps(x) — scalar number
-    {
-      match: argTypes => {
-        if (argTypes.length !== 1) return null;
-        const k = argTypes[0].kind;
-        if (k === "number" || k === "boolean") return [{ kind: "number" }];
-        return null;
-      },
-      apply: args => {
-        const v = args[0];
-        const x = typeof v === "boolean" ? (v ? 1 : 0) : (v as number);
-        return epsOfScalar(x);
-      },
-    },
-    // eps(x) — tensor
-    {
-      match: argTypes => {
-        if (argTypes.length !== 1) return null;
-        if (argTypes[0].kind !== "tensor") return null;
-        const a = argTypes[0];
-        return [{ kind: "tensor" as const, isComplex: false, shape: a.shape }];
-      },
-      apply: args => {
-        const v = args[0];
-        if (!isRuntimeTensor(v))
-          throw new RuntimeError("eps: expected numeric argument");
-        const n = v.data.length;
-        const out = allocFloat64Array(n);
-        for (let i = 0; i < n; i++) out[i] = epsOfScalar(v.data[i]);
-        return RTV.tensor(out, v.shape.slice());
-      },
-    },
-  ],
+  // eps, eps(x), eps(classname), eps('like', p)
+  nargin: [0, 2],
+  apply: args => {
+    if (args.length === 0) return DOUBLE_EPS;
+    const v = args[0];
+    if (args.length === 2) {
+      if (!(isText(v) && textOf(v) === "like"))
+        throw builtinError(
+          "MATLAB:eps:mustBeLike",
+          'With two input arguments, the first argument must be "like".'
+        );
+      return DOUBLE_EPS;
+    }
+    if (isText(v)) {
+      const s = textOf(v);
+      if (s === "double") return DOUBLE_EPS;
+      if (s === "single") return SINGLE_EPS;
+      throw epsClassError();
+    }
+    let x: NumericArg;
+    try {
+      x = floatArg(v);
+    } catch {
+      throw epsClassError();
+    }
+    // eps of a complex value is eps of its magnitude.
+    return unaryRealResult(
+      epsOfScalar,
+      (re, im) => epsOfScalar(Math.hypot(re, im)),
+      "eps"
+    )([x]);
+  },
 });
 
 // ── conv ─────────────────────────────────────────────────────────────
 
-defineBuiltin({
+builtin({
   name: "conv",
-  cases: [
-    {
-      match: argTypes => {
-        if (argTypes.length < 2 || argTypes.length > 3) return null;
-        return [{ kind: "unknown" }];
-      },
-      apply: args => {
-        const a = toFloatArray(args[0]);
-        const b = toFloatArray(args[1]);
-        const m = a.length;
-        const n = b.length;
-        const colVec = isColumnVector(args[0]);
+  nargin: [2, 3],
+  mfile: true,
+  apply: args => {
+    const a = toComplexArrays(args[0], "conv");
+    const b = toComplexArrays(args[1], "conv");
+    const m = a.re.length;
+    const n = b.re.length;
+    const colVec = isColumnVector(args[0]);
 
-        const fullLen = m + n - 1;
-        const full = allocFloat64Array(fullLen);
-        for (let i = 0; i < m; i++) {
-          for (let j = 0; j < n; j++) {
-            full[i + j] += a[i] * b[j];
-          }
-        }
+    const fullLen = m + n - 1;
+    const full = allocFloat64Array(fullLen);
+    const complex = !!a.im || !!b.im;
+    const fullIm = complex ? allocFloat64Array(fullLen) : undefined;
+    for (let i = 0; i < m; i++) {
+      const ar = a.re[i];
+      const ai = a.im ? a.im[i] : 0;
+      for (let j = 0; j < n; j++) {
+        const br = b.re[j];
+        const bi = b.im ? b.im[j] : 0;
+        full[i + j] += ar * br - ai * bi;
+        if (fullIm) fullIm[i + j] += ar * bi + ai * br;
+      }
+    }
 
-        let shape: string = "full";
-        if (args.length === 3) {
-          const opt = args[2];
-          if (isRuntimeChar(opt)) shape = opt.value.toLowerCase();
-          else if (isRuntimeString(opt)) shape = (opt as string).toLowerCase();
-          else throw new RuntimeError("conv: third argument must be a string");
-        }
+    let shape: string = "full";
+    if (args.length === 3) {
+      const opt = args[2];
+      if (isRuntimeChar(opt)) shape = opt.value.toLowerCase();
+      else if (isRuntimeString(opt)) shape = (opt as string).toLowerCase();
+      else throw new RuntimeError("conv: third argument must be a string");
+    }
 
-        let result: Float64Array;
-        if (shape === "full") {
-          result = full;
-        } else if (shape === "same") {
-          const start = Math.floor(n / 2);
-          result = allocFloat64Array(m);
-          for (let i = 0; i < m; i++) result[i] = full[start + i];
-        } else if (shape === "valid") {
-          const validLen = Math.max(m, n) - Math.min(m, n) + 1;
-          const start = Math.min(m, n) - 1;
-          result = allocFloat64Array(validLen);
-          for (let i = 0; i < validLen; i++) result[i] = full[start + i];
-        } else {
-          throw new RuntimeError(`conv: unknown shape '${shape}'`);
-        }
+    let start: number;
+    let len: number;
+    if (shape === "full") {
+      start = 0;
+      len = fullLen;
+    } else if (shape === "same") {
+      start = Math.floor(n / 2);
+      len = m;
+    } else if (shape === "valid") {
+      len = Math.max(m, n) - Math.min(m, n) + 1;
+      start = Math.min(m, n) - 1;
+    } else {
+      throw new RuntimeError(`conv: unknown shape '${shape}'`);
+    }
+    const result = full.slice(start, start + len);
+    const resultIm = fullIm ? fullIm.slice(start, start + len) : undefined;
 
-        const outShape: [number, number] = colVec
-          ? [result.length, 1]
-          : [1, result.length];
-        return RTV.tensor(result, outShape);
-      },
-    },
-  ],
+    const outShape: [number, number] = colVec ? [len, 1] : [1, len];
+    return complexTensor(result, resultIm, outShape);
+  },
 });
 
 // ── conv2 ────────────────────────────────────────────────────────────
@@ -202,6 +247,14 @@ interface ConvMat {
 
 /** Coerce a conv2 argument (scalar / logical / tensor) to a 2-D matrix. */
 function conv2Matrix(v: RuntimeValue, who: string): ConvMat {
+  if (isRuntimeComplexNumber(v))
+    return {
+      re: allocFloat64Array([v.re]),
+      im: allocFloat64Array([v.im]),
+      m: 1,
+      n: 1,
+    };
+  if (isRuntimeSparseMatrix(v)) return conv2Matrix(sparseToDense(v), who);
   if (isRuntimeNumber(v))
     return { re: allocFloat64Array([v as number]), m: 1, n: 1 };
   if (isRuntimeLogical(v))
@@ -316,1012 +369,1005 @@ function conv2Crop(
   return { re, im, m: rows, n: cols };
 }
 
-defineBuiltin({
+builtin({
   name: "conv2",
-  cases: [
-    {
-      match: argTypes => {
-        if (argTypes.length < 2 || argTypes.length > 4) return null;
-        return [{ kind: "unknown" }];
-      },
-      apply: args => {
-        // Optional trailing shape string.
-        let shape = "full";
-        let numeric = args;
-        const last = args[args.length - 1];
-        if (isRuntimeChar(last) || isRuntimeString(last)) {
-          shape = (isRuntimeChar(last) ? last.value : (last as string))
-            .trim()
-            .toLowerCase();
-          numeric = args.slice(0, -1);
-        }
+  nargin: [2, 4],
+  apply: args => {
+    // Optional trailing shape string.
+    let shape = "full";
+    let numeric = args;
+    const last = args[args.length - 1];
+    if (isRuntimeChar(last) || isRuntimeString(last)) {
+      shape = (isRuntimeChar(last) ? last.value : (last as string))
+        .trim()
+        .toLowerCase();
+      numeric = args.slice(0, -1);
+    }
 
-        let A: ConvMat;
-        let B: ConvMat;
-        if (numeric.length === 2) {
-          // conv2(A, B)
-          A = conv2Matrix(numeric[0], "A");
-          B = conv2Matrix(numeric[1], "B");
-        } else if (numeric.length === 3) {
-          // conv2(u, v, A): separable, equivalent to conv2(A, u(:)*v(:).')
-          const u = conv2Matrix(numeric[0], "u");
-          const v = conv2Matrix(numeric[1], "v");
-          A = conv2Matrix(numeric[2], "A");
-          B = conv2Outer(u, v);
-        } else {
-          throw new RuntimeError(
-            "conv2: expected conv2(A,B), conv2(u,v,A), optionally with a shape"
-          );
-        }
+    let A: ConvMat;
+    let B: ConvMat;
+    if (numeric.length === 2) {
+      // conv2(A, B)
+      A = conv2Matrix(numeric[0], "A");
+      B = conv2Matrix(numeric[1], "B");
+    } else if (numeric.length === 3) {
+      // conv2(u, v, A): separable, equivalent to conv2(A, u(:)*v(:).')
+      const u = conv2Matrix(numeric[0], "u");
+      const v = conv2Matrix(numeric[1], "v");
+      A = conv2Matrix(numeric[2], "A");
+      B = conv2Outer(u, v);
+    } else {
+      throw new RuntimeError(
+        "conv2: expected conv2(A,B), conv2(u,v,A), optionally with a shape"
+      );
+    }
 
-        const C = conv2Crop(conv2Core(A, B), shape, A.m, A.n, B.m, B.n);
-        return RTV.tensor(C.re, [C.m, C.n], C.im);
-      },
-    },
-  ],
+    const C = conv2Crop(conv2Core(A, B), shape, A.m, A.n, B.m, B.n);
+    return RTV.tensor(C.re, [C.m, C.n], C.im);
+  },
 });
 
 // ── deconv ───────────────────────────────────────────────────────────
 
-defineBuiltin({
+builtin({
   name: "deconv",
-  cases: [
-    {
-      match: (argTypes, nargout) => {
-        if (argTypes.length !== 2) return null;
-        const out: JitType = { kind: "unknown" };
-        return nargout > 1 ? [out, out] : [out];
-      },
-      apply: (args, nargout) => {
-        const b = toFloatArray(args[0]);
-        const a = toFloatArray(args[1]);
-        const nb = b.length;
-        const na = a.length;
-        const colVec = isColumnVector(args[0]);
-        const mkShape = (n: number): [number, number] =>
-          colVec ? [n, 1] : [1, n];
+  nargin: 2,
+  nargout: 2,
+  mfile: true,
+  apply: (args, nargout) => {
+    const b = toFloatArray(args[0], "deconv");
+    const a = toFloatArray(args[1], "deconv");
+    const nb = b.length;
+    const na = a.length;
+    const colVec = isColumnVector(args[0]);
+    const mkShape = (n: number): [number, number] => (colVec ? [n, 1] : [1, n]);
 
-        if (na === 0 || a[0] === 0)
-          throw new RuntimeError(
-            "deconv: leading coefficient of divisor is zero"
-          );
+    if (na === 0 || a[0] === 0)
+      throw new RuntimeError("deconv: leading coefficient of divisor is zero");
 
-        const nq = nb - na + 1;
-        if (nq <= 0) {
-          if (nargout <= 1)
-            return RTV.tensor(allocFloat64Array([0]), mkShape(1));
-          return [
-            RTV.tensor(allocFloat64Array([0]), mkShape(1)),
-            RTV.tensor(allocFloat64Array(b), mkShape(nb)),
-          ];
-        }
+    const nq = nb - na + 1;
+    if (nq <= 0) {
+      if (nargout <= 1) return RTV.tensor(allocFloat64Array([0]), mkShape(1));
+      return [
+        RTV.tensor(allocFloat64Array([0]), mkShape(1)),
+        RTV.tensor(allocFloat64Array(b), mkShape(nb)),
+      ];
+    }
 
-        const r = allocFloat64Array(b);
-        const q = allocFloat64Array(nq);
-        for (let i = 0; i < nq; i++) {
-          q[i] = r[i] / a[0];
-          for (let j = 0; j < na; j++) {
-            r[i + j] -= q[i] * a[j];
-          }
-        }
+    const r = allocFloat64Array(b);
+    const q = allocFloat64Array(nq);
+    for (let i = 0; i < nq; i++) {
+      q[i] = r[i] / a[0];
+      for (let j = 0; j < na; j++) {
+        r[i + j] -= q[i] * a[j];
+      }
+    }
 
-        if (nargout <= 1) return RTV.tensor(q, mkShape(nq));
-        return [RTV.tensor(q, mkShape(nq)), RTV.tensor(r, mkShape(nb))];
-      },
-    },
-  ],
+    if (nargout <= 1) return RTV.tensor(q, mkShape(nq));
+    return [RTV.tensor(q, mkShape(nq)), RTV.tensor(r, mkShape(nb))];
+  },
 });
 
 // ── polyval ──────────────────────────────────────────────────────────
 
-defineBuiltin({
+builtin({
   name: "polyval",
-  cases: [
-    {
-      match: argTypes => {
-        if (argTypes.length < 2 || argTypes.length > 3) return null;
-        return [{ kind: "unknown" }];
-      },
-      apply: args => {
-        const p = toFloatArray(args[0]);
-        const x = args[1];
-        const np = p.length;
-
-        const horner = (xVal: number): number => {
-          let result = p[0];
-          for (let i = 1; i < np; i++) result = result * xVal + p[i];
-          return result;
-        };
-
-        if (isRuntimeNumber(x)) return RTV.num(horner(x as number));
-
-        if (isRuntimeTensor(x)) {
-          const result = allocFloat64Array(x.data.length);
-          for (let i = 0; i < x.data.length; i++) result[i] = horner(x.data[i]);
-          return RTV.tensor(result, [...x.shape]);
-        }
-
-        throw new RuntimeError("polyval: second argument must be numeric");
-      },
-    },
-  ],
+  // y = polyval(p, x), polyval(p, x, S, mu); [y, delta] is not supported
+  nargin: [2, 4],
+  nargout: 2,
+  mfile: true,
+  apply: (args, nargout) => {
+    if (nargout > 1)
+      throw new RuntimeError("polyval: the delta output is not supported");
+    const p = toComplexArrays(args[0], "polyval");
+    const np = p.re.length;
+    let xv: NumericArg;
+    try {
+      xv = numericArg(args[1]);
+    } catch {
+      throw new RuntimeError("polyval: second argument must be numeric");
+    }
+    if (isRuntimeSparseMatrix(xv)) xv = sparseToDense(xv);
+    let x: { re: Float64Array; im: Float64Array | undefined };
+    let shape: number[];
+    if (typeof xv === "number") {
+      x = { re: allocFloat64Array([xv]), im: undefined };
+      shape = [1, 1];
+    } else if (isRuntimeComplexNumber(xv)) {
+      x = { re: allocFloat64Array([xv.re]), im: allocFloat64Array([xv.im]) };
+      shape = [1, 1];
+    } else {
+      x = {
+        re: allocFloat64Array(xv.data),
+        im: xv.imag ? allocFloat64Array(xv.imag) : undefined,
+      };
+      shape = [...xv.shape];
+    }
+    // Centering and scaling: x -> (x - mu(1)) / mu(2)
+    if (args.length === 4) {
+      const mu = toFloatArray(args[3], "polyval");
+      if (mu.length !== 2)
+        throw new RuntimeError("polyval: mu must have two elements");
+      for (let i = 0; i < x.re.length; i++) {
+        x.re[i] = (x.re[i] - mu[0]) / mu[1];
+        if (x.im) x.im[i] = x.im[i] / mu[1];
+      }
+    }
+    const n = x.re.length;
+    const outRe = allocFloat64Array(n);
+    const complex = !!p.im || !!x.im;
+    const outIm = complex ? allocFloat64Array(n) : undefined;
+    for (let k = 0; k < n; k++) {
+      const xr = x.re[k];
+      const xi = x.im ? x.im[k] : 0;
+      let rr = np > 0 ? p.re[0] : 0;
+      let ri = np > 0 && p.im ? p.im[0] : 0;
+      for (let i = 1; i < np; i++) {
+        const tr = rr * xr - ri * xi + p.re[i];
+        const ti = rr * xi + ri * xr + (p.im ? p.im[i] : 0);
+        rr = tr;
+        ri = ti;
+      }
+      outRe[k] = rr;
+      if (outIm) outIm[k] = ri;
+    }
+    if (typeof xv === "number" || isRuntimeComplexNumber(xv)) {
+      const im = outIm ? outIm[0] : 0;
+      return im !== 0 ? RTV.complex(outRe[0], im) : RTV.num(outRe[0]);
+    }
+    return complexTensor(outRe, outIm, shape);
+  },
 });
 
 // ── polyfit ──────────────────────────────────────────────────────────
 
-defineBuiltin({
+builtin({
   name: "polyfit",
-  cases: [
-    {
-      match: argTypes => {
-        if (argTypes.length !== 3) return null;
-        return [{ kind: "unknown" }];
-      },
-      apply: args => {
-        const xArr = toFloatArray(args[0]);
-        const yArr = toFloatArray(args[1]);
-        const n = Math.round(toNumber(args[2]));
-        const m = xArr.length;
+  nargin: 3,
+  nargout: 3,
+  mfile: true,
+  apply: (args, nargout) => {
+    if (nargout > 1)
+      throw new RuntimeError("polyfit: the S and mu outputs are not supported");
+    const xArr = toFloatArray(args[0], "polyfit");
+    const yArr = toFloatArray(args[1], "polyfit");
+    const n = Math.round(realScalarArg(args[2]));
+    const m = xArr.length;
 
-        if (xArr.length !== yArr.length)
-          throw new RuntimeError("polyfit: x and y must have the same length");
-        if (n < 0)
-          throw new RuntimeError("polyfit: degree must be non-negative");
+    if (xArr.length !== yArr.length)
+      throw new RuntimeError("polyfit: x and y must have the same length");
+    if (n < 0) throw new RuntimeError("polyfit: degree must be non-negative");
 
-        const ncols = n + 1;
+    const ncols = n + 1;
 
-        const V = allocFloat64Array(m * ncols);
-        for (let j = 0; j < ncols; j++) {
-          const power = n - j;
-          for (let i = 0; i < m; i++) {
-            V[j * m + i] = Math.pow(xArr[i], power);
-          }
-        }
+    const V = allocFloat64Array(m * ncols);
+    for (let j = 0; j < ncols; j++) {
+      const power = n - j;
+      for (let i = 0; i < m; i++) {
+        V[j * m + i] = Math.pow(xArr[i], power);
+      }
+    }
 
-        const B = allocFloat64Array(m);
-        for (let i = 0; i < m; i++) B[i] = yArr[i];
+    const B = allocFloat64Array(m);
+    for (let i = 0; i < m; i++) B[i] = yArr[i];
 
-        const X = linsolveLapack(V, m, ncols, B, 1);
+    const X = linsolveLapack(V, m, ncols, B, 1);
 
-        const result = allocFloat64Array(ncols);
-        for (let i = 0; i < ncols; i++) result[i] = X[i];
-        return RTV.tensor(result, [1, ncols]);
-      },
-    },
-  ],
+    const result = allocFloat64Array(ncols);
+    for (let i = 0; i < ncols; i++) result[i] = X[i];
+    return RTV.tensor(result, [1, ncols]);
+  },
 });
 
 // ── trapz ────────────────────────────────────────────────────────────
 
-defineBuiltin({
+builtin({
   name: "trapz",
-  cases: [
-    {
-      match: argTypes => {
-        if (argTypes.length < 1 || argTypes.length > 2) return null;
-        return [{ kind: "number" }];
-      },
-      apply: args => {
-        let x: Float64Array | null = null;
-        let y: Float64Array;
+  nargin: [1, 3],
+  mfile: true,
+  apply: args => {
+    if (args.length === 3)
+      throw new RuntimeError("trapz: the dim argument is not supported");
+    const yArg = args.length === 1 ? args[0] : args[1];
+    if (isRuntimeTensor(yArg) && tensorSize2D(yArg).every(d => d > 1))
+      throw new RuntimeError("trapz: matrix input is not supported");
+    let x: Float64Array | null = null;
+    let y: Float64Array;
 
-        if (args.length === 1) {
-          y = toFloatArray(args[0]);
-        } else {
-          x = toFloatArray(args[0]);
-          y = toFloatArray(args[1]);
-          if (x.length !== y.length)
-            throw new RuntimeError("trapz: x and y must have the same length");
-        }
+    if (args.length === 1) {
+      y = toFloatArray(args[0], "trapz", true);
+    } else {
+      x = toFloatArray(args[0], "trapz", true);
+      y = toFloatArray(args[1], "trapz", true);
+      if (x.length !== y.length)
+        throw new RuntimeError("trapz: x and y must have the same length");
+    }
 
-        if (y.length <= 1) return 0;
+    if (y.length <= 1) return 0;
 
-        let sum = 0;
-        for (let i = 0; i < y.length - 1; i++) {
-          const dx = x ? x[i + 1] - x[i] : 1;
-          sum += ((y[i] + y[i + 1]) * dx) / 2;
-        }
-        return sum;
-      },
-    },
-  ],
+    let sum = 0;
+    for (let i = 0; i < y.length - 1; i++) {
+      const dx = x ? x[i + 1] - x[i] : 1;
+      sum += ((y[i] + y[i + 1]) * dx) / 2;
+    }
+    return sum;
+  },
 });
 
 // ── cumtrapz ─────────────────────────────────────────────────────────
 
-defineBuiltin({
+builtin({
   name: "cumtrapz",
-  cases: [
-    {
-      match: varargMatch,
-      apply: args => {
-        let x: Float64Array | null = null;
-        let y: Float64Array;
-        const yArg = args.length === 1 ? args[0] : args[1];
+  nargin: [1, 3],
+  mfile: true,
+  apply: args => {
+    let x: Float64Array | null = null;
+    let y: Float64Array;
+    const yArg = args.length === 1 ? args[0] : args[1];
 
-        if (args.length === 1) {
-          y = toFloatArray(args[0]);
-        } else {
-          x = toFloatArray(args[0]);
-          y = toFloatArray(args[1]);
-          if (x.length !== y.length)
-            throw new RuntimeError(
-              "cumtrapz: x and y must have the same length"
-            );
-        }
+    if (args.length === 3)
+      throw new RuntimeError("cumtrapz: the dim argument is not supported");
+    if (args.length === 1) {
+      y = toFloatArray(args[0], "cumtrapz");
+    } else {
+      x = toFloatArray(args[0], "cumtrapz");
+      y = toFloatArray(args[1], "cumtrapz");
+      if (x.length !== y.length)
+        throw new RuntimeError("cumtrapz: x and y must have the same length");
+    }
 
-        const n = y.length;
-        const result = allocFloat64Array(n);
-        result[0] = 0;
-        for (let i = 1; i < n; i++) {
-          const dx = x ? x[i] - x[i - 1] : 1;
-          result[i] = result[i - 1] + ((y[i - 1] + y[i]) * dx) / 2;
-        }
+    const n = y.length;
+    const result = allocFloat64Array(n);
+    result[0] = 0;
+    for (let i = 1; i < n; i++) {
+      const dx = x ? x[i] - x[i - 1] : 1;
+      result[i] = result[i - 1] + ((y[i - 1] + y[i]) * dx) / 2;
+    }
 
-        if (isColumnVector(yArg)) return RTV.tensor(result, [n, 1]);
-        return RTV.tensor(result, [1, n]);
-      },
-    },
-  ],
+    if (isColumnVector(yArg)) return RTV.tensor(result, [n, 1]);
+    return RTV.tensor(result, [1, n]);
+  },
 });
 
 // ── gradient ─────────────────────────────────────────────────────────
 
-defineBuiltin({
+builtin({
   name: "gradient",
-  cases: [
-    {
-      match: (argTypes, nargout) => {
-        if (argTypes.length < 1 || argTypes.length > 2) return null;
-        const out: JitType = { kind: "unknown" };
-        return nargout > 1 ? [out, out] : [out];
-      },
-      apply: (args, nargout) => {
-        const f = args[0];
+  nargin: [1, Infinity],
+  nargout: 2,
+  mfile: true,
+  apply: (args, nargout) => {
+    if (args.length > 2)
+      throw new RuntimeError(
+        "gradient: per-dimension spacing arguments are not supported"
+      );
+    const f = realDenseArg(args[0], complexUnsupported("gradient"));
 
-        let hScalar: number | null = 1;
-        let hVec: Float64Array | null = null;
-        if (args.length === 2) {
-          const spacing = args[1];
-          if (isRuntimeNumber(spacing)) {
-            hScalar = spacing as number;
-          } else if (isRuntimeTensor(spacing)) {
-            hVec = allocFloat64Array(spacing.data);
-            hScalar = null;
-          } else {
-            hScalar = toNumber(spacing);
-          }
-        }
+    let hScalar: number | null = 1;
+    let hVec: Float64Array | null = null;
+    if (args.length === 2) {
+      const spacing = realDenseArg(args[1], complexUnsupported("gradient"));
+      if (typeof spacing === "number") {
+        hScalar = spacing;
+      } else if (spacing.data.length === 1) {
+        hScalar = spacing.data[0];
+      } else {
+        hVec = allocFloat64Array(spacing.data);
+        hScalar = null;
+      }
+    }
 
-        const grad1dUniform = (
-          data: Float64Array,
-          len: number,
-          spacing: number
-        ): Float64Array => {
-          const result = allocFloat64Array(len);
-          if (len < 2) {
-            result[0] = 0;
-            return result;
-          }
-          result[0] = (data[1] - data[0]) / spacing;
-          for (let i = 1; i < len - 1; i++) {
-            result[i] = (data[i + 1] - data[i - 1]) / (2 * spacing);
-          }
-          result[len - 1] = (data[len - 1] - data[len - 2]) / spacing;
-          return result;
-        };
+    const grad1dUniform = (
+      data: Float64Array,
+      len: number,
+      spacing: number
+    ): Float64Array => {
+      const result = allocFloat64Array(len);
+      if (len < 2) {
+        result[0] = 0;
+        return result;
+      }
+      result[0] = (data[1] - data[0]) / spacing;
+      for (let i = 1; i < len - 1; i++) {
+        result[i] = (data[i + 1] - data[i - 1]) / (2 * spacing);
+      }
+      result[len - 1] = (data[len - 1] - data[len - 2]) / spacing;
+      return result;
+    };
 
-        const grad1dNonUniform = (
-          data: Float64Array,
-          len: number,
-          coords: Float64Array
-        ): Float64Array => {
-          const result = allocFloat64Array(len);
-          if (len < 2) {
-            result[0] = 0;
-            return result;
-          }
-          result[0] = (data[1] - data[0]) / (coords[1] - coords[0]);
-          for (let i = 1; i < len - 1; i++) {
-            result[i] =
-              (data[i + 1] - data[i - 1]) / (coords[i + 1] - coords[i - 1]);
-          }
-          result[len - 1] =
-            (data[len - 1] - data[len - 2]) /
-            (coords[len - 1] - coords[len - 2]);
-          return result;
-        };
+    const grad1dNonUniform = (
+      data: Float64Array,
+      len: number,
+      coords: Float64Array
+    ): Float64Array => {
+      const result = allocFloat64Array(len);
+      if (len < 2) {
+        result[0] = 0;
+        return result;
+      }
+      result[0] = (data[1] - data[0]) / (coords[1] - coords[0]);
+      for (let i = 1; i < len - 1; i++) {
+        result[i] =
+          (data[i + 1] - data[i - 1]) / (coords[i + 1] - coords[i - 1]);
+      }
+      result[len - 1] =
+        (data[len - 1] - data[len - 2]) / (coords[len - 1] - coords[len - 2]);
+      return result;
+    };
 
-        if (!isRuntimeTensor(f)) {
-          return nargout >= 2 ? [RTV.num(0), RTV.num(0)] : RTV.num(0);
-        }
+    if (!isRuntimeTensor(f)) {
+      return nargout >= 2 ? [RTV.num(0), RTV.num(0)] : RTV.num(0);
+    }
 
-        const nRows = f.shape[0] || 1;
-        const nCols = f.data.length / nRows;
-        const isVec = nRows === 1 || nCols === 1;
+    const nRows = f.shape[0] || 1;
+    const nCols = f.data.length / nRows;
+    const isVec = nRows === 1 || nCols === 1;
 
-        if (isVec) {
-          const n = f.data.length;
-          if (hVec) {
-            const result = grad1dNonUniform(f.data, n, hVec);
-            const shape = isColumnVector(f) ? [n, 1] : [1, n];
-            return RTV.tensor(result, shape);
-          }
-          const result = grad1dUniform(f.data, n, hScalar!);
-          const shape = isColumnVector(f) ? [n, 1] : [1, n];
-          return RTV.tensor(result, shape);
-        }
+    if (isVec) {
+      const n = f.data.length;
+      if (hVec) {
+        const result = grad1dNonUniform(f.data, n, hVec);
+        const shape = isColumnVector(f) ? [n, 1] : [1, n];
+        return RTV.tensor(result, shape);
+      }
+      const result = grad1dUniform(f.data, n, hScalar!);
+      const shape = isColumnVector(f) ? [n, 1] : [1, n];
+      return RTV.tensor(result, shape);
+    }
 
-        const sp = hScalar ?? 1;
-        const fxData = allocFloat64Array(nRows * nCols);
-        for (let r = 0; r < nRows; r++) {
-          const rowSlice = allocFloat64Array(nCols);
-          for (let c = 0; c < nCols; c++) rowSlice[c] = f.data[c * nRows + r];
-          const rowGrad = grad1dUniform(rowSlice, nCols, sp);
-          for (let c = 0; c < nCols; c++) fxData[c * nRows + r] = rowGrad[c];
-        }
-        const fx = RTV.tensor(fxData, [nRows, nCols]);
+    const sp = hScalar ?? 1;
+    const fxData = allocFloat64Array(nRows * nCols);
+    for (let r = 0; r < nRows; r++) {
+      const rowSlice = allocFloat64Array(nCols);
+      for (let c = 0; c < nCols; c++) rowSlice[c] = f.data[c * nRows + r];
+      const rowGrad = grad1dUniform(rowSlice, nCols, sp);
+      for (let c = 0; c < nCols; c++) fxData[c * nRows + r] = rowGrad[c];
+    }
+    const fx = RTV.tensor(fxData, [nRows, nCols]);
 
-        if (nargout >= 2) {
-          const fyData = allocFloat64Array(nRows * nCols);
-          for (let c = 0; c < nCols; c++) {
-            const colSlice = allocFloat64Array(nRows);
-            for (let r = 0; r < nRows; r++) colSlice[r] = f.data[c * nRows + r];
-            const colGrad = grad1dUniform(colSlice, nRows, sp);
-            for (let r = 0; r < nRows; r++) fyData[c * nRows + r] = colGrad[r];
-          }
-          return [fx, RTV.tensor(fyData, [nRows, nCols])];
-        }
-        return fx;
-      },
-    },
-  ],
+    if (nargout >= 2) {
+      const fyData = allocFloat64Array(nRows * nCols);
+      for (let c = 0; c < nCols; c++) {
+        const colSlice = allocFloat64Array(nRows);
+        for (let r = 0; r < nRows; r++) colSlice[r] = f.data[c * nRows + r];
+        const colGrad = grad1dUniform(colSlice, nRows, sp);
+        for (let r = 0; r < nRows; r++) fyData[c * nRows + r] = colGrad[r];
+      }
+      return [fx, RTV.tensor(fyData, [nRows, nCols])];
+    }
+    return fx;
+  },
 });
 
 // ── accumarray ───────────────────────────────────────────────────────
 
-defineBuiltin({
+builtin({
   name: "accumarray",
-  cases: [
-    {
-      match: argTypes => {
-        if (argTypes.length < 2) return null;
-        return [{ kind: "unknown" }];
-      },
-      apply: args => {
-        const subs = Array.from(toFloatArray(args[0]), (x: number) =>
-          Math.round(x)
+  nargin: [2, 6],
+  apply: args => {
+    const subs = Array.from(toFloatArray(args[0], "accumarray"), (x: number) =>
+      Math.round(x)
+    );
+    const nSubs = subs.length;
+
+    let vals = toFloatArray(args[1], "accumarray");
+    if (vals.length === 1 && nSubs !== 1) {
+      // a scalar value is used for every subscript
+      const v = vals[0];
+      vals = allocFloat64Array(nSubs);
+      vals.fill(v);
+    }
+
+    let maxIdx = 0;
+    for (let i = 0; i < nSubs; i++) {
+      if (subs[i] > maxIdx) maxIdx = subs[i];
+      if (subs[i] < 1)
+        throw new RuntimeError(
+          "accumarray: subscript indices must be positive integers"
         );
-        const nSubs = subs.length;
+    }
 
-        let vals: Float64Array;
-        if (isRuntimeNumber(args[1])) {
-          vals = allocFloat64Array(nSubs);
-          vals.fill(args[1] as number);
-        } else {
-          vals = toFloatArray(args[1]);
-        }
+    if (args.length >= 3 && args[2] !== undefined) {
+      const szArg = args[2];
+      if (isRuntimeTensor(szArg) && szArg.data.length > 0) {
+        const requestedMax = Math.round(szArg.data[0]);
+        if (requestedMax > maxIdx) maxIdx = requestedMax;
+      } else if (isRuntimeNumber(szArg)) {
+        if ((szArg as number) > maxIdx) maxIdx = Math.round(szArg as number);
+      }
+    }
 
-        let maxIdx = 0;
-        for (let i = 0; i < nSubs; i++) {
-          if (subs[i] > maxIdx) maxIdx = subs[i];
-          if (subs[i] < 1)
-            throw new RuntimeError(
-              "accumarray: subscript indices must be positive integers"
-            );
-        }
-
-        if (args.length >= 3 && args[2] !== undefined) {
-          const szArg = args[2];
-          if (isRuntimeTensor(szArg) && szArg.data.length > 0) {
-            const requestedMax = Math.round(szArg.data[0]);
-            if (requestedMax > maxIdx) maxIdx = requestedMax;
-          } else if (isRuntimeNumber(szArg)) {
-            if ((szArg as number) > maxIdx)
-              maxIdx = Math.round(szArg as number);
-          }
-        }
-
-        let reduceFn: (group: number[]) => number;
-        if (args.length >= 4 && isRuntimeFunction(args[3])) {
-          const fnName = args[3].name;
-          switch (fnName) {
-            case "sum":
-              reduceFn = g => g.reduce((a, b) => a + b, 0);
-              break;
-            case "max":
-              reduceFn = g => Math.max(...g);
-              break;
-            case "min":
-              reduceFn = g => Math.min(...g);
-              break;
-            case "mean":
-              reduceFn = g => g.reduce((a, b) => a + b, 0) / g.length;
-              break;
-            case "prod":
-              reduceFn = g => g.reduce((a, b) => a * b, 1);
-              break;
-            case "numel":
-              reduceFn = g => g.length;
-              break;
-            default:
-              throw new RuntimeError(
-                `accumarray: unsupported function handle @${fnName}`
-              );
-          }
-        } else {
+    let reduceFn: (group: number[]) => number;
+    if (args.length >= 4 && isRuntimeFunction(args[3])) {
+      const fnName = args[3].name;
+      switch (fnName) {
+        case "sum":
           reduceFn = g => g.reduce((a, b) => a + b, 0);
-        }
+          break;
+        case "max":
+          reduceFn = g => Math.max(...g);
+          break;
+        case "min":
+          reduceFn = g => Math.min(...g);
+          break;
+        case "mean":
+          reduceFn = g => g.reduce((a, b) => a + b, 0) / g.length;
+          break;
+        case "prod":
+          reduceFn = g => g.reduce((a, b) => a * b, 1);
+          break;
+        case "numel":
+          reduceFn = g => g.length;
+          break;
+        default:
+          throw new RuntimeError(
+            `accumarray: unsupported function handle @${fnName}`
+          );
+      }
+    } else {
+      reduceFn = g => g.reduce((a, b) => a + b, 0);
+    }
 
-        const groups: number[][] = new Array(maxIdx);
-        for (let i = 0; i < maxIdx; i++) groups[i] = [];
-        for (let i = 0; i < nSubs; i++) {
-          groups[subs[i] - 1].push(vals[i]);
-        }
+    const groups: number[][] = new Array(maxIdx);
+    for (let i = 0; i < maxIdx; i++) groups[i] = [];
+    for (let i = 0; i < nSubs; i++) {
+      groups[subs[i] - 1].push(vals[i]);
+    }
 
-        const result = allocFloat64Array(maxIdx);
-        for (let i = 0; i < maxIdx; i++) {
-          if (groups[i].length > 0) result[i] = reduceFn(groups[i]);
-        }
+    const result = allocFloat64Array(maxIdx);
+    for (let i = 0; i < maxIdx; i++) {
+      if (groups[i].length > 0) result[i] = reduceFn(groups[i]);
+    }
 
-        return RTV.tensor(result, [maxIdx, 1]);
-      },
-    },
-  ],
+    return RTV.tensor(result, [maxIdx, 1]);
+  },
 });
 
 // ── interp1 ──────────────────────────────────────────────────────────
 
-defineBuiltin({
+builtin({
   name: "interp1",
-  cases: [
-    {
-      match: argTypes => {
-        if (argTypes.length < 3 || argTypes.length > 5) return null;
-        return [{ kind: "unknown" }];
-      },
-      apply: args => {
-        const xArr = toFloatArray(args[0]);
+  nargin: [2, 5],
+  mfile: true,
+  apply: args => {
+    if (args.length < 3)
+      throw new RuntimeError(
+        "interp1: the interp1(v, xq) form is not supported; pass sample points"
+      );
+    const xArr = toFloatArray(args[0], "interp1");
 
-        // interp1(x, y, method, 'pp') → piecewise-polynomial struct
-        // (same layout as mkpp; evaluated with ppval)
-        if (
-          args.length === 4 &&
-          isRuntimeChar(args[2]) &&
-          isRuntimeChar(args[3]) &&
-          args[3].value.toLowerCase() === "pp"
-        ) {
-          const method = args[2].value.toLowerCase();
-          if (method !== "linear")
-            throw new RuntimeError(
-              `interp1: 'pp' output is only supported for 'linear' method (got '${method}')`
-            );
-          const yArr = toFloatArray(args[1]);
-          const n = xArr.length;
-          if (yArr.length !== n)
-            throw new RuntimeError(
-              "interp1: x and y must have the same length"
-            );
-          if (n < 2)
-            throw new RuntimeError(
-              "interp1: at least 2 sample points are required"
-            );
-          for (let i = 0; i + 1 < n; i++) {
-            if (!(xArr[i] < xArr[i + 1]))
-              throw new RuntimeError(
-                "interp1: sample points must be unique and sorted for 'pp' output"
-              );
-          }
-          const L = n - 1;
-          const breaksOut = allocFloat64Array(n);
-          for (let i = 0; i < n; i++) breaksOut[i] = xArr[i];
-          // coefs row i (column-major storage): [slope_i, y_i]
-          const coefs = allocFloat64Array(L * 2);
-          for (let i = 0; i < L; i++) {
-            coefs[i] = (yArr[i + 1] - yArr[i]) / (xArr[i + 1] - xArr[i]);
-            coefs[L + i] = yArr[i];
-          }
-          const fields = new Map<string, RuntimeValue>();
-          fields.set("form", "pp");
-          fields.set("breaks", RTV.tensor(breaksOut, [1, n]));
-          fields.set("coefs", RTV.tensor(coefs, [L, 2]));
-          fields.set("pieces", L);
-          fields.set("order", 2);
-          fields.set("dim", 1);
-          return RTV.struct(fields);
-        }
-
-        const xqArg = args[2];
-        const nn = xArr.length;
-
-        // y may be a vector (single data set) or a matrix whose columns are
-        // each interpolated against x (MATLAB: size(y,1) == length(x)).
-        const yVal = args[1];
-        let yCols: number; // number of data sets (matrix columns)
-        let yColData: (col: number) => Float64Array;
-        let yIsMatrix = false;
-        if (isRuntimeTensor(yVal)) {
-          const rows = yVal.shape[0] ?? 1;
-          const cols = yVal.shape.length >= 2 ? yVal.shape[1] : 1;
-          const isVector = rows === 1 || cols === 1;
-          if (isVector) {
-            const flat = yVal.data;
-            yCols = 1;
-            yColData = () => flat;
-          } else {
-            yIsMatrix = true;
-            yCols = cols;
-            // Column-major: column c occupies data[c*rows .. c*rows+rows-1].
-            yColData = c =>
-              yVal.data.subarray(c * rows, c * rows + rows) as Float64Array;
-          }
-        } else {
-          const flat = toFloatArray(yVal);
-          yCols = 1;
-          yColData = () => flat;
-        }
-
-        // Each data set must have one sample per x.
-        if (yColData(0).length !== nn)
-          throw new RuntimeError("interp1: x and y must have the same length");
-
-        let method = "linear";
-        let doExtrap = false;
-        let fillValue = NaN;
-        for (let i = 3; i < args.length; i++) {
-          const a = args[i];
-          if (isRuntimeChar(a)) {
-            const s = a.value.toLowerCase();
-            if (s === "extrap") doExtrap = true;
-            else method = s;
-          } else if (isRuntimeString(a)) {
-            const s = (a as string).toLowerCase();
-            if (s === "extrap") doExtrap = true;
-            else method = s;
-          } else if (isRuntimeNumber(a) || isRuntimeTensor(a)) {
-            // interp1(x, y, xq, method, fillValue): numeric extrapolation
-            // value used outside the sample range
-            fillValue = toNumber(a);
-          }
-        }
-
-        const interpOne = (yArr: Float64Array, xq: number): number => {
-          if (xq < xArr[0] || xq > xArr[nn - 1]) {
-            if (!doExtrap) return fillValue;
-            if (method === "linear") {
-              if (xq < xArr[0]) {
-                const slope = (yArr[1] - yArr[0]) / (xArr[1] - xArr[0]);
-                return yArr[0] + slope * (xq - xArr[0]);
-              } else {
-                const slope =
-                  (yArr[nn - 1] - yArr[nn - 2]) / (xArr[nn - 1] - xArr[nn - 2]);
-                return yArr[nn - 1] + slope * (xq - xArr[nn - 1]);
-              }
-            }
-          }
-
-          if (xq <= xArr[0]) return yArr[0];
-          if (xq >= xArr[nn - 1]) return yArr[nn - 1];
-
-          let lo = 0,
-            hi = nn - 1;
-          while (hi - lo > 1) {
-            const mid = (lo + hi) >> 1;
-            if (xArr[mid] <= xq) lo = mid;
-            else hi = mid;
-          }
-
-          if (method === "nearest") {
-            return xq - xArr[lo] < xArr[hi] - xq ? yArr[lo] : yArr[hi];
-          }
-
-          const t = (xq - xArr[lo]) / (xArr[hi] - xArr[lo]);
-          return yArr[lo] + t * (yArr[hi] - yArr[lo]);
-        };
-
-        // Scalar query against a single-column y → scalar result.
-        if (isRuntimeNumber(xqArg) && !yIsMatrix)
-          return RTV.num(interpOne(yColData(0), xqArg as number));
-
-        const xqData = isRuntimeNumber(xqArg)
-          ? allocFloat64Array([xqArg as number])
-          : isRuntimeTensor(xqArg)
-            ? xqArg.data
-            : null;
-        if (!xqData)
-          throw new RuntimeError("interp1: query points must be numeric");
-        const nq = xqData.length;
-
-        if (yIsMatrix) {
-          // Result is nq-by-(number of columns), column-major.
-          const result = allocFloat64Array(nq * yCols);
-          for (let c = 0; c < yCols; c++) {
-            const col = yColData(c);
-            for (let i = 0; i < nq; i++)
-              result[c * nq + i] = interpOne(col, xqData[i]);
-          }
-          return RTV.tensor(result, [nq, yCols]);
-        }
-
-        const col = yColData(0);
-        const result = allocFloat64Array(nq);
-        for (let i = 0; i < nq; i++) result[i] = interpOne(col, xqData[i]);
-        return RTV.tensor(
-          result,
-          isRuntimeTensor(xqArg) ? [...xqArg.shape] : [1, 1]
+    // interp1(x, y, method, 'pp') → piecewise-polynomial struct
+    // (same layout as mkpp; evaluated with ppval)
+    if (
+      args.length === 4 &&
+      isRuntimeChar(args[2]) &&
+      isRuntimeChar(args[3]) &&
+      args[3].value.toLowerCase() === "pp"
+    ) {
+      const method = args[2].value.toLowerCase();
+      if (method !== "linear")
+        throw new RuntimeError(
+          `interp1: 'pp' output is only supported for 'linear' method (got '${method}')`
         );
-      },
-    },
-  ],
+      const yArr = toFloatArray(args[1], "interp1");
+      const n = xArr.length;
+      if (yArr.length !== n)
+        throw new RuntimeError("interp1: x and y must have the same length");
+      if (n < 2)
+        throw new RuntimeError(
+          "interp1: at least 2 sample points are required"
+        );
+      for (let i = 0; i + 1 < n; i++) {
+        if (!(xArr[i] < xArr[i + 1]))
+          throw new RuntimeError(
+            "interp1: sample points must be unique and sorted for 'pp' output"
+          );
+      }
+      const L = n - 1;
+      const breaksOut = allocFloat64Array(n);
+      for (let i = 0; i < n; i++) breaksOut[i] = xArr[i];
+      // coefs row i (column-major storage): [slope_i, y_i]
+      const coefs = allocFloat64Array(L * 2);
+      for (let i = 0; i < L; i++) {
+        coefs[i] = (yArr[i + 1] - yArr[i]) / (xArr[i + 1] - xArr[i]);
+        coefs[L + i] = yArr[i];
+      }
+      const fields = new Map<string, RuntimeValue>();
+      fields.set("form", "pp");
+      fields.set("breaks", RTV.tensor(breaksOut, [1, n]));
+      fields.set("coefs", RTV.tensor(coefs, [L, 2]));
+      fields.set("pieces", L);
+      fields.set("order", 2);
+      fields.set("dim", 1);
+      return RTV.struct(fields);
+    }
+
+    const xqArg = args[2];
+    const nn = xArr.length;
+
+    // y may be a vector (single data set) or a matrix whose columns are
+    // each interpolated against x (MATLAB: size(y,1) == length(x)).
+    if (hasImagValue(args[1])) throw complexUnsupported("interp1")();
+    const yVal = args[1];
+    let yCols: number; // number of data sets (matrix columns)
+    let yColData: (col: number) => Float64Array;
+    let yIsMatrix = false;
+    if (isRuntimeTensor(yVal)) {
+      const rows = yVal.shape[0] ?? 1;
+      const cols = yVal.shape.length >= 2 ? yVal.shape[1] : 1;
+      const isVector = rows === 1 || cols === 1;
+      if (isVector) {
+        const flat = yVal.data;
+        yCols = 1;
+        yColData = () => flat;
+      } else {
+        yIsMatrix = true;
+        yCols = cols;
+        // Column-major: column c occupies data[c*rows .. c*rows+rows-1].
+        yColData = c =>
+          yVal.data.subarray(c * rows, c * rows + rows) as Float64Array;
+      }
+    } else {
+      const flat = toFloatArray(yVal, "interp1");
+      yCols = 1;
+      yColData = () => flat;
+    }
+
+    // Each data set must have one sample per x.
+    if (yColData(0).length !== nn)
+      throw new RuntimeError("interp1: x and y must have the same length");
+
+    let method = "linear";
+    let doExtrap = false;
+    let fillValue = NaN;
+    for (let i = 3; i < args.length; i++) {
+      const a = args[i];
+      if (isRuntimeChar(a)) {
+        const s = a.value.toLowerCase();
+        if (s === "extrap") doExtrap = true;
+        else method = s;
+      } else if (isRuntimeString(a)) {
+        const s = (a as string).toLowerCase();
+        if (s === "extrap") doExtrap = true;
+        else method = s;
+      } else if (isRuntimeNumber(a) || isRuntimeTensor(a)) {
+        // interp1(x, y, xq, method, fillValue): numeric extrapolation
+        // value used outside the sample range
+        fillValue = toNumber(a);
+      }
+    }
+
+    const interpOne = (yArr: Float64Array, xq: number): number => {
+      if (xq < xArr[0] || xq > xArr[nn - 1]) {
+        if (!doExtrap) return fillValue;
+        if (method === "linear") {
+          if (xq < xArr[0]) {
+            const slope = (yArr[1] - yArr[0]) / (xArr[1] - xArr[0]);
+            return yArr[0] + slope * (xq - xArr[0]);
+          } else {
+            const slope =
+              (yArr[nn - 1] - yArr[nn - 2]) / (xArr[nn - 1] - xArr[nn - 2]);
+            return yArr[nn - 1] + slope * (xq - xArr[nn - 1]);
+          }
+        }
+      }
+
+      if (xq <= xArr[0]) return yArr[0];
+      if (xq >= xArr[nn - 1]) return yArr[nn - 1];
+
+      let lo = 0,
+        hi = nn - 1;
+      while (hi - lo > 1) {
+        const mid = (lo + hi) >> 1;
+        if (xArr[mid] <= xq) lo = mid;
+        else hi = mid;
+      }
+
+      if (method === "nearest") {
+        return xq - xArr[lo] < xArr[hi] - xq ? yArr[lo] : yArr[hi];
+      }
+
+      const t = (xq - xArr[lo]) / (xArr[hi] - xArr[lo]);
+      return yArr[lo] + t * (yArr[hi] - yArr[lo]);
+    };
+
+    if (hasImagValue(xqArg))
+      throw builtinError(
+        "MATLAB:griddedInterpolant:ComplexDataPointErrId",
+        "Input coordinates must be real."
+      );
+    // Scalar query against a single-column y → scalar result.
+    if (isRuntimeNumber(xqArg) && !yIsMatrix)
+      return RTV.num(interpOne(yColData(0), xqArg as number));
+
+    const xqData = isRuntimeNumber(xqArg)
+      ? allocFloat64Array([xqArg as number])
+      : isRuntimeTensor(xqArg)
+        ? xqArg.data
+        : null;
+    if (!xqData)
+      throw new RuntimeError("interp1: query points must be numeric");
+    const nq = xqData.length;
+
+    if (yIsMatrix) {
+      // Result is nq-by-(number of columns), column-major.
+      const result = allocFloat64Array(nq * yCols);
+      for (let c = 0; c < yCols; c++) {
+        const col = yColData(c);
+        for (let i = 0; i < nq; i++)
+          result[c * nq + i] = interpOne(col, xqData[i]);
+      }
+      return RTV.tensor(result, [nq, yCols]);
+    }
+
+    const col = yColData(0);
+    const result = allocFloat64Array(nq);
+    for (let i = 0; i < nq; i++) result[i] = interpOne(col, xqData[i]);
+    return RTV.tensor(
+      result,
+      isRuntimeTensor(xqArg) ? [...xqArg.shape] : [1, 1]
+    );
+  },
 });
 
 // ── roots ────────────────────────────────────────────────────────────
 
-defineBuiltin({
+builtin({
   name: "roots",
-  cases: [
-    {
-      match: argTypes => {
-        if (argTypes.length !== 1) return null;
-        return [{ kind: "unknown" }];
-      },
-      apply: args => {
-        const p = toFloatArray(args[0]);
-        const n = p.length - 1;
+  nargin: 1,
+  mfile: true,
+  apply: args => {
+    const p = toFloatArray(args[0], "roots");
+    const n = p.length - 1;
 
-        if (n <= 0) return RTV.tensor(allocFloat64Array(0), [0, 0]);
+    if (n <= 0) return RTV.tensor(allocFloat64Array(0), [0, 0]);
 
-        const C = allocFloat64Array(n * n);
-        for (let i = 0; i < n - 1; i++) C[(i + 1) * n + i] = 1;
-        for (let i = 0; i < n; i++) C[i] = -p[i + 1] / p[0];
+    const C = allocFloat64Array(n * n);
+    for (let i = 0; i < n - 1; i++) C[(i + 1) * n + i] = 1;
+    for (let i = 0; i < n; i++) C[i] = -p[i + 1] / p[0];
 
-        const { wr, wi } = getLapackBridge().eig(C, n, false, false, true);
-        const realPart = allocFloat64Array(n);
-        for (let i = 0; i < n; i++) realPart[i] = wr[i];
-        if (!wi.some(v => Math.abs(v) > 0)) return RTV.tensor(realPart, [n, 1]);
-        const imagPart = allocFloat64Array(n);
-        for (let i = 0; i < n; i++) imagPart[i] = wi[i];
-        return RTV.tensor(realPart, [n, 1], imagPart);
-      },
-    },
-  ],
+    const { wr, wi } = getLapackBridge().eig(C, n, false, false, true);
+    const realPart = allocFloat64Array(n);
+    for (let i = 0; i < n; i++) realPart[i] = wr[i];
+    if (!wi.some(v => Math.abs(v) > 0)) return RTV.tensor(realPart, [n, 1]);
+    const imagPart = allocFloat64Array(n);
+    for (let i = 0; i < n; i++) imagPart[i] = wi[i];
+    return RTV.tensor(realPart, [n, 1], imagPart);
+  },
 });
 
 // ── poly ─────────────────────────────────────────────────────────────
 
-defineBuiltin({
+builtin({
   name: "poly",
-  cases: [
-    {
-      match: argTypes => {
-        if (argTypes.length !== 1) return null;
-        return [{ kind: "unknown" }];
-      },
-      apply: args => {
-        const A = args[0];
+  nargin: 1,
+  mfile: true,
+  apply: args => {
+    const A = args[0];
+    if (
+      !(isRuntimeNumber(A) || isRuntimeComplexNumber(A) || isRuntimeTensor(A))
+    )
+      throw new RuntimeError("poly: argument must be numeric");
 
-        if (isRuntimeNumber(A)) {
-          return RTV.tensor(allocFloat64Array([1, -(A as number)]), [1, 2]);
+    const [m, n] = isRuntimeTensor(A) ? tensorSize2D(A) : [1, 1];
+
+    if (m === 1 || n === 1) {
+      // Expand prod(x - r) over the roots r (possibly complex).
+      const r = toComplexArrays(A, "poly");
+      const nr = r.re.length;
+      const cr = allocFloat64Array(nr + 1);
+      const ci = allocFloat64Array(nr + 1);
+      cr[0] = 1;
+      for (let i = 0; i < nr; i++) {
+        const rr = r.re[i];
+        const ri = r.im ? r.im[i] : 0;
+        for (let j = i + 1; j >= 1; j--) {
+          cr[j] -= rr * cr[j - 1] - ri * ci[j - 1];
+          ci[j] -= rr * ci[j - 1] + ri * cr[j - 1];
         }
+      }
+      return complexTensor(cr, r.im ? ci : undefined, [1, nr + 1]);
+    }
 
-        if (!isRuntimeTensor(A))
-          throw new RuntimeError("poly: argument must be numeric");
+    if (m !== n) throw new RuntimeError("poly: matrix must be square");
+    if (hasImagValue(A)) throw complexUnsupported("poly")();
 
-        const [m, n] = tensorSize2D(A);
-
-        if (m === 1 || n === 1) {
-          const roots = toFloatArray(A);
-          const nr = roots.length;
-          let coeffs = allocFloat64Array(nr + 1);
-          coeffs[0] = 1;
-          for (let i = 0; i < nr; i++) {
-            const newCoeffs = allocFloat64Array(nr + 1);
-            newCoeffs[0] = coeffs[0];
-            for (let j = 1; j <= i + 1; j++) {
-              newCoeffs[j] = coeffs[j] - roots[i] * coeffs[j - 1];
-            }
-            coeffs = newCoeffs;
-          }
-          return RTV.tensor(coeffs, [1, nr + 1]);
-        }
-
-        if (m !== n) throw new RuntimeError("poly: matrix must be square");
-
-        const f64 =
-          A.data instanceof Float64Array ? A.data : allocFloat64Array(A.data);
-        const { wr } = getLapackBridge().eig(f64, n, false, false, true);
-        let coeffs = allocFloat64Array(n + 1);
-        coeffs[0] = 1;
-        for (let i = 0; i < n; i++) {
-          const newCoeffs = allocFloat64Array(n + 1);
-          newCoeffs[0] = coeffs[0];
-          for (let j = 1; j <= i + 1; j++) {
-            newCoeffs[j] = coeffs[j] - wr[i] * coeffs[j - 1];
-          }
-          coeffs = newCoeffs;
-        }
-        return RTV.tensor(coeffs, [1, n + 1]);
-      },
-    },
-  ],
+    const At = A as RuntimeTensor;
+    const f64 =
+      At.data instanceof Float64Array ? At.data : allocFloat64Array(At.data);
+    const { wr } = getLapackBridge().eig(f64, n, false, false, true);
+    let coeffs = allocFloat64Array(n + 1);
+    coeffs[0] = 1;
+    for (let i = 0; i < n; i++) {
+      const newCoeffs = allocFloat64Array(n + 1);
+      newCoeffs[0] = coeffs[0];
+      for (let j = 1; j <= i + 1; j++) {
+        newCoeffs[j] = coeffs[j] - wr[i] * coeffs[j - 1];
+      }
+      coeffs = newCoeffs;
+    }
+    return RTV.tensor(coeffs, [1, n + 1]);
+  },
 });
 
 // ── cov ──────────────────────────────────────────────────────────────
 
-defineBuiltin({
+builtin({
   name: "cov",
-  cases: [
-    {
-      match: argTypes => {
-        if (argTypes.length < 1 || argTypes.length > 2) return null;
-        return [{ kind: "unknown" }];
-      },
-      apply: args =>
-        withScratch(() => {
-          if (
-            args.length === 2 &&
-            isRuntimeTensor(args[0]) &&
-            isRuntimeTensor(args[1])
-          ) {
-            const x = toFloatArray(args[0]);
-            const y = toFloatArray(args[1]);
-            const n = x.length;
+  nargin: [1, Infinity],
+  mfile: true,
+  apply: args =>
+    withScratch(() => {
+      if (args.length > 2)
+        throw new RuntimeError("cov: options are not supported");
+      // the variance of a single value is 0
+      if (args.length === 1 && isRuntimeComplexNumber(args[0]))
+        return RTV.num(0);
+      for (const a of args)
+        if (hasImagValue(a)) throw complexUnsupported("cov")();
+      args = args.map(a => {
+        try {
+          const v = numericArg(a);
+          return isRuntimeSparseMatrix(v) ? sparseToDense(v) : v;
+        } catch {
+          throw new RuntimeError("cov: argument must be numeric");
+        }
+      });
+      if (
+        args.length === 2 &&
+        isRuntimeTensor(args[0]) &&
+        isRuntimeTensor(args[1])
+      ) {
+        const x = toFloatArray(args[0], "cov");
+        const y = toFloatArray(args[1], "cov");
+        const n = x.length;
 
-            let mx = 0,
-              my = 0;
-            for (let i = 0; i < n; i++) {
-              mx += x[i];
-              my += y[i];
-            }
-            mx /= n;
-            my /= n;
+        let mx = 0,
+          my = 0;
+        for (let i = 0; i < n; i++) {
+          mx += x[i];
+          my += y[i];
+        }
+        mx /= n;
+        my /= n;
 
-            let sxx = 0,
-              sxy = 0,
-              syy = 0;
-            for (let i = 0; i < n; i++) {
-              sxx += (x[i] - mx) * (x[i] - mx);
-              sxy += (x[i] - mx) * (y[i] - my);
-              syy += (y[i] - my) * (y[i] - my);
-            }
-            const d = n - 1;
-            return RTV.tensor(
-              allocFloat64Array([sxx / d, sxy / d, sxy / d, syy / d]),
-              [2, 2]
-            );
+        let sxx = 0,
+          sxy = 0,
+          syy = 0;
+        for (let i = 0; i < n; i++) {
+          sxx += (x[i] - mx) * (x[i] - mx);
+          sxy += (x[i] - mx) * (y[i] - my);
+          syy += (y[i] - my) * (y[i] - my);
+        }
+        const d = n - 1;
+        return RTV.tensor(
+          allocFloat64Array([sxx / d, sxy / d, sxy / d, syy / d]),
+          [2, 2]
+        );
+      }
+
+      const X = args[0];
+      if (isRuntimeNumber(X) || isRuntimeComplexNumber(X)) return RTV.num(0);
+      if (!isRuntimeTensor(X))
+        throw new RuntimeError("cov: argument must be numeric");
+
+      const [m, ncols] = tensorSize2D(X);
+
+      if (m === 1 || ncols === 1) {
+        const arr = toFloatArray(X, "cov");
+        const n = arr.length;
+        let mean = 0;
+        for (let i = 0; i < n; i++) mean += arr[i];
+        mean /= n;
+        let s = 0;
+        for (let i = 0; i < n; i++) s += (arr[i] - mean) * (arr[i] - mean);
+        return RTV.num(s / (n - 1));
+      }
+
+      const means = allocFloat64Array(ncols);
+      for (let j = 0; j < ncols; j++) {
+        let s = 0;
+        for (let i = 0; i < m; i++) s += X.data[j * m + i];
+        means[j] = s / m;
+      }
+
+      const result = allocFloat64Array(ncols * ncols);
+      for (let p = 0; p < ncols; p++) {
+        for (let q = 0; q < ncols; q++) {
+          let s = 0;
+          for (let i = 0; i < m; i++) {
+            s +=
+              (X.data[p * m + i] - means[p]) * (X.data[q * m + i] - means[q]);
           }
-
-          const X = args[0];
-          if (isRuntimeNumber(X)) return RTV.num(0);
-          if (!isRuntimeTensor(X))
-            throw new RuntimeError("cov: argument must be numeric");
-
-          const [m, ncols] = tensorSize2D(X);
-
-          if (m === 1 || ncols === 1) {
-            const arr = toFloatArray(X);
-            const n = arr.length;
-            let mean = 0;
-            for (let i = 0; i < n; i++) mean += arr[i];
-            mean /= n;
-            let s = 0;
-            for (let i = 0; i < n; i++) s += (arr[i] - mean) * (arr[i] - mean);
-            return RTV.num(s / (n - 1));
-          }
-
-          const means = allocFloat64Array(ncols);
-          for (let j = 0; j < ncols; j++) {
-            let s = 0;
-            for (let i = 0; i < m; i++) s += X.data[j * m + i];
-            means[j] = s / m;
-          }
-
-          const result = allocFloat64Array(ncols * ncols);
-          for (let p = 0; p < ncols; p++) {
-            for (let q = 0; q < ncols; q++) {
-              let s = 0;
-              for (let i = 0; i < m; i++) {
-                s +=
-                  (X.data[p * m + i] - means[p]) *
-                  (X.data[q * m + i] - means[q]);
-              }
-              result[q * ncols + p] = s / (m - 1);
-            }
-          }
-          return RTV.tensor(result, [ncols, ncols]);
-        }),
-    },
-  ],
+          result[q * ncols + p] = s / (m - 1);
+        }
+      }
+      return RTV.tensor(result, [ncols, ncols]);
+    }),
 });
 
 // ── corrcoef ─────────────────────────────────────────────────────────
 
-defineBuiltin({
+builtin({
   name: "corrcoef",
-  cases: [
-    {
-      match: argTypes => {
-        if (argTypes.length < 1 || argTypes.length > 2) return null;
-        return [{ kind: "unknown" }];
-      },
-      apply: args =>
-        withScratch(() => {
-          let data: Float64Array;
-          let m: number, ncols: number;
+  nargin: [1, Infinity],
+  nargout: 4,
+  mfile: true,
+  apply: (args, nargout) =>
+    withScratch(() => {
+      if (nargout > 1)
+        throw new RuntimeError("corrcoef: only the first output is supported");
+      if (args.length > 2)
+        throw new RuntimeError("corrcoef: options are not supported");
+      let data: Float64Array;
+      let m: number, ncols: number;
 
-          if (args.length === 2) {
-            const x = toFloatArray(args[0]);
-            const y = toFloatArray(args[1]);
-            const n = x.length;
-            m = n;
-            ncols = 2;
-            data = allocFloat64Array(n * 2);
-            for (let i = 0; i < n; i++) {
-              data[i] = x[i];
-              data[n + i] = y[i];
-            }
-          } else {
-            const X = args[0];
-            if (!isRuntimeTensor(X))
-              throw new RuntimeError("corrcoef: argument must be numeric");
-            [m, ncols] = tensorSize2D(X);
-            if (m === 1 || ncols === 1) return RTV.num(1);
-            data = allocFloat64Array(X.data);
-          }
+      if (args.length === 2) {
+        const x = toFloatArray(args[0], "corrcoef", true);
+        const y = toFloatArray(args[1], "corrcoef", true);
+        const n = x.length;
+        m = n;
+        ncols = 2;
+        data = allocFloat64Array(n * 2);
+        for (let i = 0; i < n; i++) {
+          data[i] = x[i];
+          data[n + i] = y[i];
+        }
+      } else {
+        const X = realDenseArg(args[0], complexUnsupported("corrcoef"));
+        if (!isRuntimeTensor(X))
+          throw new RuntimeError("corrcoef: argument must be numeric");
+        [m, ncols] = tensorSize2D(X);
+        if (m === 1 || ncols === 1) return RTV.num(1);
+        data = allocFloat64Array(X.data);
+      }
 
-          const means = allocFloat64Array(ncols);
-          for (let j = 0; j < ncols; j++) {
-            let s = 0;
-            for (let i = 0; i < m; i++) s += data[j * m + i];
-            means[j] = s / m;
-          }
+      const means = allocFloat64Array(ncols);
+      for (let j = 0; j < ncols; j++) {
+        let s = 0;
+        for (let i = 0; i < m; i++) s += data[j * m + i];
+        means[j] = s / m;
+      }
 
-          const covMat = allocFloat64Array(ncols * ncols);
-          for (let p = 0; p < ncols; p++) {
-            for (let q = 0; q < ncols; q++) {
-              let s = 0;
-              for (let i = 0; i < m; i++) {
-                s +=
-                  (data[p * m + i] - means[p]) * (data[q * m + i] - means[q]);
-              }
-              covMat[q * ncols + p] = s / (m - 1);
-            }
+      const covMat = allocFloat64Array(ncols * ncols);
+      for (let p = 0; p < ncols; p++) {
+        for (let q = 0; q < ncols; q++) {
+          let s = 0;
+          for (let i = 0; i < m; i++) {
+            s += (data[p * m + i] - means[p]) * (data[q * m + i] - means[q]);
           }
+          covMat[q * ncols + p] = s / (m - 1);
+        }
+      }
 
-          const result = allocFloat64Array(ncols * ncols);
-          for (let p = 0; p < ncols; p++) {
-            for (let q = 0; q < ncols; q++) {
-              const denom = Math.sqrt(
-                covMat[p * ncols + p] * covMat[q * ncols + q]
-              );
-              result[q * ncols + p] =
-                denom === 0 ? 0 : covMat[q * ncols + p] / denom;
-            }
-          }
-          return RTV.tensor(result, [ncols, ncols]);
-        }),
-    },
-  ],
+      const result = allocFloat64Array(ncols * ncols);
+      for (let p = 0; p < ncols; p++) {
+        for (let q = 0; q < ncols; q++) {
+          const denom = Math.sqrt(
+            covMat[p * ncols + p] * covMat[q * ncols + q]
+          );
+          result[q * ncols + p] =
+            denom === 0 ? 0 : covMat[q * ncols + p] / denom;
+        }
+      }
+      return RTV.tensor(result, [ncols, ncols]);
+    }),
 });
 
 // ── histc ────────────────────────────────────────────────────────────
 
-defineBuiltin({
+builtin({
   name: "histc",
-  cases: [
-    {
-      match: (argTypes, nargout) => {
-        if (argTypes.length < 2 || argTypes.length > 3) return null;
-        const out: JitType = { kind: "unknown" };
-        return nargout > 1 ? [out, out] : [out];
-      },
-      apply: (args, nargout) => {
-        const xArg = args[0];
-        const edges = toFloatArray(args[1]);
-        const N = edges.length;
+  nargin: [2, 3],
+  nargout: 2,
+  apply: (args, nargout) => {
+    const xArg = isRuntimeChar(args[0])
+      ? realDenseArg(args[0], complexUnsupported("histc"))
+      : args[0];
+    if (hasImagValue(xArg)) throw complexUnsupported("histc")();
+    const edges = toFloatArray(args[1], "histc");
+    const N = edges.length;
 
-        const findBin = (v: number): number => {
-          if (Number.isNaN(v)) return 0;
-          if (v < edges[0] || v > edges[N - 1]) return 0;
-          if (v === edges[N - 1]) return N;
-          let lo = 0,
-            hi = N - 1;
-          while (hi - lo > 1) {
-            const mid = (lo + hi) >> 1;
-            if (edges[mid] <= v) lo = mid;
-            else hi = mid;
-          }
-          return lo + 1;
-        };
+    const findBin = (v: number): number => {
+      if (Number.isNaN(v)) return 0;
+      if (v < edges[0] || v > edges[N - 1]) return 0;
+      if (v === edges[N - 1]) return N;
+      let lo = 0,
+        hi = N - 1;
+      while (hi - lo > 1) {
+        const mid = (lo + hi) >> 1;
+        if (edges[mid] <= v) lo = mid;
+        else hi = mid;
+      }
+      return lo + 1;
+    };
 
-        // Determine x shape and decide working dimension.
-        let xRows: number, xCols: number;
-        let xData: Float64Array;
-        let xShape: number[];
-        if (isRuntimeNumber(xArg) || isRuntimeLogical(xArg)) {
-          xRows = 1;
-          xCols = 1;
-          xData = allocFloat64Array([
-            isRuntimeLogical(xArg) ? (xArg ? 1 : 0) : (xArg as number),
-          ]);
-          xShape = [1, 1];
-        } else if (isRuntimeTensor(xArg)) {
-          [xRows, xCols] = tensorSize2D(xArg);
-          xData = xArg.data;
-          xShape = xArg.shape.slice();
-        } else {
-          throw new RuntimeError("histc: x must be numeric");
+    // Determine x shape and decide working dimension.
+    let xRows: number, xCols: number;
+    let xData: Float64Array;
+    let xShape: number[];
+    if (isRuntimeNumber(xArg) || isRuntimeLogical(xArg)) {
+      xRows = 1;
+      xCols = 1;
+      xData = allocFloat64Array([
+        isRuntimeLogical(xArg) ? (xArg ? 1 : 0) : (xArg as number),
+      ]);
+      xShape = [1, 1];
+    } else if (isRuntimeTensor(xArg)) {
+      [xRows, xCols] = tensorSize2D(xArg);
+      xData = xArg.data;
+      xShape = xArg.shape.slice();
+    } else {
+      throw new RuntimeError("histc: x must be numeric");
+    }
+
+    let dim: number;
+    if (args.length >= 3) {
+      dim = Math.round(realScalarArg(args[2]));
+      if (dim !== 1 && dim !== 2)
+        throw new RuntimeError("histc: dim must be 1 or 2");
+    } else if (xRows === 1 || xCols === 1) {
+      // Vector input: operate along the non-singleton dimension.
+      dim = xRows === 1 ? 2 : 1;
+    } else {
+      dim = 1;
+    }
+
+    // Output bincounts shape: replace dim with N.
+    let countShape: number[];
+    if (dim === 1) countShape = [N, xCols];
+    else countShape = [xRows, N];
+
+    const counts = allocFloat64Array(countShape[0] * countShape[1]);
+    const indData = allocFloat64Array(xRows * xCols);
+
+    if (dim === 1) {
+      // Iterate columns; each column is a separate series.
+      for (let c = 0; c < xCols; c++) {
+        for (let r = 0; r < xRows; r++) {
+          const v = xData[c * xRows + r];
+          const bin = findBin(v);
+          indData[c * xRows + r] = bin;
+          if (bin > 0) counts[c * N + (bin - 1)] += 1;
         }
-
-        let dim: number;
-        if (args.length >= 3) {
-          dim = Math.round(toNumber(args[2]));
-          if (dim !== 1 && dim !== 2)
-            throw new RuntimeError("histc: dim must be 1 or 2");
-        } else if (xRows === 1 || xCols === 1) {
-          // Vector input: operate along the non-singleton dimension.
-          dim = xRows === 1 ? 2 : 1;
-        } else {
-          dim = 1;
+      }
+    } else {
+      // dim === 2: iterate rows; each row is a separate series.
+      for (let r = 0; r < xRows; r++) {
+        for (let c = 0; c < xCols; c++) {
+          const v = xData[c * xRows + r];
+          const bin = findBin(v);
+          indData[c * xRows + r] = bin;
+          if (bin > 0) counts[(bin - 1) * xRows + r] += 1;
         }
+      }
+    }
 
-        // Output bincounts shape: replace dim with N.
-        let countShape: number[];
-        if (dim === 1) countShape = [N, xCols];
-        else countShape = [xRows, N];
+    const isVectorX = xRows === 1 || xCols === 1;
+    let countsResult: RuntimeValue;
+    if (isRuntimeNumber(xArg) || isRuntimeLogical(xArg)) {
+      // Scalar x — bincounts is a vector of length N (row).
+      countsResult = RTV.tensor(counts, [1, N]);
+    } else if (isVectorX) {
+      // Vector x — bincounts vector matching x orientation.
+      const isRow = xRows === 1;
+      countsResult = RTV.tensor(counts, isRow ? [1, N] : [N, 1]);
+    } else {
+      countsResult = RTV.tensor(counts, countShape);
+    }
 
-        const counts = allocFloat64Array(countShape[0] * countShape[1]);
-        const indData = allocFloat64Array(xRows * xCols);
-
-        if (dim === 1) {
-          // Iterate columns; each column is a separate series.
-          for (let c = 0; c < xCols; c++) {
-            for (let r = 0; r < xRows; r++) {
-              const v = xData[c * xRows + r];
-              const bin = findBin(v);
-              indData[c * xRows + r] = bin;
-              if (bin > 0) counts[c * N + (bin - 1)] += 1;
-            }
-          }
-        } else {
-          // dim === 2: iterate rows; each row is a separate series.
-          for (let r = 0; r < xRows; r++) {
-            for (let c = 0; c < xCols; c++) {
-              const v = xData[c * xRows + r];
-              const bin = findBin(v);
-              indData[c * xRows + r] = bin;
-              if (bin > 0) counts[(bin - 1) * xRows + r] += 1;
-            }
-          }
-        }
-
-        const isVectorX = xRows === 1 || xCols === 1;
-        let countsResult: RuntimeValue;
-        if (isRuntimeNumber(xArg) || isRuntimeLogical(xArg)) {
-          // Scalar x — bincounts is a vector of length N (row).
-          countsResult = RTV.tensor(counts, [1, N]);
-        } else if (isVectorX) {
-          // Vector x — bincounts vector matching x orientation.
-          const isRow = xRows === 1;
-          countsResult = RTV.tensor(counts, isRow ? [1, N] : [N, 1]);
-        } else {
-          countsResult = RTV.tensor(counts, countShape);
-        }
-
-        if (nargout <= 1) return countsResult;
-        const indResult: RuntimeValue =
-          isRuntimeNumber(xArg) || isRuntimeLogical(xArg)
-            ? RTV.num(indData[0])
-            : RTV.tensor(indData, xShape);
-        return [countsResult, indResult];
-      },
-    },
-  ],
+    if (nargout <= 1) return countsResult;
+    const indResult: RuntimeValue =
+      isRuntimeNumber(xArg) || isRuntimeLogical(xArg)
+        ? RTV.num(indData[0])
+        : RTV.tensor(indData, xShape);
+    return [countsResult, indResult];
+  },
 });
 
 // ── discretize ───────────────────────────────────────────────────────
 
-defineBuiltin({
+builtin({
   name: "discretize",
   help: {
     signatures: [
@@ -1333,128 +1379,124 @@ defineBuiltin({
     description:
       "Bin index of each element of X for the bins defined by edges. Bin k is [edges(k), edges(k+1)), the last bin also includes its right edge; elements outside the edges (and NaN) give NaN. With values, returns values(k) instead of k. IncludedEdge 'right' uses bins (edges(k), edges(k+1)] with the first bin closed. The number-of-bins form discretize(X, N) is not supported.",
   },
-  cases: [
-    {
-      match: (argTypes, nargout) => {
-        if (argTypes.length < 2 || argTypes.length > 5) return null;
-        const out: JitType = { kind: "unknown" };
-        return nargout > 1 ? [out, out] : [out];
-      },
-      apply: (args, nargout) => {
-        const xArg = args[0];
-        let rest = args.slice(2);
-        let values: Float64Array | null = null;
-        if (
-          rest.length > 0 &&
-          !isRuntimeChar(rest[0]) &&
-          !isRuntimeString(rest[0])
-        ) {
-          values = toFloatArray(rest[0]);
-          rest = rest.slice(1);
-        }
-        let right = false;
-        for (let i = 0; i < rest.length; i += 2) {
-          const opt =
-            isRuntimeChar(rest[i]) || isRuntimeString(rest[i])
-              ? (isRuntimeChar(rest[i])
-                  ? (rest[i] as { value: string }).value
-                  : (rest[i] as string)
-                ).toLowerCase()
-              : "";
-          if (opt === "categorical")
-            throw new RuntimeError(
-              "discretize: categorical output is not supported"
-            );
-          if (opt !== "includededge" || i + 1 >= rest.length)
-            throw new RuntimeError("discretize: invalid option");
-          const v = rest[i + 1];
-          const side = (isRuntimeChar(v) ? v.value : String(v)).toLowerCase();
-          if (side !== "left" && side !== "right")
-            throw new RuntimeError(
-              "discretize: IncludedEdge must be 'left' or 'right'"
-            );
-          right = side === "right";
-        }
-        const edgesArg = args[1];
-        if (
-          isRuntimeNumber(edgesArg) ||
-          (isRuntimeTensor(edgesArg) && edgesArg.data.length === 1)
-        )
-          throw new RuntimeError(
-            "discretize: the number-of-bins form is not supported; pass bin edges"
-          );
-        const edges = toFloatArray(edgesArg);
-        const N = edges.length;
-        if (N < 2)
-          throw new RuntimeError(
-            "discretize: edges must have at least 2 elements"
-          );
-        for (let i = 1; i < N; i++)
-          if (!(edges[i] >= edges[i - 1]))
-            throw new RuntimeError(
-              "discretize: edges must be monotonically non-decreasing"
-            );
-        if (values && values.length !== N - 1)
-          throw new RuntimeError(
-            "discretize: values must have numel(edges)-1 elements"
-          );
+  nargin: [2, Infinity],
+  nargout: 2,
+  mfile: true,
+  apply: (args, nargout) => {
+    const xArg = args[0];
+    let rest = args.slice(2);
+    let values: Float64Array | null = null;
+    if (
+      rest.length > 0 &&
+      !isRuntimeChar(rest[0]) &&
+      !isRuntimeString(rest[0])
+    ) {
+      values = toFloatArray(rest[0], "discretize");
+      rest = rest.slice(1);
+    }
+    let right = false;
+    for (let i = 0; i < rest.length; i += 2) {
+      const opt =
+        isRuntimeChar(rest[i]) || isRuntimeString(rest[i])
+          ? (isRuntimeChar(rest[i])
+              ? (rest[i] as { value: string }).value
+              : (rest[i] as string)
+            ).toLowerCase()
+          : "";
+      if (opt === "categorical")
+        throw new RuntimeError(
+          "discretize: categorical output is not supported"
+        );
+      if (opt !== "includededge" || i + 1 >= rest.length)
+        throw new RuntimeError("discretize: invalid option");
+      const v = rest[i + 1];
+      const side = (isRuntimeChar(v) ? v.value : String(v)).toLowerCase();
+      if (side !== "left" && side !== "right")
+        throw new RuntimeError(
+          "discretize: IncludedEdge must be 'left' or 'right'"
+        );
+      right = side === "right";
+    }
+    const edgesArg = args[1];
+    if (
+      isRuntimeNumber(edgesArg) ||
+      (isRuntimeTensor(edgesArg) && edgesArg.data.length === 1)
+    )
+      throw new RuntimeError(
+        "discretize: the number-of-bins form is not supported; pass bin edges"
+      );
+    const edges = toFloatArray(edgesArg, "discretize");
+    const N = edges.length;
+    if (N < 2)
+      throw new RuntimeError("discretize: edges must have at least 2 elements");
+    for (let i = 1; i < N; i++)
+      if (!(edges[i] >= edges[i - 1]))
+        throw new RuntimeError(
+          "discretize: edges must be monotonically non-decreasing"
+        );
+    if (values && values.length !== N - 1)
+      throw new RuntimeError(
+        "discretize: values must have numel(edges)-1 elements"
+      );
 
-        // 1-based bin index of v, or 0 if outside
-        const findBin = (v: number): number => {
-          if (!(v >= edges[0] && v <= edges[N - 1])) return 0;
-          if (!right) {
-            if (v === edges[N - 1]) return N - 1; // last bin is closed
-            // largest k with edges[k] <= v
-            let lo = 0,
-              hi = N - 1;
-            while (hi - lo > 1) {
-              const mid = (lo + hi) >> 1;
-              if (edges[mid] <= v) lo = mid;
-              else hi = mid;
-            }
-            return lo + 1;
-          }
-          if (v === edges[0]) return 1; // first bin is closed
-          // smallest k >= 1 with v <= edges[k]
-          let lo = 0,
-            hi = N - 1;
-          while (hi - lo > 1) {
-            const mid = (lo + hi) >> 1;
-            if (v <= edges[mid]) hi = mid;
-            else lo = mid;
-          }
-          return hi;
-        };
-        const mapBin = (v: number): number => {
-          const b = findBin(v);
-          if (b === 0) return NaN;
-          return values ? values[b - 1] : b;
-        };
-
-        let Y: RuntimeValue;
-        if (isRuntimeNumber(xArg) || isRuntimeLogical(xArg)) {
-          Y = RTV.num(
-            mapBin(isRuntimeLogical(xArg) ? (xArg ? 1 : 0) : (xArg as number))
-          );
-        } else if (isRuntimeTensor(xArg)) {
-          if (xArg.imag) throw new RuntimeError("discretize: X must be real");
-          const out = allocFloat64Array(xArg.data.length);
-          for (let i = 0; i < out.length; i++) out[i] = mapBin(xArg.data[i]);
-          Y = RTV.tensor(out, xArg.shape.slice());
-        } else {
-          throw new RuntimeError("discretize: X must be numeric");
+    // 1-based bin index of v, or 0 if outside
+    const findBin = (v: number): number => {
+      if (!(v >= edges[0] && v <= edges[N - 1])) return 0;
+      if (!right) {
+        if (v === edges[N - 1]) return N - 1; // last bin is closed
+        // largest k with edges[k] <= v
+        let lo = 0,
+          hi = N - 1;
+        while (hi - lo > 1) {
+          const mid = (lo + hi) >> 1;
+          if (edges[mid] <= v) lo = mid;
+          else hi = mid;
         }
-        if (nargout <= 1) return Y;
-        return [
-          Y,
-          RTV.tensor(
-            allocFloat64Array(edges),
-            isColumnVector(edgesArg) ? [N, 1] : [1, N]
-          ),
-        ];
-      },
-    },
-  ],
+        return lo + 1;
+      }
+      if (v === edges[0]) return 1; // first bin is closed
+      // smallest k >= 1 with v <= edges[k]
+      let lo = 0,
+        hi = N - 1;
+      while (hi - lo > 1) {
+        const mid = (lo + hi) >> 1;
+        if (v <= edges[mid]) hi = mid;
+        else lo = mid;
+      }
+      return hi;
+    };
+    const mapBin = (v: number): number => {
+      const b = findBin(v);
+      if (b === 0) return NaN;
+      return values ? values[b - 1] : b;
+    };
+
+    let Y: RuntimeValue;
+    if (isRuntimeNumber(xArg) || isRuntimeLogical(xArg)) {
+      Y = RTV.num(
+        mapBin(isRuntimeLogical(xArg) ? (xArg ? 1 : 0) : (xArg as number))
+      );
+    } else if (isRuntimeTensor(xArg) || isRuntimeComplexNumber(xArg)) {
+      if (isRuntimeComplexNumber(xArg) || xArg.imag)
+        throw builtinError(
+          "MATLAB:discretize:invalidType",
+          "Invalid data type. Data to be binned must be a real numeric or logical array."
+        );
+      const out = allocFloat64Array(xArg.data.length);
+      for (let i = 0; i < out.length; i++) out[i] = mapBin(xArg.data[i]);
+      Y = RTV.tensor(out, xArg.shape.slice());
+    } else {
+      throw new RuntimeError("discretize: X must be numeric");
+    }
+    if (nargout <= 1) return Y;
+    return [
+      Y,
+      RTV.tensor(
+        allocFloat64Array(edges),
+        isColumnVector(edgesArg) ? [N, 1] : [1, N]
+      ),
+    ];
+  },
 });
 
 // ── mkpp / ppval ─────────────────────────────────────────────────────
@@ -1488,7 +1530,7 @@ const ppIntApply = (fname: string) => (args: RuntimeValue[]) => {
     orderRT === undefined
   )
     throw new RuntimeError(`${fname}: pp struct missing required fields`);
-  const breaks = toFloatArray(breaksRT);
+  const breaks = toFloatArray(breaksRT, fname);
   const L = Math.round(toNumber(piecesRT));
   const k = Math.round(toNumber(orderRT));
   const dim = dimRT === undefined ? [1] : dimArgToVec(dimRT);
@@ -1526,218 +1568,193 @@ const ppIntApply = (fname: string) => (args: RuntimeValue[]) => {
 };
 
 for (const fname of ["fnint", "ppint"]) {
-  defineBuiltin({
-    name: fname,
-    cases: [
-      {
-        match: argTypes => {
-          if (argTypes.length !== 1) return null;
-          return [{ kind: "struct", fields: {} }];
-        },
-        apply: ppIntApply(fname),
-      },
-    ],
-  });
+  builtin({ name: fname, nargin: 1, apply: ppIntApply(fname) });
 }
 
-defineBuiltin({
+builtin({
   name: "mkpp",
-  cases: [
-    {
-      match: argTypes => {
-        if (argTypes.length < 2 || argTypes.length > 3) return null;
-        return [{ kind: "struct", fields: {} }];
-      },
-      apply: args => {
-        const breaks = toFloatArray(args[0]);
-        const Lp1 = breaks.length;
-        if (Lp1 < 2)
-          throw new RuntimeError("mkpp: breaks must have at least 2 elements");
-        const L = Lp1 - 1;
-        for (let i = 0; i < L; i++) {
-          if (!(breaks[i] < breaks[i + 1]))
-            throw new RuntimeError("mkpp: breaks must be strictly increasing");
-        }
+  nargin: [2, 3],
+  mfile: true,
+  apply: args => {
+    const breaks = toFloatArray(args[0], "mkpp");
+    const Lp1 = breaks.length;
+    if (Lp1 < 2)
+      throw new RuntimeError("mkpp: breaks must have at least 2 elements");
+    const L = Lp1 - 1;
+    for (let i = 0; i < L; i++) {
+      if (!(breaks[i] < breaks[i + 1]))
+        throw new RuntimeError("mkpp: breaks must be strictly increasing");
+    }
 
-        let dim: number[] = [1];
-        if (args.length >= 3) {
-          dim = dimArgToVec(args[2]);
-          if (dim.length === 0) dim = [1];
-          for (const d of dim)
-            if (!(d >= 0))
-              throw new RuntimeError("mkpp: dim entries must be non-negative");
-        }
-        const dProd = dim.reduce((a, b) => a * b, 1);
+    let dim: number[] = [1];
+    if (args.length >= 3) {
+      dim = dimArgToVec(args[2]);
+      if (dim.length === 0) dim = [1];
+      for (const d of dim)
+        if (!(d >= 0))
+          throw new RuntimeError("mkpp: dim entries must be non-negative");
+    }
+    const dProd = dim.reduce((a, b) => a * b, 1);
 
-        const coefsArg = args[1];
-        let rows: number, cols: number, coefData: Float64Array;
-        if (isRuntimeNumber(coefsArg) || isRuntimeLogical(coefsArg)) {
-          rows = 1;
-          cols = 1;
-          coefData = allocFloat64Array([
-            isRuntimeLogical(coefsArg)
-              ? coefsArg
-                ? 1
-                : 0
-              : (coefsArg as number),
-          ]);
-        } else if (isRuntimeTensor(coefsArg)) {
-          [rows, cols] = tensorSize2D(coefsArg);
-          coefData = allocFloat64Array(coefsArg.data);
-        } else {
-          throw new RuntimeError("mkpp: coefs must be numeric");
-        }
+    const coefsArg = args[1];
+    let rows: number, cols: number, coefData: Float64Array;
+    if (isRuntimeNumber(coefsArg) || isRuntimeLogical(coefsArg)) {
+      rows = 1;
+      cols = 1;
+      coefData = allocFloat64Array([
+        isRuntimeLogical(coefsArg) ? (coefsArg ? 1 : 0) : (coefsArg as number),
+      ]);
+    } else if (isRuntimeTensor(coefsArg)) {
+      if (coefsArg.imag) throw complexUnsupported("mkpp")();
+      [rows, cols] = tensorSize2D(coefsArg);
+      coefData = allocFloat64Array(coefsArg.data);
+    } else {
+      throw new RuntimeError("mkpp: coefs must be numeric");
+    }
 
-        if (rows !== dProd * L)
-          throw new RuntimeError(
-            `mkpp: coefs has ${rows} rows; expected ${dProd * L} (prod(dim)*pieces)`
-          );
-        const k = cols;
+    if (rows !== dProd * L)
+      throw new RuntimeError(
+        `mkpp: coefs has ${rows} rows; expected ${dProd * L} (prod(dim)*pieces)`
+      );
+    const k = cols;
 
-        const breaksOut = allocFloat64Array(Lp1);
-        for (let i = 0; i < Lp1; i++) breaksOut[i] = breaks[i];
+    const breaksOut = allocFloat64Array(Lp1);
+    for (let i = 0; i < Lp1; i++) breaksOut[i] = breaks[i];
 
-        const fields = new Map<string, RuntimeValue>();
-        fields.set("form", "pp");
-        fields.set("breaks", RTV.tensor(breaksOut, [1, Lp1]));
-        fields.set("coefs", RTV.tensor(coefData, [rows, cols]));
-        fields.set("pieces", L);
-        fields.set("order", k);
-        if (dim.length === 1) {
-          fields.set("dim", dim[0]);
-        } else {
-          fields.set(
-            "dim",
-            RTV.tensor(allocFloat64Array(dim), [1, dim.length])
-          );
-        }
-        return RTV.struct(fields);
-      },
-    },
-  ],
+    const fields = new Map<string, RuntimeValue>();
+    fields.set("form", "pp");
+    fields.set("breaks", RTV.tensor(breaksOut, [1, Lp1]));
+    fields.set("coefs", RTV.tensor(coefData, [rows, cols]));
+    fields.set("pieces", L);
+    fields.set("order", k);
+    if (dim.length === 1) {
+      fields.set("dim", dim[0]);
+    } else {
+      fields.set("dim", RTV.tensor(allocFloat64Array(dim), [1, dim.length]));
+    }
+    return RTV.struct(fields);
+  },
 });
 
-defineBuiltin({
+builtin({
   name: "ppval",
-  cases: [
-    {
-      match: argTypes => {
-        if (argTypes.length !== 2) return null;
-        return [{ kind: "unknown" }];
-      },
-      apply: args => {
-        const pp = args[0];
-        if (!isRuntimeStruct(pp))
-          throw new RuntimeError("ppval: first argument must be a pp struct");
-        const formVal = pp.fields.get("form");
-        const formStr =
-          formVal === undefined
-            ? ""
-            : isRuntimeChar(formVal)
-              ? formVal.value
-              : isRuntimeString(formVal)
-                ? (formVal as string)
-                : "";
-        if (formStr !== "pp")
-          throw new RuntimeError("ppval: pp.form must be 'pp'");
+  nargin: 2,
+  mfile: true,
+  apply: args => {
+    const pp = args[0];
+    if (!isRuntimeStruct(pp))
+      throw new RuntimeError("ppval: first argument must be a pp struct");
+    const formVal = pp.fields.get("form");
+    const formStr =
+      formVal === undefined
+        ? ""
+        : isRuntimeChar(formVal)
+          ? formVal.value
+          : isRuntimeString(formVal)
+            ? (formVal as string)
+            : "";
+    if (formStr !== "pp") throw new RuntimeError("ppval: pp.form must be 'pp'");
 
-        const breaksRT = pp.fields.get("breaks");
-        const coefsRT = pp.fields.get("coefs");
-        const piecesRT = pp.fields.get("pieces");
-        const orderRT = pp.fields.get("order");
-        const dimRT = pp.fields.get("dim");
-        if (
-          breaksRT === undefined ||
-          coefsRT === undefined ||
-          piecesRT === undefined ||
-          orderRT === undefined ||
-          dimRT === undefined
-        )
-          throw new RuntimeError("ppval: pp struct missing required fields");
+    const breaksRT = pp.fields.get("breaks");
+    const coefsRT = pp.fields.get("coefs");
+    const piecesRT = pp.fields.get("pieces");
+    const orderRT = pp.fields.get("order");
+    const dimRT = pp.fields.get("dim");
+    if (
+      breaksRT === undefined ||
+      coefsRT === undefined ||
+      piecesRT === undefined ||
+      orderRT === undefined ||
+      dimRT === undefined
+    )
+      throw new RuntimeError("ppval: pp struct missing required fields");
 
-        const breaks = toFloatArray(breaksRT);
-        const L = Math.round(toNumber(piecesRT));
-        const k = Math.round(toNumber(orderRT));
-        const dim: number[] = dimArgToVec(dimRT);
-        const dProd = dim.reduce((a, b) => a * b, 1);
+    const breaks = toFloatArray(breaksRT, "ppval");
+    const L = Math.round(toNumber(piecesRT));
+    const k = Math.round(toNumber(orderRT));
+    const dim: number[] = dimArgToVec(dimRT);
+    const dProd = dim.reduce((a, b) => a * b, 1);
 
-        if (!isRuntimeTensor(coefsRT))
-          throw new RuntimeError("ppval: pp.coefs must be a matrix");
-        const coefs = coefsRT.data;
-        const [rows, cols] = tensorSize2D(coefsRT);
-        if (rows !== dProd * L || cols !== k)
-          throw new RuntimeError(
-            "ppval: pp.coefs shape inconsistent with pieces/order/dim"
-          );
+    if (!isRuntimeTensor(coefsRT))
+      throw new RuntimeError("ppval: pp.coefs must be a matrix");
+    const coefs = coefsRT.data;
+    const [rows, cols] = tensorSize2D(coefsRT);
+    if (rows !== dProd * L || cols !== k)
+      throw new RuntimeError(
+        "ppval: pp.coefs shape inconsistent with pieces/order/dim"
+      );
 
-        const findPiece = (x: number): number => {
-          if (x < breaks[1]) return 0;
-          if (x >= breaks[L - 1]) return L - 1;
-          let lo = 0,
-            hi = L;
-          while (hi - lo > 1) {
-            const mid = (lo + hi) >> 1;
-            if (breaks[mid] <= x) lo = mid;
-            else hi = mid;
-          }
-          return lo;
-        };
+    const findPiece = (x: number): number => {
+      if (x < breaks[1]) return 0;
+      if (x >= breaks[L - 1]) return L - 1;
+      let lo = 0,
+        hi = L;
+      while (hi - lo > 1) {
+        const mid = (lo + hi) >> 1;
+        if (breaks[mid] <= x) lo = mid;
+        else hi = mid;
+      }
+      return lo;
+    };
 
-        const evalAt = (x: number, out: Float64Array, off: number) => {
-          const i = findPiece(x);
-          const dx = x - breaks[i];
-          const baseRow = i * dProd;
-          for (let j = 0; j < dProd; j++) {
-            const r = baseRow + j;
-            let result = coefs[0 * rows + r];
-            for (let c = 1; c < k; c++) {
-              result = result * dx + coefs[c * rows + r];
-            }
-            out[off + j] = result;
-          }
-        };
-
-        const xq = args[1];
-        const isScalarDim = dim.length === 1 && dim[0] === 1;
-
-        if (isRuntimeNumber(xq) || isRuntimeLogical(xq)) {
-          const xv = isRuntimeLogical(xq) ? (xq ? 1 : 0) : (xq as number);
-          if (isScalarDim) {
-            const out = allocFloat64Array(1);
-            evalAt(xv, out, 0);
-            return RTV.num(out[0]);
-          }
-          const out = allocFloat64Array(dProd);
-          evalAt(xv, out, 0);
-          const outShape = dim.length === 1 ? [dim[0], 1] : [...dim];
-          return RTV.tensor(out, outShape);
+    const evalAt = (x: number, out: Float64Array, off: number) => {
+      const i = findPiece(x);
+      const dx = x - breaks[i];
+      const baseRow = i * dProd;
+      for (let j = 0; j < dProd; j++) {
+        const r = baseRow + j;
+        let result = coefs[0 * rows + r];
+        for (let c = 1; c < k; c++) {
+          result = result * dx + coefs[c * rows + r];
         }
+        out[off + j] = result;
+      }
+    };
 
-        if (!isRuntimeTensor(xq))
-          throw new RuntimeError("ppval: query points must be numeric");
+    const xq = args[1];
+    const isScalarDim = dim.length === 1 && dim[0] === 1;
 
-        const N = xq.data.length;
-        const xqShape = xq.shape.slice();
+    if (isRuntimeNumber(xq) || isRuntimeLogical(xq)) {
+      const xv = isRuntimeLogical(xq) ? (xq ? 1 : 0) : (xq as number);
+      if (isScalarDim) {
+        const out = allocFloat64Array(1);
+        evalAt(xv, out, 0);
+        return RTV.num(out[0]);
+      }
+      const out = allocFloat64Array(dProd);
+      evalAt(xv, out, 0);
+      const outShape = dim.length === 1 ? [dim[0], 1] : [...dim];
+      return RTV.tensor(out, outShape);
+    }
 
-        if (isScalarDim) {
-          const out = allocFloat64Array(N);
-          for (let i = 0; i < N; i++) evalAt(xq.data[i], out, i);
-          return RTV.tensor(out, xqShape);
-        }
+    if (hasImagValue(xq))
+      throw builtinError(
+        "MATLAB:chckxy:XQComplex",
+        "The interpolation points must be real."
+      );
+    if (!isRuntimeTensor(xq))
+      throw new RuntimeError("ppval: query points must be numeric");
 
-        const out = allocFloat64Array(dProd * N);
-        for (let i = 0; i < N; i++) evalAt(xq.data[i], out, i * dProd);
+    const N = xq.data.length;
+    const xqShape = xq.shape.slice();
 
-        const xqIsRowVec = xqShape.length === 2 && xqShape[0] === 1;
-        const xqIsColVec = xqShape.length === 2 && xqShape[1] === 1;
-        let outShape: number[];
-        if (xqIsRowVec || xqIsColVec) {
-          outShape = [...dim, N];
-        } else {
-          outShape = [...dim, ...xqShape];
-        }
-        return RTV.tensor(out, outShape);
-      },
-    },
-  ],
+    if (isScalarDim) {
+      const out = allocFloat64Array(N);
+      for (let i = 0; i < N; i++) evalAt(xq.data[i], out, i);
+      return RTV.tensor(out, xqShape);
+    }
+
+    const out = allocFloat64Array(dProd * N);
+    for (let i = 0; i < N; i++) evalAt(xq.data[i], out, i * dProd);
+
+    const xqIsRowVec = xqShape.length === 2 && xqShape[0] === 1;
+    const xqIsColVec = xqShape.length === 2 && xqShape[1] === 1;
+    let outShape: number[];
+    if (xqIsRowVec || xqIsColVec) {
+      outShape = [...dim, N];
+    } else {
+      outShape = [...dim, ...xqShape];
+    }
+    return RTV.tensor(out, outShape);
+  },
 });

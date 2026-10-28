@@ -5,13 +5,14 @@
 import {
   isRuntimeString,
   isRuntimeChar,
+  isRuntimeComplexNumber,
+  isRuntimeSparseMatrix,
   isRuntimeTensor,
   isRuntimeStruct,
 } from "../../runtime/types.js";
 import type { RuntimeValue, RuntimeStruct } from "../../runtime/types.js";
 import { RTV, RuntimeError, numel } from "../../runtime/index.js";
-import { toNumber, toString } from "../../runtime/convert.js";
-import { defineBuiltin, registerIBuiltin } from "./types.js";
+import { toString } from "../../runtime/convert.js";
 import {
   rngRandom,
   boxMullerRandom,
@@ -23,60 +24,126 @@ import {
   restoreRngState,
 } from "../../helpers/prng.js";
 import { allocFloat64Array } from "../../runtime/alloc.js";
-import {
-  stripClassNameArgs,
-  stripClassNameTypes,
-} from "./array-construction.js";
+import { builtin } from "./builtin.js";
+import { builtinError, realNumericArg, realScalarArg } from "./args.js";
+import { stripClassNameArgs } from "./array-construction.js";
 
-// ── Shape parsing (local, mirrors builtins/shape-utils.ts) ──────────────
+const isText = (v: RuntimeValue) => isRuntimeChar(v) || isRuntimeString(v);
 
-function parseShapeArgs(rawArgs: RuntimeValue[]): number[] {
-  const args = stripClassNameArgs(rawArgs);
-  if (args.length === 1 && isRuntimeTensor(args[0])) {
-    const t = args[0];
-    const shape: number[] = [];
-    for (let i = 0; i < t.data.length; i++)
-      shape.push(Math.max(0, Math.round(t.data[i])));
-    return shape;
+// ── Size arguments ──────────────────────────────────────────────────────
+
+/** Check a trailing class-name argument (rand(n, 'single'), randi(10,
+ *  'int32')): numbl only has double, so the class is accepted and
+ *  ignored. */
+function checkClassName(name: string, args: RuntimeValue[]): void {
+  const last = args[args.length - 1];
+  if (args.length === 0 || !isText(last)) return;
+  for (const a of args)
+    if (isText(a) && toString(a).toLowerCase() === "like") return;
+  const cls = toString(last).toLowerCase();
+  const ok =
+    cls === "double" ||
+    cls === "single" ||
+    (name === "randi" && /^u?int(8|16|32|64)$/.test(cls));
+  if (!ok)
+    throw builtinError(
+      `MATLAB:${name}:invalidOutputType`,
+      `Class name must be a class that supports ${name.toUpperCase()}, such as "double" or "single".`
+    );
+}
+
+/** The dimensions of rand(n), rand(m, n, ...), rand([m n ...]). */
+function sizeArgs(name: string, args: RuntimeValue[]): number[] {
+  const values: number[] = [];
+  for (const a of args) {
+    if (isRuntimeComplexNumber(a) || (isRuntimeTensor(a) && a.imag))
+      throw builtinError(
+        "MATLAB:obsoleteComplexInput",
+        "Size inputs must be real."
+      );
+    if (
+      !(
+        typeof a === "number" ||
+        typeof a === "boolean" ||
+        isRuntimeTensor(a) ||
+        isRuntimeSparseMatrix(a)
+      )
+    )
+      throw builtinError(
+        `MATLAB:${name}:inputType`,
+        "Size inputs must be numeric."
+      );
+    const v = realNumericArg(a);
+    if (typeof v === "number") values.push(v);
+    else if (isRuntimeTensor(v)) {
+      if (args.length > 1 && v.data.length !== 1)
+        throw new RuntimeError(`${name}: size inputs must be scalar`);
+      for (let i = 0; i < v.data.length; i++) values.push(v.data[i]);
+    } else values.push(realScalarArg(v));
   }
-  return args.map(a => Math.max(0, Math.round(toNumber(a))));
+  const shape = values.map(x => Math.max(0, Math.round(x)));
+  if (shape.length === 1) shape.push(shape[0]);
+  return shape;
 }
 
 // ── rng ─────────────────────────────────────────────────────────────────
 
-registerIBuiltin({
+builtin({
   name: "rng",
-  resolve: () => {
-    return {
-      outputTypes: [{ kind: "struct", fields: {} }],
-      apply: (args, nargout) => {
-        const prevState = getRngStateStruct();
-        if (args.length === 0) return prevState;
+  // rng, rng(seed), rng(seed, generator), rng('shuffle'|'default'), rng(s)
+  nargin: [0, 2],
+  mfile: true,
+  apply: (args, nargout) => {
+    const prevState = getRngStateStruct();
+    if (args.length === 0) return prevState;
 
-        const a = args[0];
-        if (isRuntimeStruct(a)) {
-          restoreRngState(a as RuntimeStruct);
-        } else if (isRuntimeString(a) || isRuntimeChar(a)) {
-          const s = toString(a).toLowerCase();
-          if (s === "shuffle") {
-            setRngShuffle();
-          } else if (s === "default" || s === "twister") {
-            seedRng(0);
-            setRngSeed(0);
-          } else {
-            throw new RuntimeError(`rng: unknown option '${toString(a)}'`);
-          }
-        } else {
-          const seed = Math.round(toNumber(a));
-          // Accept optional generator name as second arg
-          seedRng(seed);
-          setRngSeed(seed);
-        }
+    const a = args[0];
+    if (isRuntimeStruct(a)) {
+      restoreRngState(a as RuntimeStruct);
+    } else if (isText(a)) {
+      const s = toString(a).toLowerCase();
+      if (s === "shuffle") {
+        setRngShuffle();
+      } else if (s === "default" || s === "twister") {
+        seedRng(0);
+        setRngSeed(0);
+      } else {
+        throw builtinError(
+          "MATLAB:rng:unknownRNGType",
+          `'${toString(a)}' is not a valid generator type.`
+        );
+      }
+    } else if (
+      typeof a === "number" ||
+      typeof a === "boolean" ||
+      isRuntimeTensor(a) ||
+      isRuntimeComplexNumber(a)
+    ) {
+      const badSeed = () =>
+        builtinError(
+          "MATLAB:rng:badSeed",
+          "SD must be a nonnegative integer seed less than 2^32."
+        );
+      let seed: number;
+      try {
+        seed = realScalarArg(a);
+      } catch {
+        throw badSeed();
+      }
+      if (!Number.isInteger(seed) || seed < 0 || seed >= 2 ** 32)
+        throw badSeed();
+      // The optional generator name (args[1]) is accepted and ignored.
+      seedRng(seed);
+      setRngSeed(seed);
+    } else {
+      throw builtinError(
+        "MATLAB:rng:badFirstOpt",
+        "First input must be a nonnegative integer seed less than 2^32, 'shuffle', 'default', a valid generator name, or generator settings captured previously using S = RNG."
+      );
+    }
 
-        if (nargout >= 1) return prevState;
-        return RTV.num(0);
-      },
-    };
+    // Called as a statement, rng sets no ans.
+    if (nargout >= 1) return prevState;
   },
 });
 
@@ -87,63 +154,34 @@ function registerRandBuiltin(
   gen: () => number,
   bulkFill?: (data: Float64Array) => void
 ): void {
-  defineBuiltin({
+  builtin({
     name,
-    cases: [
+    apply: rawArgs => {
       // rand('seed', v) — legacy seeding
-      {
-        match: argTypes => {
-          if (
-            argTypes.length === 2 &&
-            (argTypes[0].kind === "string" || argTypes[0].kind === "char")
-          )
-            return [{ kind: "number" }];
-          return null;
-        },
-        apply: args => {
-          const s = toString(args[0]);
-          if (s !== "seed")
-            throw new RuntimeError(
-              `${name}: only 'seed' string option is supported`
-            );
-          seedRng(Math.round(toNumber(args[1])));
-          return RTV.num(0);
-        },
-      },
+      if (rawArgs.length === 2 && isText(rawArgs[0])) {
+        const s = toString(rawArgs[0]);
+        if (s !== "seed")
+          throw new RuntimeError(
+            `${name}: only 'seed' string option is supported`
+          );
+        seedRng(Math.round(realScalarArg(rawArgs[1])));
+        return RTV.num(0);
+      }
       // rand(), rand(n), rand(m,n), rand([m,n]), with an optional trailing
-      // class-name string (rand(n,'single')) that numbl ignores.
-      {
-        match: rawTypes => {
-          const argTypes = stripClassNameTypes(rawTypes);
-          if (argTypes.length === 0) return [{ kind: "number" }];
-          for (const a of argTypes) {
-            if (
-              a.kind !== "number" &&
-              a.kind !== "boolean" &&
-              a.kind !== "tensor"
-            )
-              return null;
-          }
-          if (argTypes.length === 1 && argTypes[0].kind === "number")
-            return [{ kind: "tensor", isComplex: false }];
-          return [{ kind: "tensor", isComplex: false }];
-        },
-        apply: rawArgs => {
-          const args = stripClassNameArgs(rawArgs);
-          if (args.length === 0) return RTV.num(gen());
-          const shape = parseShapeArgs(args);
-          if (shape.length === 1) shape.push(shape[0]);
-          const n = numel(shape);
-          const data = allocFloat64Array(n);
-          if (bulkFill) {
-            bulkFill(data);
-          } else {
-            for (let i = 0; i < n; i++) data[i] = gen();
-          }
-          return RTV.tensor(data, shape);
-        },
-      },
-    ],
+      // class name (rand(n,'single')) that numbl ignores.
+      checkClassName(name, rawArgs);
+      const args = stripClassNameArgs(rawArgs);
+      if (args.length === 0) return RTV.num(gen());
+      const shape = sizeArgs(name, args);
+      const n = numel(shape);
+      const data = allocFloat64Array(n);
+      if (bulkFill) {
+        bulkFill(data);
+      } else {
+        for (let i = 0; i < n; i++) data[i] = gen();
+      }
+      return RTV.tensor(data, shape);
+    },
   });
 }
 
@@ -152,75 +190,81 @@ registerRandBuiltin("randn", boxMullerRandom, fillRandn);
 
 // ── randi ───────────────────────────────────────────────────────────────
 
-defineBuiltin({
+const randiLimitsError = (id = "MATLAB:randi:invalidLimits") =>
+  builtinError(
+    id,
+    "First input must be a positive scalar integer value IMAX, or two integer values [IMIN IMAX] with IMIN less than or equal to IMAX."
+  );
+
+builtin({
   name: "randi",
-  cases: [
-    {
-      match: argTypes => {
-        if (argTypes.length === 0) return null;
-        // First arg must be numeric
-        const a = argTypes[0];
-        if (a.kind !== "number" && a.kind !== "boolean" && a.kind !== "tensor")
-          return null;
-        if (argTypes.length === 1) return [{ kind: "number" }];
-        return [{ kind: "tensor", isComplex: false }];
-      },
-      apply: args => {
-        if (args.length === 0)
-          throw new RuntimeError("randi requires at least 1 argument");
-        let imin = 1;
-        let imax: number;
-        const first = args[0];
-        if (isRuntimeTensor(first) && first.data.length === 2) {
-          imin = Math.round(first.data[0]);
-          imax = Math.round(first.data[1]);
-        } else {
-          imax = Math.round(toNumber(first));
-        }
-        if (imin > imax)
-          throw new RuntimeError("randi: range must satisfy IMIN <= IMAX");
-        const range = imax - imin + 1;
-        const shapeArgs = stripClassNameArgs(args.slice(1));
-        if (shapeArgs.length === 0)
-          return RTV.num(Math.floor(rngRandom() * range) + imin);
-        const shape = parseShapeArgs(shapeArgs);
-        if (shape.length === 1) shape.push(shape[0]);
-        const n = numel(shape);
-        const data = allocFloat64Array(n);
-        for (let i = 0; i < n; i++)
-          data[i] = Math.floor(rngRandom() * range) + imin;
-        return RTV.tensor(data, shape);
-      },
-    },
-  ],
+  nargin: [1, Infinity],
+  apply: args => {
+    const first = args[0];
+    if (
+      !(
+        typeof first === "number" ||
+        typeof first === "boolean" ||
+        isRuntimeTensor(first)
+      ) ||
+      (isRuntimeTensor(first) && first.imag)
+    )
+      throw randiLimitsError();
+    let imin = 1;
+    let imax: number;
+    if (isRuntimeTensor(first) && first.data.length === 2) {
+      imin = Math.round(first.data[0]);
+      imax = Math.round(first.data[1]);
+    } else {
+      imax = Math.round(realScalarArg(first));
+    }
+    if (imin > imax)
+      throw randiLimitsError("MATLAB:RandStream:randi:invalidLimits");
+    const range = imax - imin + 1;
+    const rest = args.slice(1);
+    checkClassName("randi", rest);
+    const shapeArgs = stripClassNameArgs(rest);
+    if (shapeArgs.length === 0)
+      return RTV.num(Math.floor(rngRandom() * range) + imin);
+    const shape = sizeArgs("randi", shapeArgs);
+    const n = numel(shape);
+    const data = allocFloat64Array(n);
+    for (let i = 0; i < n; i++)
+      data[i] = Math.floor(rngRandom() * range) + imin;
+    return RTV.tensor(data, shape);
+  },
 });
 
 // ── randperm ────────────────────────────────────────────────────────────
 
-defineBuiltin({
+builtin({
   name: "randperm",
-  cases: [
-    {
-      match: argTypes => {
-        if (argTypes.length < 1 || argTypes.length > 2) return null;
-        return [{ kind: "tensor", isComplex: false }];
-      },
-      apply: args => {
-        const n = Math.round(toNumber(args[0]));
-        const k = args.length === 2 ? Math.round(toNumber(args[1])) : n;
-        if (k > n)
-          throw new RuntimeError("randperm: K must be less than or equal to N");
-        const perm = allocFloat64Array(n);
-        for (let i = 0; i < n; i++) perm[i] = i + 1;
-        for (let i = n - 1; i > 0; i--) {
-          const j = Math.floor(rngRandom() * (i + 1));
-          const tmp = perm[i];
-          perm[i] = perm[j];
-          perm[j] = tmp;
-        }
-        if (k === n) return RTV.tensor(perm, [1, n]);
-        return RTV.tensor(perm.slice(0, k), [1, k]);
-      },
-    },
-  ],
+  nargin: [1, 2],
+  apply: args => {
+    const scalar = (v: RuntimeValue) => {
+      if (isRuntimeComplexNumber(v) || (isRuntimeTensor(v) && v.imag))
+        throw builtinError(
+          "MATLAB:obsoleteComplexInput",
+          "Size inputs must be real."
+        );
+      return Math.round(realScalarArg(v));
+    };
+    const n = scalar(args[0]);
+    const k = args.length === 2 ? scalar(args[1]) : n;
+    if (k > n)
+      throw builtinError(
+        "MATLAB:randperm:inputKTooLarge",
+        "K must be less than or equal to N."
+      );
+    const perm = allocFloat64Array(n);
+    for (let i = 0; i < n; i++) perm[i] = i + 1;
+    for (let i = n - 1; i > 0; i--) {
+      const j = Math.floor(rngRandom() * (i + 1));
+      const tmp = perm[i];
+      perm[i] = perm[j];
+      perm[j] = tmp;
+    }
+    if (k === n) return RTV.tensor(perm, [1, n]);
+    return RTV.tensor(perm.slice(0, k), [1, k]);
+  },
 });
