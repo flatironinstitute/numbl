@@ -4,7 +4,7 @@
  * here: workspace variables, plot hold state, figure handles, search paths and
  * workspace files (as changed by addpath/rmpath), the implicit cwd, and the
  * uihtml session left by the latest run. Used by the CLI REPL and the
- * browser workers.
+ * browser workers, and exported from "numbl" for other hosts.
  */
 
 import {
@@ -16,6 +16,13 @@ import {
 } from "./executeCode.js";
 import type { RuntimeValue } from "./runtime/index.js";
 import type { NativeBridge, WorkspaceFile } from "./workspace/types.js";
+
+export interface ExecSessionInit {
+  workspaceFiles?: WorkspaceFile[];
+  searchPaths?: string[];
+  /** From initNodePlatform in Node; enables the C-JIT and native libraries. */
+  nativeBridge?: NativeBridge;
+}
 
 export class ExecSession {
   variableValues: Record<string, RuntimeValue> = {};
@@ -31,13 +38,7 @@ export class ExecSession {
   extraSearchPaths: string[] = [];
   nativeBridge: NativeBridge | undefined;
 
-  constructor(
-    init: {
-      workspaceFiles?: WorkspaceFile[];
-      searchPaths?: string[];
-      nativeBridge?: NativeBridge;
-    } = {}
-  ) {
+  constructor(init: ExecSessionInit = {}) {
     this.workspaceFiles = init.workspaceFiles ?? [];
     this.searchPaths = init.searchPaths;
     this.nativeBridge = init.nativeBridge;

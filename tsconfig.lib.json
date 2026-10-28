@@ -24,6 +24,7 @@
   "include": [
     "src/lib.ts",
     "src/node.ts",
+    "src/node-platform.ts",
     "src/cli-fileio.ts",
     "src/cli-system.ts",
     "src/cli-scan.ts",

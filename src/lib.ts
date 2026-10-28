@@ -5,9 +5,17 @@
  *   import { executeCode } from "numbl";
  *   const result = executeCode('disp("hello")');
  *   console.log(result.output); // ["hello"]
+ *
+ * Node hosts: see "numbl/node" (initNodePlatform) for the native addon,
+ * the C-JIT behind optimization "2", and filesystem adapters.
  */
 
 export { executeCode } from "./numbl-core/executeCode.js";
+
+// REPL-style state threading over executeCode (variables, figures, paths
+// carried from one call to the next), as used by the CLI REPL and the IDE.
+export { ExecSession } from "./numbl-core/execSession.js";
+export type { ExecSessionInit } from "./numbl-core/execSession.js";
 
 // Delaunay triangulation (delaunay/delaunayn) is backed by the qhull WASM
 // module, which loads asynchronously. Call loadDelaunayBackend() once before
@@ -22,6 +30,7 @@ export type {
   ProfileData,
   BuiltinProfileEntry,
   BuiltinProfileBreakdown,
+  FigureHandles,
 } from "./numbl-core/executeCode.js";
 
 export type { FileIOAdapter } from "./numbl-core/fileIOAdapter.js";
