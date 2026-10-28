@@ -18,6 +18,7 @@ import {
   isRuntimeStruct,
   isRuntimeStructArray,
   isRuntimeStringArray,
+  isRuntimeString,
 } from "../../runtime/types.js";
 import { sprintfFormat } from "../../helpers/string.js";
 import {
@@ -167,8 +168,10 @@ builtin({
       for (const el of args[0].elements) restoreFrom(el);
       return nargout >= 1 ? RTV.num(0) : undefined;
     }
+    // Char and string scalars are interchangeable as modes, ids and messages.
+    const isText = (v: RuntimeValue) => isRuntimeChar(v) || isRuntimeString(v);
     // warning('on'/'off') — global toggle
-    if (args.length === 1 && isRuntimeChar(args[0])) {
+    if (args.length === 1 && isText(args[0])) {
       const mode = toString(args[0]);
       if (mode === "on" || mode === "off") {
         const prev = stateStruct("all");
@@ -177,7 +180,7 @@ builtin({
       }
     }
     // warning('on'/'off'/'query', id) — state query/set form
-    if (args.length === 2 && isRuntimeChar(args[0]) && isRuntimeChar(args[1])) {
+    if (args.length === 2 && isText(args[0]) && isText(args[1])) {
       const mode = toString(args[0]);
       const id = toString(args[1]);
       if (mode === "on" || mode === "off") {
@@ -193,7 +196,7 @@ builtin({
     let fmtIdx = 0;
     if (
       args.length >= 2 &&
-      isRuntimeChar(args[0]) &&
+      isText(args[0]) &&
       toString(args[0]).includes(":")
     ) {
       fmtIdx = 1;
@@ -203,6 +206,12 @@ builtin({
       return nargout >= 1 ? RTV.num(0) : undefined;
     }
     const fmt = toString(args[fmtIdx]);
+    // As in MATLAB, a lone warning(msg) is taken literally; the id form
+    // and any form with arguments format.
+    if (args.length === 1) {
+      ctx.rt.output("Warning: " + fmt + "\n");
+      return nargout >= 1 ? RTV.num(0) : undefined;
+    }
     const fmtArgs: RuntimeValue[] = [];
     for (let i = fmtIdx + 1; i < args.length; i++) {
       const a = args[i];
@@ -213,11 +222,7 @@ builtin({
         fmtArgs.push(a);
       }
     }
-    if (fmtArgs.length === 0) {
-      ctx.rt.output("Warning: " + fmt + "\n");
-    } else {
-      ctx.rt.output("Warning: " + sprintfFormat(fmt, fmtArgs) + "\n");
-    }
+    ctx.rt.output("Warning: " + sprintfFormat(fmt, fmtArgs) + "\n");
     return nargout >= 1 ? RTV.num(0) : undefined;
   },
 });

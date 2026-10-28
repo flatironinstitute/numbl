@@ -19,7 +19,7 @@
  *
  * The emitted module has the shape:
  *   ```js
- *   let $write, $plotDispatch, $rand, $elemwise, $cancel, $loc;
+ *   let $write, $warning, $plotDispatch, $rand, $elemwise, $cancel, $loc;
  *   <inlined runtime snippet bodies>
  *   function <user-fn-spec-1>(...) { ... }
  *   function <user-fn-spec-2>(...) { ... }
@@ -110,7 +110,7 @@ export function emitJsProgram(
     userParts.push("");
   }
 
-  // The host hooks (`$write`, `$plotDispatch`, `$rand`, `$elemwise`) are
+  // The host hooks (`$write`, `$warning`, `$plotDispatch`, `$rand`, `$elemwise`) are
   // module-scoped bindings that the factory assigns from `$h`, so emitted
   // code and runtime helper snippets call them by bare name without
   // threading `$h` through every emit site. They are per-module (not
@@ -120,14 +120,16 @@ export function emitJsProgram(
   // `$loc` is the statement location (see `locCode`), read by the host
   // through `$h.loc` when a raise escapes. `$cancel` is the host's cancel
   // flag (an Int32Array; see `CANCEL_POLL_JS`).
-  out.push("let $write, $plotDispatch, $rand, $elemwise, $cancel, $loc = -1;");
+  out.push(
+    "let $write, $warning, $plotDispatch, $rand, $elemwise, $cancel, $loc = -1;"
+  );
   if (state.active.size > 0) {
     out.push(renderJsRuntimeBodies(state));
     out.push("");
   }
   out.push(...userParts);
   out.push(
-    `return function ($h) { $write = $h.write; $plotDispatch = $h.plotDispatch; $rand = $h.rand; $elemwise = $h.elemwise; $cancel = $h.cancel; $h.loc = () => $loc; return ${opts.exposeSpec}; };`
+    `return function ($h) { $write = $h.write; $warning = $h.warning; $plotDispatch = $h.plotDispatch; $rand = $h.rand; $elemwise = $h.elemwise; $cancel = $h.cancel; $h.loc = () => $loc; return ${opts.exposeSpec}; };`
   );
 
   return {

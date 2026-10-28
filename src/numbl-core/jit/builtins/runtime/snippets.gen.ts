@@ -121,7 +121,7 @@ export const JS_SNIPPETS: Record<string, string> = {
   "sprintf.js":
     '// JS sibling of `sprintf.h`. Two output variants:\n//   - `jit_sprintf_str(fmt, args)` returns the formatted text as a\n//     plain JS string (the equivalent of numbl\'s `String` kind).\n//   - `jit_sprintf_char(fmt, args)` returns it as a `jit_char_tensor_t`\n//     placeholder — we keep the JS shape as a `{jitTag: "char", value}`\n//     object so disp/length etc. dispatch correctly.\n\n\nfunction jit_sprintf_str(fmt, ...args) {\n  return jit_sprintf_format(fmt, args);\n}\n\nfunction jit_sprintf_char(fmt, ...args) {\n  return { jitTag: "char", value: jit_sprintf_format(fmt, args) };\n}\n',
   "warning_fmt.js":
-    '// JS sibling of `warning_fmt.h`. Format the message and write\n// `Warning: <msg>\\n` via `$write`. Matches numbl\n// (`runtime/specialBuiltins.ts:190` — `rt.output("Warning: " + msg + "\\n")`).\n\n\nfunction jit_warning_fmt(fmt, ...args) {\n  $write("Warning: " + jit_sprintf_format(fmt, args) + "\\n");\n}\n\nfunction jit_warning_fmt_id(_id, fmt, ...args) {\n  // The id is informational — numbl threads it to lastwarn state,\n  // which the JIT doesn\'t expose. Drop it here so the visible output\n  // matches the bare form.\n  $write("Warning: " + jit_sprintf_format(fmt, args) + "\\n");\n}\n',
+    '// JS sibling of `warning_fmt.h`: hand a warning to the host (`$warning`),\n// which checks the warning state for `identifier` ("" for none) and writes\n// `Warning: <msg>\\n`. `jit_warning_fmt` formats the message;\n// `jit_warning_text` takes it literally (a lone `warning(msg)`).\n\n\nfunction jit_warning_fmt(identifier, fmt, ...args) {\n  $warning(identifier, jit_sprintf_format(fmt, args));\n}\n\nfunction jit_warning_text(identifier, msg) {\n  $warning(\n    identifier,\n    typeof msg === "object" && msg !== null ? msg.value : String(msg)\n  );\n}\n',
   "plot_dispatch.js":
     '// JS sibling of `plot_dispatch.h`. Two delivery modes:\n//\n// 1. Host hook mode (numbl JIT bridge): when the host binds a\n//    `$plotDispatch(name, args)` callback into the emit\'s `$h`\n//    helpers, the helper forwards the raw JIT-shaped args to the\n//    host. The host is expected to translate the args into its own\n//    runtime value shape and route them into its plot pipeline\n//    (numbl: `dispatchPlotBuiltin` into `rt.plotInstructions`).\n//\n//    Wire-format encoding is skipped entirely in this mode — the\n//    host operates in-process and consumes the same value graph the\n//    emitted code already holds.\n//\n// 2. Wire-format mode: when no host hook is present, fall back to\n//    the RS-prefixed JSON record on stdout. Same shape the C\n//    sibling emits, so a single viewer parses both backends.\n//\n// Wire shape per call (mode 2):\n//   \\x1e jit:plot \\t {"call":"<name>","args":[<arg>, ...]} \\n\n//\n// Arg encoding (per source-level arg):\n//   number → bare numeric (non-finite → null, matching the C side\n//            and JSON.stringify\'s natural behavior)\n//   string → {"kind":"text","data":"<text>"}\n//   char   → same as string (MATLAB plot semantics don\'t distinguish)\n//   tensor → {"kind":"tensor","dims":[…],"data":[…]} (column-major\n//            flatten; non-finite as null)\n\nfunction isTensor(v) {\n  return typeof v === "object" && v !== null && v.jitTag === "tensor";\n}\nfunction isChar(v) {\n  return typeof v === "object" && v !== null && v.jitTag === "char";\n}\n\nfunction encodeArg(v) {\n  if (typeof v === "number") {\n    return Number.isFinite(v) ? v : null;\n  }\n  if (typeof v === "boolean") return v ? 1 : 0;\n  if (typeof v === "string") return { kind: "text", data: v };\n  if (isChar(v)) return { kind: "text", data: v.value };\n  if (isTensor(v)) {\n    const data = new Array(v.data.length);\n    for (let i = 0; i < v.data.length; i++) {\n      const x = v.data[i];\n      data[i] = Number.isFinite(x) ? x : null;\n    }\n    return { kind: "tensor", dims: v.shape.slice(), data };\n  }\n  // Unknown shape — pass through. Type-level rejection on the\n  // lowering side keeps complex/struct/class/handle out of here.\n  return String(v);\n}\n\nfunction jit_plot_dispatch(name, ...args) {\n  if (typeof $plotDispatch === "function") {\n    $plotDispatch(name, args);\n    return;\n  }\n  const record = { call: name, args: args.map(encodeArg) };\n  $write("\\x1ejit:plot\\t" + JSON.stringify(record) + "\\n");\n}\n',
   "cdiv.js":
@@ -340,7 +340,7 @@ export const SNIPPET_DEFS: SnippetDef[] = [
   {
     name: "jit_warning_fmt",
     file: "warning_fmt.h",
-    deps: ["jit_format_engine"],
+    deps: ["jit_format_engine", "jit_host_output"],
   },
   {
     name: "jit_plot_dispatch",
@@ -732,6 +732,6 @@ export const SNIPPET_ALIASES: Record<string, string> = {
   jit_cell_empty: "jit_cell_make",
   jit_format_cell: "jit_cell_make",
   jit_sprintf_char: "jit_sprintf_str",
-  jit_warning_fmt_id: "jit_warning_fmt",
+  jit_warning_text: "jit_warning_fmt",
   jit_strcmpi: "jit_strcmp",
 };
