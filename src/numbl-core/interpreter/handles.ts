@@ -47,6 +47,9 @@ export function evalAnonFunc(
         fnEnv.set(regularParams[i], ensureRuntimeValue(actualArgs[i]));
       }
     }
+    // nargin / nargout in the body are the anonymous function's own.
+    fnEnv.set("$nargin", actualArgs.length);
+    fnEnv.set("$nargout", typeof nargoutArg === "number" ? nargoutArg : 1);
     if (hasVarargin) {
       const extraArgs = actualArgs
         .slice(regularParams.length)

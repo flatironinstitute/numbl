@@ -392,10 +392,15 @@ const narginoutBadInput = () =>
 const notValidMfile = () =>
   builtinError("MATLAB:narginout:notValidMfile", "Not a valid MATLAB file.");
 
-/** The running function's `$nargin` / `$nargout` (0 at the top level). */
+/** The running function's `$nargin` / `$nargout`. Outside a function (the
+ *  base workspace or a script run from it) MATLAB raises an error. */
 function callCount(scope: CallerScope, which: "$nargin" | "$nargout"): number {
   const v = scope.env.get(which);
-  return typeof v === "number" ? v : 0;
+  if (typeof v === "number") return v;
+  throw builtinError(
+    "MATLAB:narginout:NoStack",
+    "You can only call nargin/nargout from within a MATLAB function."
+  );
 }
 
 builtin({
