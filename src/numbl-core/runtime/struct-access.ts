@@ -12,9 +12,9 @@ import {
   isRuntimeTensor,
   isRuntimeStruct,
   isRuntimeStructArray,
-  kstr,
   type RuntimeValue,
 } from "./types.js";
+import { kstr } from "./kinds.js";
 import { isShared, type RefcountRuntime } from "./refcount.js";
 import { RuntimeError } from "./error.js";
 import { RTV } from "./constructors.js";

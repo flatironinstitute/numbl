@@ -24,7 +24,6 @@ import {
   isRuntimeString,
   isRuntimeCell,
   isRuntimeSparseMatrix,
-  kstr,
   isRuntimeStructArray,
   isRuntimeStruct,
   isRuntimeClassInstance,
@@ -35,6 +34,7 @@ import {
   stringArrayValue,
   structArrayValue,
 } from "./types.js";
+import { assertNever, kstr, valueClass } from "./kinds.js";
 import { RuntimeError } from "./error.js";
 import { RTV } from "./constructors.js";
 import { type RefcountRuntime, isShared } from "./refcount.js";
@@ -331,7 +331,7 @@ function storeIntoTensor(
     }
   } else {
     throw new RuntimeError(
-      `Conversion to ${base._isLogical === true ? "logical" : "double"} from ${className(rhs)} is not possible.`
+      `Conversion to ${valueClass(base)} from ${valueClass(rhs)} is not possible.`
     );
   }
 
@@ -530,16 +530,6 @@ function growCell(
   cell.shape = newShape;
 }
 
-function className(v: RuntimeValue): string {
-  if (typeof v === "number" || isRuntimeTensor(v) || isRuntimeComplexNumber(v))
-    return isRuntimeTensor(v) && v._isLogical ? "logical" : "double";
-  if (typeof v === "boolean") return "logical";
-  if (isRuntimeChar(v)) return "char";
-  if (isRuntimeStruct(v) || isRuntimeStructArray(v)) return "struct";
-  if (typeof v === "string" || isRuntimeStringArray(v)) return "string";
-  return kstr(v);
-}
-
 /** c(indices) = rhs (paren, `rhs` must be a cell) or c{indices} = rhs
  *  (brace, exactly one element). */
 function storeIntoCell(
@@ -564,7 +554,7 @@ function storeIntoCell(
   } else {
     if (!isRuntimeCell(rhs))
       throw new RuntimeError(
-        `Conversion to cell from ${className(rhs)} is not possible.`
+        `Conversion to cell from ${valueClass(rhs)} is not possible.`
       );
     if (rhs.data.length === 1) {
       single = rhs.data[0];
@@ -711,7 +701,7 @@ function rhsStrings(rhs: RuntimeValue): {
       shape: arrayShape(rhs.shape),
     };
   throw new RuntimeError(
-    `Conversion to string from ${className(rhs)} is not possible.`
+    `Conversion to string from ${valueClass(rhs)} is not possible.`
   );
 }
 
@@ -1266,7 +1256,7 @@ function storeIntoSparse(
     rShape = [rhs.m, rhs.n];
   } else {
     throw new RuntimeError(
-      `Conversion to sparse from ${className(rhs)} is not possible.`
+      `Conversion to sparse from ${valueClass(rhs)} is not possible.`
     );
   }
   const rN = rRe.length;
@@ -1377,24 +1367,36 @@ export function indexIntoRTValue(
   base: RuntimeValue,
   indices: RuntimeValue[]
 ): RuntimeValue {
-  if (
-    typeof base === "number" ||
-    typeof base === "boolean" ||
-    isRuntimeComplexNumber(base)
-  ) {
+  if (typeof base === "number" || typeof base === "boolean")
     return indexIntoScalar(base, indices);
+  if (typeof base === "string") return indexIntoStringArray(base, indices);
+  switch (base.kind) {
+    case "complex_number":
+      return indexIntoScalar(base, indices);
+    case "tensor":
+      return indexIntoTensor(base, indices);
+    case "cell":
+      return indexIntoCell(base, indices);
+    case "char":
+      return indexIntoChar(base, indices);
+    case "struct":
+    case "struct_array":
+      return indexIntoStructArray(base, indices);
+    case "string_array":
+      return indexIntoStringArray(base, indices);
+    case "class_instance":
+    case "class_instance_array":
+      return indexIntoObjectArray(base, indices);
+    case "sparse_matrix":
+      return indexIntoSparse(base, indices);
+    case "function":
+    case "dictionary":
+    case "dummy_handle":
+    case "graphics_handle":
+      throw new RuntimeError(`Cannot index into ${kstr(base)}`);
+    default:
+      return assertNever(base);
   }
-  if (isRuntimeTensor(base)) return indexIntoTensor(base, indices);
-  if (isRuntimeCell(base)) return indexIntoCell(base, indices);
-  if (isRuntimeChar(base)) return indexIntoChar(base, indices);
-  if (isRuntimeStruct(base) || isRuntimeStructArray(base))
-    return indexIntoStructArray(base, indices);
-  if (isRuntimeString(base) || isRuntimeStringArray(base))
-    return indexIntoStringArray(base, indices);
-  if (isRuntimeClassInstance(base) || isRuntimeClassInstanceArray(base))
-    return indexIntoObjectArray(base, indices);
-  if (isRuntimeSparseMatrix(base)) return indexIntoSparse(base, indices);
-  throw new RuntimeError(`Cannot index into ${kstr(base)}`);
 }
 
 // ── Store: main dispatcher ───────────────────────────────────────────────
@@ -1464,7 +1466,7 @@ export function storeIntoRTValueIndex(
     if (isRuntimeClassInstance(rhs) || isRuntimeClassInstanceArray(rhs))
       return storeIntoObjectArray(base, indices, rhs, rt);
     throw new RuntimeError(
-      `Conversion to ${base.className} from ${className(rhs)} is not possible.`
+      `Conversion to ${base.className} from ${valueClass(rhs)} is not possible.`
     );
   }
 

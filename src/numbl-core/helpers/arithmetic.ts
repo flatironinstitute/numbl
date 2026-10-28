@@ -24,8 +24,8 @@ import {
   RuntimeStructArray,
   type RuntimeStruct,
   stringArrayValue,
-  kstr,
 } from "../runtime/types.js";
+import { kstr } from "../runtime/kinds.js";
 import { RuntimeError } from "../runtime/error.js";
 import { RTV } from "../runtime/constructors.js";
 import { tensorSize2D, colMajorIndex } from "../runtime/utils.js";

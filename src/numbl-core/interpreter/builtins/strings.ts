@@ -31,8 +31,8 @@ import {
 } from "../../runtime/index.js";
 import { builtin, type BuiltinApply } from "./builtin.js";
 import { builtinError, numericArg, realScalarArg } from "./args.js";
+import { valueClass } from "../../runtime/kinds.js";
 import {
-  className,
   isText,
   isTextOrCell,
   mustBeTextError,
@@ -1402,7 +1402,7 @@ function charRowsToMatrix(rows: string[]): RuntimeChar {
 function charConversionError(v: RuntimeValue): RuntimeError {
   return builtinError(
     "MATLAB:invalidConversion",
-    `Conversion to char from ${className(v)} is not possible.`
+    `Conversion to char from ${valueClass(v)} is not possible.`
   );
 }
 
@@ -1696,7 +1696,7 @@ builtin({
     }
     throw builtinError(
       "MATLAB:invalidConversion",
-      `Conversion to cellstr from ${className(v)} is not possible.`
+      `Conversion to cellstr from ${valueClass(v)} is not possible.`
     );
   },
 });

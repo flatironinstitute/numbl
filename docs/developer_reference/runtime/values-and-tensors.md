@@ -26,6 +26,17 @@ Every container kind is a class extending `Refcounted` (`runtime/refcount.ts`). 
 
 Type-guard predicates follow the pattern `isRuntimeTensor(v)`, `isRuntimeChar(v)`, etc.: they check `value.kind === "..."` and continue to work on the class instances. Use these instead of examining shape fields directly or using `instanceof`.
 
+## Kind descriptors
+
+`runtime/kinds.ts` holds one descriptor per kind (`KINDS`, keyed by `kindOf(v)`: `number`, `boolean`, `string`, then each class's `kind`): the MATLAB class name (`class`), the size, `numel`, whether the kind is an object for `isobject`, `isreal`, and a short label for internal error messages. Code that needs these facts calls the helpers built on it (`valueClass`, `valueShape`, `valueNumel`, `isEmptyValue`, `isObjectValue`, `isRealValue`, `kstr`) rather than switching on the kind. `isaValue(v, name, ancestors)` implements `isa`: the value's class, its superclasses (for objects, through `Runtime.classAncestors`), and the categories `numeric`, `float` and `integer`; `isnumeric`, `isfloat` and `isinteger` are `isa` with a category, so a `classdef Foo < double` object or an integer-based enumeration member counts.
+
+### Adding a value kind
+
+1. Add the class to `types.ts` and to the `RuntimeValue` union, with an `isRuntimeX` guard.
+2. Add its entry to `KINDS`. The table is a mapped type over every kind, so the build fails until the entry exists.
+3. Handle it in the switches that end in `assertNever` (indexing in `indexIntoRTValue`, `valuesAreEqual`) and in `displayValue`, whose return type makes it exhaustive. The build fails for these too.
+4. Still per kind, with no compile-time check: indexed assignment (`storeIntoRTValueIndex`), concatenation (`tensor-construction.ts`), `isequal` (`builtins/utility.ts`), the conversions in `convert.ts`, `whos` byte counts, refcounting of the values it holds (see [refcount.md](refcount.md)), and JIT input typing (`typeOfValue` in `executors/inputTypes.ts`), which types an unhandled kind as unknown.
+
 ## `RTV` constructors
 
 The `RTV` namespace exposes construction helpers for runtime values: `RTV.num`, `RTV.tensor(data, shape)`, `RTV.complex(re, im)`, `RTV.logical`, `RTV.char`, and so on. Prefer them to building objects by hand: they keep shape, precision, and flag invariants consistent.

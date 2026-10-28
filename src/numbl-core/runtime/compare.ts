@@ -8,6 +8,7 @@ import {
   isRuntimeString,
   type RuntimeValue,
 } from "./types.js";
+import { assertNever } from "./kinds.js";
 
 export const valuesAreEqual = (a: RuntimeValue, b: RuntimeValue): boolean => {
   if (isRuntimeNumber(a)) {
@@ -79,7 +80,14 @@ export const valuesAreEqual = (a: RuntimeValue, b: RuntimeValue): boolean => {
       }
       return true;
     }
-    default:
+    case "function":
+    case "struct_array":
+    case "class_instance_array":
+    case "sparse_matrix":
+    case "dummy_handle":
+    case "graphics_handle":
       return false;
+    default:
+      return assertNever(a);
   }
 };

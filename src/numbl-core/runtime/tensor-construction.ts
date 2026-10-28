@@ -22,8 +22,8 @@ import {
   structArrayValue,
   type RuntimeSparseMatrix,
   RuntimeChar,
-  kstr,
 } from "./types.js";
+import { kstr } from "./kinds.js";
 import { RuntimeError } from "./error.js";
 import { RTV } from "./constructors.js";
 import { numel, matlabNumToString } from "./utils.js";

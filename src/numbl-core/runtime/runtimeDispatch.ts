@@ -30,9 +30,8 @@ import {
   isRuntimeClassInstanceArray,
   isRuntimeDictionary,
   isRuntimeStringArray,
-  kstr,
 } from "../runtime/types.js";
-import { valueShape } from "./utils.js";
+import { isaValue, kstr, valueClass, valueShape } from "./kinds.js";
 import { incref, decref } from "./refcount.js";
 import {
   getIBuiltin,
@@ -137,58 +136,7 @@ export function isa(
     typeof classNameArg === "string"
       ? classNameArg
       : toString(ensureRuntimeValue(classNameArg));
-  let valueClass: string;
-  if (typeof mv === "number") valueClass = "double";
-  else if (typeof mv === "boolean") valueClass = "logical";
-  else if (typeof mv === "string") valueClass = "string";
-  else {
-    switch (mv.kind) {
-      case "tensor":
-        valueClass = mv._isLogical ? "logical" : "double";
-        break;
-      case "complex_number":
-        valueClass = "double";
-        break;
-      case "char":
-        valueClass = "char";
-        break;
-      case "cell":
-        valueClass = "cell";
-        break;
-      case "struct":
-        valueClass = "struct";
-        break;
-      case "function":
-        valueClass = "function_handle";
-        break;
-      case "class_instance":
-        valueClass = mv.className;
-        break;
-      case "class_instance_array":
-        valueClass = mv.className;
-        break;
-      case "string_array":
-        valueClass = "string";
-        break;
-      default:
-        valueClass = "unknown";
-        break;
-    }
-  }
-  if (valueClass === clsName) return RTV.logical(true);
-  if (
-    clsName === "numeric" &&
-    (isRuntimeNumber(mv) ||
-      (isRuntimeTensor(mv) && !mv._isLogical) ||
-      isRuntimeComplexNumber(mv))
-  )
-    return RTV.logical(true);
-  // Walk the inheritance chain for class instances
-  if (isRuntimeClassInstance(mv) || isRuntimeClassInstanceArray(mv)) {
-    if (rt.classAncestors(mv.className).includes(clsName))
-      return RTV.logical(true);
-  }
-  return RTV.logical(false);
+  return isaValue(mv, clsName, cls => rt.classAncestors(cls));
 }
 
 // ── callSuperConstructor ─────────────────────────────────────────────────
@@ -717,7 +665,7 @@ export function cellfunImpl(
           typeof classNameRv === "string" ? classNameRv : classNameRv.value;
         const data = allocFloat64Array(cellArg.data.length);
         for (let i = 0; i < cellArg.data.length; i++) {
-          data[i] = numblClass(cellArg.data[i]) === className ? 1 : 0;
+          data[i] = valueClass(cellArg.data[i]) === className ? 1 : 0;
         }
         const result = RTV.tensor(data, [...cellArg.shape]);
         result._isLogical = true;
@@ -940,37 +888,6 @@ export function bsxfunImpl(
   }
 
   return RTV.tensor(resultData, outShape, resultImag);
-}
-
-// ── numblClass ─────────────────────────────────────────────────────────
-
-/** Return the class name for a runtime value */
-export function numblClass(v: RuntimeValue): string {
-  if (isRuntimeNumber(v)) return "double";
-  if (isRuntimeLogical(v)) return "logical";
-  if (isRuntimeString(v)) return "string";
-  switch (v.kind) {
-    case "tensor":
-      return v._isLogical ? "logical" : "double";
-    case "char":
-      return "char";
-    case "cell":
-      return "cell";
-    case "struct":
-      return "struct";
-    case "function":
-      return "function_handle";
-    case "complex_number":
-      return "double";
-    case "sparse_matrix":
-      return "double";
-    case "class_instance":
-      return v.className;
-    case "string_array":
-      return "string";
-    default:
-      return "unknown";
-  }
 }
 
 // ── subsref / subsasgn builtins ─────────────────────────────────────────

@@ -2,7 +2,7 @@
  * `isa(value, 'ClassName')` — checks whether `value` is an instance
  * of the named class (or matches one of MATLAB's primitive class
  * names: `double`, `logical`, `char`, `string`, `struct`,
- * `function_handle`, `cell`, `numeric`).
+ * `function_handle`, `cell`, `numeric`, `float`).
  *
  * Always static: the JIT knows every value's type at lowering time and
  * folds to a scalar logical literal. Matches numbl's
@@ -35,10 +35,11 @@ function staticClassNameOf(t: Type): string | null {
   return null;
 }
 
-function matches(name: string, valueClass: string, t: Type): boolean {
+function matches(name: string, valueClass: string): boolean {
   if (valueClass === name) return true;
-  if (name === "numeric") return isNumeric(t) && t.elem !== "logical";
-  return false;
+  // The JIT's only numeric class is double, so 'numeric' and 'float' match
+  // the same values and 'integer' none (see runtime/kinds.ts isaValue).
+  return (name === "numeric" || name === "float") && valueClass === "double";
 }
 
 export const isa: Builtin = {
@@ -68,14 +69,14 @@ export const isa: Builtin = {
     if (valueClass === null) {
       return [scalarLogical()];
     }
-    return [scalarLogical(matches(nameTy.exact, valueClass, argTypes[0]))];
+    return [scalarLogical(matches(nameTy.exact, valueClass))];
   },
   emitC({ argTypes }) {
     const nameTy = argTypes[1];
     if ((isChar(nameTy) || isString(nameTy)) && nameTy.exact !== undefined) {
       const valueClass = staticClassNameOf(argTypes[0]);
       if (valueClass !== null) {
-        return matches(nameTy.exact, valueClass, argTypes[0]) ? `1.0` : `0.0`;
+        return matches(nameTy.exact, valueClass) ? `1.0` : `0.0`;
       }
     }
     return `0.0`;
@@ -85,9 +86,7 @@ export const isa: Builtin = {
     if ((isChar(nameTy) || isString(nameTy)) && nameTy.exact !== undefined) {
       const valueClass = staticClassNameOf(argTypes[0]);
       if (valueClass !== null) {
-        return matches(nameTy.exact, valueClass, argTypes[0])
-          ? `true`
-          : `false`;
+        return matches(nameTy.exact, valueClass) ? `true` : `false`;
       }
     }
     return `false`;

@@ -49,7 +49,8 @@ import {
 } from "./indexing.js";
 import { isShared } from "./refcount.js";
 import { scalarSubsOffset } from "./indexPlan.js";
-import { numel, valueShape } from "./utils.js";
+import { numel } from "./utils.js";
+import { valueShape } from "./kinds.js";
 import { dictLookup, dictInsertSingle, dictRemove } from "./dictionary.js";
 import { COLON_SENTINEL, END_SENTINEL } from "./sentinels.js";
 import {

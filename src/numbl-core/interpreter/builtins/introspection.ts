@@ -6,7 +6,6 @@
  */
 
 import {
-  isRuntimeComplexNumber,
   isRuntimeSparseMatrix,
   isRuntimeTensor,
   isRuntimeChar,
@@ -16,8 +15,6 @@ import {
   isRuntimeStructArray,
   isRuntimeClassInstance,
   isRuntimeFunction,
-  isRuntimeDummyHandle,
-  isRuntimeGraphicsHandle,
   isRuntimeDictionary,
   isRuntimeClassInstanceArray,
   isRuntimeStringArray,
@@ -36,7 +33,14 @@ import { builtin } from "./builtin.js";
 import { builtinError } from "./args.js";
 import { allocFloat64Array } from "../../runtime/alloc.js";
 import { incref } from "../../runtime/refcount.js";
-import { valueShape } from "../../runtime/utils.js";
+import {
+  isaValue,
+  isEmptyValue,
+  isObjectValue,
+  valueClass,
+  valueNumel,
+  valueShape,
+} from "../../runtime/kinds.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -47,30 +51,22 @@ function predicate(name: string, test: (v: RuntimeValue) => boolean): void {
 
 // ── Type predicates ──────────────────────────────────────────────────────
 
-predicate("isnumeric", v => {
-  if (typeof v === "number") return true;
-  if (isRuntimeTensor(v) && !v._isLogical) return true;
-  if (isRuntimeComplexNumber(v)) return true;
-  if (isRuntimeSparseMatrix(v)) return true;
-  if (isRuntimeClassInstance(v) && v._builtinData !== undefined) return true;
-  return false;
-});
+/** isa(v, category), so subclasses of numeric classes count
+ *  (`classdef Foo < double`, numeric enumerations). */
+function categoryPredicate(name: string, category: string): void {
+  builtin({
+    name,
+    nargin: 1,
+    apply: (args, _nargout, { rt }) =>
+      isaValue(args[0], category, cls => rt.classAncestors(cls)),
+  });
+}
 
-predicate("isfloat", v => {
-  if (typeof v === "number") return true;
-  if (isRuntimeTensor(v) && !v._isLogical) return true;
-  if (isRuntimeComplexNumber(v)) return true;
-  if (isRuntimeSparseMatrix(v)) return true;
-  return false;
-});
+categoryPredicate("isnumeric", "numeric");
+categoryPredicate("isfloat", "float");
+categoryPredicate("isinteger", "integer");
 
-predicate("isinteger", () => false);
-
-predicate("islogical", v => {
-  if (typeof v === "boolean") return true;
-  if (isRuntimeTensor(v) && v._isLogical === true) return true;
-  return false;
-});
+predicate("islogical", v => valueClass(v) === "logical");
 
 predicate("ischar", v => isRuntimeChar(v));
 
@@ -146,10 +142,7 @@ predicate("isstruct", v => isRuntimeStruct(v) || isRuntimeStructArray(v));
 
 predicate("issparse", v => isRuntimeSparseMatrix(v));
 
-predicate(
-  "isobject",
-  v => isRuntimeClassInstance(v) || isRuntimeClassInstanceArray(v)
-);
+predicate("isobject", isObjectValue);
 
 builtin({
   name: "isprop",
@@ -231,21 +224,9 @@ builtin({
 
 // isscalar is numel(x)==1 for ANY type (cells, structs, strings, ...),
 // not just numeric arrays.
-predicate("isscalar", v => valueShape(v).reduce((a, b) => a * b, 1) === 1);
+predicate("isscalar", v => valueNumel(v) === 1);
 
-predicate("isempty", v => {
-  if (typeof v === "number" || typeof v === "boolean") return false;
-  if (isRuntimeComplexNumber(v)) return false;
-  if (isRuntimeSparseMatrix(v)) return v.m === 0 || v.n === 0;
-  if (isRuntimeTensor(v)) return v.data.length === 0;
-  if (isRuntimeCell(v)) return v.data.length === 0;
-  if (isRuntimeChar(v)) return v.value.length === 0;
-  if (isRuntimeString(v)) return false;
-  if (isRuntimeStructArray(v)) return v.elements.length === 0;
-  if (isRuntimeClassInstanceArray(v)) return v.elements.length === 0;
-  if (isRuntimeStringArray(v)) return v.data.length === 0;
-  return false;
-});
+predicate("isempty", isEmptyValue);
 
 predicate("isvector", v => {
   const shape = valueShape(v);
@@ -274,18 +255,7 @@ builtin({
       throw new RuntimeError(
         "numel: the numel(A, index1, ..., indexN) form is not supported"
       );
-    const v = args[0];
-    if (typeof v === "number" || typeof v === "boolean") return 1;
-    if (isRuntimeComplexNumber(v)) return 1;
-    if (isRuntimeTensor(v)) return v.data.length;
-    if (isRuntimeSparseMatrix(v)) return v.m * v.n;
-    if (isRuntimeCell(v)) return v.data.length;
-    if (isRuntimeChar(v)) return v.value.length;
-    if (isRuntimeString(v)) return 1;
-    if (isRuntimeStructArray(v)) return v.elements.length;
-    if (isRuntimeClassInstanceArray(v)) return v.elements.length;
-    if (isRuntimeStringArray(v)) return v.data.length;
-    return 1;
+    return valueNumel(args[0]);
   },
 });
 
@@ -294,25 +264,7 @@ builtin({
   nargin: 1,
   apply: args => {
     const v = args[0];
-    if (typeof v === "number" || typeof v === "boolean") return 1;
-    if (isRuntimeComplexNumber(v)) return 1;
-    if (isRuntimeTensor(v))
-      return v.data.length === 0 ? 0 : Math.max(...v.shape);
-    if (isRuntimeSparseMatrix(v)) return Math.max(v.m, v.n);
-    if (isRuntimeCell(v)) return v.data.length === 0 ? 0 : Math.max(...v.shape);
-    if (isRuntimeChar(v)) {
-      const s =
-        v.shape ?? (v.value.length === 0 ? [0, 0] : [1, v.value.length]);
-      return s.length === 0 ? 0 : Math.max(...s);
-    }
-    if (isRuntimeString(v)) return 1;
-    if (isRuntimeStructArray(v))
-      return v.elements.length === 0 ? 0 : Math.max(...v.shape);
-    if (isRuntimeClassInstanceArray(v))
-      return v.elements.length === 0 ? 0 : Math.max(...v.shape);
-    if (isRuntimeStringArray(v))
-      return v.data.length === 0 ? 0 : Math.max(...v.shape);
-    return 1;
+    return isEmptyValue(v) ? 0 : Math.max(...valueShape(v));
   },
 });
 
@@ -390,39 +342,11 @@ builtin({
 
 // ── class() ──────────────────────────────────────────────────────────────
 
-/** MATLAB's class name of a value. */
-function classNameOf(v: RuntimeValue): string {
-  if (typeof v === "number") return "double";
-  if (typeof v === "boolean") return "logical";
-  if (isRuntimeComplexNumber(v)) return "double";
-  if (isRuntimeTensor(v)) return v._isLogical ? "logical" : "double";
-  if (isRuntimeSparseMatrix(v)) return "double";
-  if (isRuntimeString(v)) return "string";
-  if (isRuntimeStringArray(v)) return "string";
-  if (isRuntimeChar(v)) return "char";
-  if (isRuntimeStruct(v) || isRuntimeStructArray(v)) return "struct";
-  if (isRuntimeCell(v)) return "cell";
-  if (isRuntimeDictionary(v)) return "dictionary";
-  if (isRuntimeClassInstance(v)) return v.className;
-  if (isRuntimeClassInstanceArray(v)) return v.className;
-  if (isRuntimeFunction(v)) return "function_handle";
-  if (isRuntimeDummyHandle(v)) return "dummy_handle";
-  if (isRuntimeGraphicsHandle(v)) {
-    const handleClass: Record<string, string> = {
-      contour: "matlab.graphics.chart.primitive.Contour",
-      patch: "matlab.graphics.primitive.Patch",
-      quiver3: "matlab.graphics.chart.primitive.Quiver",
-    };
-    return handleClass[v._traceType] ?? "matlab.graphics.primitive.Surface";
-  }
-  return "unknown";
-}
-
 builtin({
   name: "class",
   nargin: [1, Infinity],
   apply: args => {
-    if (args.length === 1) return RTV.char(classNameOf(args[0]));
+    if (args.length === 1) return RTV.char(valueClass(args[0]));
     // Old-style (pre-classdef) constructor form: class(structData,
     // 'ClassName') builds a value-type instance whose fields are the
     // struct's fields. The inheritance form class(s, 'Name', parent, ...)
@@ -502,7 +426,7 @@ function fieldnamesApply(v: RuntimeValue, rt: Runtime): RuntimeValue {
   if (!isRuntimeStruct(v) && !isRuntimeClassInstance(v))
     throw builtinError(
       "MATLAB:fieldnames:InvalidInput",
-      `Invalid input argument of type '${classNameOf(v)}'. Input must be a structure or a Java or COM object.`
+      `Invalid input argument of type '${valueClass(v)}'. Input must be a structure or a Java or COM object.`
     );
   const names = [...v.fields.keys()];
   return RTV.cell(
@@ -738,7 +662,7 @@ builtin({
   name: "metaclass",
   nargin: 1,
   scope: true,
-  apply: (args, _nargout, { scope }) => scope.metaClass(classNameOf(args[0])),
+  apply: (args, _nargout, { scope }) => scope.metaClass(valueClass(args[0])),
 });
 
 // ismethod(obj, name): whether `name` is a public method of the object's

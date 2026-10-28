@@ -11,6 +11,7 @@ import {
   type RuntimeChar,
   type RuntimeValue,
 } from "../../runtime/types.js";
+import { valueClass } from "../../runtime/kinds.js";
 import { builtinError } from "./args.js";
 
 /** A char array or a string scalar. */
@@ -22,36 +23,6 @@ export function isText(v: RuntimeValue): v is RuntimeChar | string {
  *  array), or a cell array (whose elements are checked by the caller). */
 export function isTextOrCell(v: RuntimeValue): boolean {
   return isText(v) || isRuntimeStringArray(v) || isRuntimeCell(v);
-}
-
-/** MATLAB's class name for a runtime value, for error messages. */
-export function className(v: RuntimeValue): string {
-  if (typeof v === "number") return "double";
-  if (typeof v === "boolean") return "logical";
-  if (typeof v === "string") return "string";
-  switch (v.kind) {
-    case "tensor":
-      return v._isLogical ? "logical" : "double";
-    case "complex_number":
-    case "sparse_matrix":
-      return "double";
-    case "char":
-      return "char";
-    case "cell":
-      return "cell";
-    case "struct":
-    case "struct_array":
-      return "struct";
-    case "function":
-      return "function_handle";
-    case "class_instance":
-    case "class_instance_array":
-      return v.className;
-    case "string_array":
-      return "string";
-    default:
-      return v.kind;
-  }
 }
 
 /** MATLAB's error for a non-text first argument to a string function. */
@@ -70,7 +41,7 @@ export function undefinedFunctionError(
 ): RuntimeError {
   return builtinError(
     "MATLAB:UndefinedFunction",
-    `Undefined function '${name}' for input arguments of type '${className(v)}'.`
+    `Undefined function '${name}' for input arguments of type '${valueClass(v)}'.`
   );
 }
 
@@ -84,7 +55,7 @@ export function unsupportedClassError(
     ? "cell array"
     : isRuntimeStringArray(v)
       ? "string array"
-      : `'${className(v)}'`;
+      : `'${valueClass(v)}'`;
   return new RuntimeError(`${name}: ${what} input is not supported`);
 }
 
