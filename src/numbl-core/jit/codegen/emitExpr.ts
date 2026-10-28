@@ -454,7 +454,7 @@ function emitCellIndexLoadC(
     return (
       `({ size_t _mtoc2_off = ${offsetExpr}; ` +
       `if (_mtoc2_off >= ${baseCName}.nslots) { ` +
-      `fprintf(stderr, "mtoc2: cell index out of bounds\\n"); exit(1); } ` +
+      `fprintf(stderr, "C-JIT: cell index out of bounds\\n"); exit(1); } ` +
       `${baseCName}.slots[_mtoc2_off]; })`
     );
   }
@@ -478,7 +478,7 @@ function emitCellIndexLoadC(
     `${slotCType} _mtoc2_v; ` +
     `switch (_mtoc2_off) { ` +
     branches.join(" ") +
-    ` default: fprintf(stderr, "mtoc2: cell index out of bounds\\n"); exit(1); } ` +
+    ` default: fprintf(stderr, "C-JIT: cell index out of bounds\\n"); exit(1); } ` +
     `_mtoc2_v; })`
   );
 }

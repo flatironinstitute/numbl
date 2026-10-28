@@ -16,9 +16,7 @@
  * here behind an #ifdef.
  *
  * Output format for the bare-`toc` print form mirrors numbl's
- * `"Elapsed time is %.6f seconds.\n"` exactly so the cross-runner's
- * masking regex (see scripts/run_test_scripts.ts) treats both sides
- * as equivalent.
+ * `"Elapsed time is %.6f seconds.\n"` exactly.
  */
 
 #include <stdio.h>

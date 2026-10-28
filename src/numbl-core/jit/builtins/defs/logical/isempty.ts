@@ -29,7 +29,7 @@ function requireNumericRuntime(t: Type): void {
   if (!isNumeric(t)) {
     throw new UnsupportedConstruct(
       `'isempty' on a non-numeric value of unknown size is not supported ` +
-        `by the AOT backends; the interpreter handles it`
+        `by the JIT; the interpreter handles it`
     );
   }
 }

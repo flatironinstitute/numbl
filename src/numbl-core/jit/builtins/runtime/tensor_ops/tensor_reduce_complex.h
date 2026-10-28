@@ -2,9 +2,8 @@
  *
  * Sibling of `tensor_reduce_real.h`. Same `_all` / `_dim` shape per
  * op; each kernel walks both lanes and builds intermediate
- * `double _Complex` values through `mtoc2_cmake` / `mtoc2_c*` so the
- * c2js backend can translate the bodies straight (no bare
- * `<complex.h>` operators).
+ * `double _Complex` values through `mtoc2_cmake` / `mtoc2_c*` (no
+ * bare `<complex.h>` operators).
  *
  * Result types per op:
  *   sum / prod / mean         → complex (lane-pair accumulator)
@@ -54,7 +53,7 @@ static void mtoc2__squeeze_trailing_c(int *ndim, long *dims) {
   static mtoc2_tensor_t mtoc2_##name##_complex_dim(                           \
       mtoc2_tensor_t a, int dim) {                                            \
     if (dim < 1) {                                                            \
-      fprintf(stderr, "mtoc2: " #name "_complex_dim: dim must be >= 1 (got %d)\n", dim); \
+      fprintf(stderr, "C-JIT: " #name "_complex_dim: dim must be >= 1 (got %d)\n", dim); \
       abort();                                                                \
     }                                                                         \
     if (dim > a.ndim) {                                                       \
@@ -150,7 +149,7 @@ static int mtoc2__creduce_all_imag_zero(mtoc2_tensor_t a) {
   static mtoc2_tensor_t mtoc2_##name##_complex_dim(                           \
       mtoc2_tensor_t a, int dim) {                                            \
     if (dim < 1) {                                                            \
-      fprintf(stderr, "mtoc2: " #name "_complex_dim: dim must be >= 1 (got %d)\n", dim); \
+      fprintf(stderr, "C-JIT: " #name "_complex_dim: dim must be >= 1 (got %d)\n", dim); \
       abort();                                                                \
     }                                                                         \
     if (dim > a.ndim) {                                                       \
@@ -225,7 +224,7 @@ static int mtoc2__creduce_all_imag_zero(mtoc2_tensor_t a) {
   static mtoc2_tensor_t mtoc2_##name##_complex_dim(                           \
       mtoc2_tensor_t a, int dim) {                                            \
     if (dim < 1) {                                                            \
-      fprintf(stderr, "mtoc2: " #name "_complex_dim: dim must be >= 1 (got %d)\n", dim); \
+      fprintf(stderr, "C-JIT: " #name "_complex_dim: dim must be >= 1 (got %d)\n", dim); \
       abort();                                                                \
     }                                                                         \
     if (dim > a.ndim) {                                                       \

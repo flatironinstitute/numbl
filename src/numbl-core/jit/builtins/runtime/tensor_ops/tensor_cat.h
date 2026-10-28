@@ -34,11 +34,11 @@ typedef struct {
 static mtoc2_tensor_t mtoc2_tensor_cat(long dim, int nin,
                                        const mtoc2_cat_arg_t *xs) {
   if (dim < 1) {
-    fprintf(stderr, "mtoc2: cat dim %ld must be >= 1\n", dim);
+    fprintf(stderr, "C-JIT: cat dim %ld must be >= 1\n", dim);
     abort();
   }
   if (nin < 0 || nin > 256) {
-    fprintf(stderr, "mtoc2: cat nin %d out of range\n", nin);
+    fprintf(stderr, "C-JIT: cat nin %d out of range\n", nin);
     abort();
   }
   long dimIdx = dim - 1;
@@ -56,7 +56,7 @@ static mtoc2_tensor_t mtoc2_tensor_cat(long dim, int nin,
   int ndim = maxIn;
   if (ndim > MTOC2_MAX_NDIM) {
     fprintf(stderr,
-      "mtoc2: cat output ndim %d exceeds %d\n", ndim, MTOC2_MAX_NDIM);
+      "C-JIT: cat output ndim %d exceeds %d\n", ndim, MTOC2_MAX_NDIM);
     abort();
   }
 
@@ -108,7 +108,7 @@ static mtoc2_tensor_t mtoc2_tensor_cat(long dim, int nin,
         if (d == dimIdx) continue;
         if (padDims[i][d] != padDims[refIdx][d]) {
           fprintf(stderr,
-            "mtoc2: cat dimension mismatch on dimension %d\n", d + 1);
+            "C-JIT: cat dimension mismatch on dimension %d\n", d + 1);
           abort();
         }
       }
@@ -177,11 +177,11 @@ typedef struct {
 static mtoc2_tensor_t mtoc2_tensor_cat_complex(
     long dim, int nin, const mtoc2_cat_complex_arg_t *xs) {
   if (dim < 1) {
-    fprintf(stderr, "mtoc2: cat_complex dim %ld must be >= 1\n", dim);
+    fprintf(stderr, "C-JIT: cat_complex dim %ld must be >= 1\n", dim);
     abort();
   }
   if (nin < 0 || nin > 256) {
-    fprintf(stderr, "mtoc2: cat_complex nin %d out of range\n", nin);
+    fprintf(stderr, "C-JIT: cat_complex nin %d out of range\n", nin);
     abort();
   }
   long dimIdx = dim - 1;
@@ -196,7 +196,7 @@ static mtoc2_tensor_t mtoc2_tensor_cat_complex(
   int ndim = maxIn;
   if (ndim > MTOC2_MAX_NDIM) {
     fprintf(stderr,
-      "mtoc2: cat_complex output ndim %d exceeds %d\n", ndim, MTOC2_MAX_NDIM);
+      "C-JIT: cat_complex output ndim %d exceeds %d\n", ndim, MTOC2_MAX_NDIM);
     abort();
   }
 
@@ -243,7 +243,7 @@ static mtoc2_tensor_t mtoc2_tensor_cat_complex(
         if (d == dimIdx) continue;
         if (padDims[i][d] != padDims[refIdx][d]) {
           fprintf(stderr,
-            "mtoc2: cat_complex dimension mismatch on dimension %d\n", d + 1);
+            "C-JIT: cat_complex dimension mismatch on dimension %d\n", d + 1);
           abort();
         }
       }

@@ -41,7 +41,7 @@ export const assert: Builtin = {
     }
     if (!isScalar(cond)) {
       throw new UnsupportedConstruct(
-        `'assert' on a tensor cond is not yet supported in mtoc2 v1 ` +
+        `'assert' on a tensor cond is not yet supported by the JIT ` +
           `(numbl tests every element non-zero and non-NaN); pass a scalar predicate instead`
       );
     }

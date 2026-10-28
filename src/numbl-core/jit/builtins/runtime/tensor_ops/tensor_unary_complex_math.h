@@ -8,10 +8,8 @@
  * NULL` (a real tensor that flowed in through a complex-typed
  * route) by treating its imag lane as zero.
  *
- * Routing through `mtoc2_c*` rather than bare `<complex.h>` calls
- * keeps the body c2js-translatable — `mtoc2_csqrt` and friends
- * resolve to JS implementations on `{re, im}` objects at execution
- * time.
+ * Per-element math routes through the `mtoc2_c*` helpers rather than
+ * bare `<complex.h>` calls, matching the JS sibling.
  */
 
 #include <stdlib.h>

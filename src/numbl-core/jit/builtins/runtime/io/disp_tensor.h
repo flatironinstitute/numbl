@@ -48,7 +48,7 @@ static void mtoc2__disp_real_slice(const double *data, long rows, long cols) {
     free(show_c);
     free(cells);
     free(col_widths);
-    fprintf(stderr, "mtoc2: out of memory in mtoc2_disp_tensor\n");
+    fprintf(stderr, "C-JIT: out of memory in mtoc2_disp_tensor\n");
     return;
   }
 

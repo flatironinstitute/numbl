@@ -11,7 +11,7 @@ export function mtoc2_tensor_not(a) {
     r.data[i] = a.data[i] === 0 ? 1 : 0;
   }
   // Tag as logical so `a(mask)` / `M(:, mask)` etc. take the mask
-  // path in the interpreter (and js-aot, when wired). The tensor
+  // path. The tensor
   // alloc helpers return plain numeric tensors; we mutate the field
   // here rather than threading a parameter through every allocator.
   r.isLogical = true;

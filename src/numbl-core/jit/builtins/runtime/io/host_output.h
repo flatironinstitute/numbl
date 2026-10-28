@@ -1,14 +1,13 @@
 /* JIT host output hook.
  *
- * Standalone / AOT builds write program output (disp, fprintf, …)
- * straight to stdout. When numbl runs an emitted spec as a JIT'd `.so`,
- * it binds a writer via `mtoc2_set_host_write` so all output routes
- * through numbl's output stream (`rt.output`) instead — keeping --opt 2
- * output captured the same as the interpreter / JS-JIT paths.
+ * When numbl runs an emitted spec as a JIT'd `.so`, it binds a writer
+ * via `mtoc2_set_host_write` so all output routes through numbl's
+ * output stream (`rt.output`), keeping --opt 2 output captured the
+ * same as the interpreter / JS-JIT paths.
  *
  * `mtoc2_set_host_write` has external linkage so koffi can resolve it
  * after dlopen; everything else is internal. When no writer is bound
- * (AOT / standalone) `mtoc2_stdout` falls back to libc stdout.
+ * `mtoc2_stdout` falls back to libc stdout.
  */
 #include <stdio.h>
 #include <string.h>

@@ -1,5 +1,5 @@
 // JS sibling of `tensor_predicate.h`. Real-tensor → logical-tensor
-// predicate kernels for the js-aot backend, plus their `_complex`
+// predicate kernels for the JS-JIT, plus their `_complex`
 // siblings (each reads `imag[i]` when defined, treats it as 0
 // otherwise). Result carries `isLogical: true` so downstream index-
 // slot resolution treats it as a mask.

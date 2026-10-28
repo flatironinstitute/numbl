@@ -42,7 +42,7 @@ export function mtoc2_idx_axis_js(t, axis, k) {
 // array are declined at compile time and never reach these.)
 function growBailError(idx, len) {
   const e = new Error(
-    `mtoc2: indexed assignment at ${idx} would grow a ${len}-element ` +
+    `JIT: indexed assignment at ${idx} would grow a ${len}-element ` +
       `array; array growth is not supported in the JIT`
   );
   e.mtoc2GrowBail = true;

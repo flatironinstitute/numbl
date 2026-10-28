@@ -5,7 +5,7 @@
  * through one of these helpers instead of relying on C99's operator
  * overloading or the `I` macro. On the C path each is `static inline`
  * and the compiler folds back to the same instructions C99 would have
- * generated. The win is parallelism with the js-aot path: the JS
+ * generated. The win is parallelism with the JS-JIT path: the JS
  * sibling (`cscalar.js`) ships a matching set of helpers that operate
  * on a `{re, im}` JS representation, so user code emitted by `emitJs`
  * uses the same call shape the C emitter would have produced.
@@ -76,8 +76,8 @@ static inline double _Complex mtoc2_cpow(double _Complex a, double _Complex b) {
 /* Unary complex math — `<complex.h>` wrappers + a handful of
  * derived helpers C99 doesn't ship (log2/log10, MATLAB-style
  * componentwise rounding, signum). Same `mtoc2_c*` shape as the
- * core scalar helpers above so the c2js backend can substitute
- * its own `{re, im}` JS implementations.
+ * core scalar helpers above, with `{re, im}` JS siblings in
+ * cscalar.js.
  *
  * The rounding helpers (floor/ceil/round/fix) match MATLAB by
  * applying the rounding mode to each component independently and

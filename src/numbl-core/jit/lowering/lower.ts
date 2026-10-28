@@ -23,13 +23,8 @@
  * builtin calls, and Ident reads all emit runtime IR even when their
  * exact value is known.
  *
- * MVP scope: scalar real double + arithmetic + comparisons + disp +
- * if/while/for + user functions (0 or 1 outputs; 0-output calls return
- * `Void` and are only valid as the expression of an `ExprStmt`) +
- * classes (instance methods, static methods, constructors), with
- * resolution against sibling `.m` files in the workspace via numbl's
- * vendored resolver. Anything outside that throws
- * `UnsupportedConstruct` with a span.
+ * Anything the lowerer cannot handle throws `UnsupportedConstruct`
+ * (or `JitTypeError`) with a span.
  */
 
 import type { Expr, LValue, Stmt, Span } from "../parser/index.js";
@@ -2347,7 +2342,7 @@ function assertLoopBodyShapeStable(
       throw new UnsupportedConstruct(
         `loop body changes the shape of '${name}' across iterations ` +
           `(entry shape differs from end-of-iter shape); ` +
-          `mtoc2 lowers the body once per spec and cannot specialize ` +
+          `the JIT lowers the body once per spec and cannot specialize ` +
           `per-iteration growing tensors`,
         loopSpan
       );

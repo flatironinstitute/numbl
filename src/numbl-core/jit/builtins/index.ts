@@ -392,7 +392,7 @@ export function unaryOpBuiltin(op: UnaryOperation, span: Span): string {
       return "uplus";
     case UnaryOperation.Transpose:
     case UnaryOperation.NonConjugateTranspose:
-      // For real-typed inputs (mtoc2 v1) `.'` and `'` are identical.
+      // For real-typed inputs `.'` and `'` are identical.
       // When complex lands, `'` will route to a separate `ctranspose`.
       return "transpose";
     case UnaryOperation.Not:

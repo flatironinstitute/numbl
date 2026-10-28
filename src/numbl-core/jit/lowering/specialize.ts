@@ -393,7 +393,7 @@ export function specializeUserFunction(
             `produced [${outputTypes.map(canonicalizeType).join(", ")}]. ` +
             `This usually means the output type genuinely depends on a ` +
             `runtime value the lowerer can't resolve, or that the function ` +
-            `is mutually recursive in a shape mtoc2 can't yet handle. ` +
+            `is mutually recursive in a shape the JIT can't yet handle. ` +
             `Try annotating the output via an early assignment, or avoid ` +
             `recursion for this call.`,
           errSpan

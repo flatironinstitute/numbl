@@ -1,15 +1,14 @@
-/* mtoc2 cell-array runtime helpers — js-aot + interpreter side.
+/* Cell-array runtime helpers for the JS-JIT.
  *
  * Cells live as plain JS objects shaped like numbl's `RuntimeCell`:
  *
  *   { mtoc2Tag: "cell", shape: number[], data: RuntimeValue[] }
  *
  * `data` is column-major flat (matching tensors). `shape` is the cell's
- * dim list. The interpreter and js-aot backends share this shape so a
- * value materialised by one backend reads cleanly from the other.
+ * dim list.
  *
- * The c-aot backend uses per-shape generated typedefs and does NOT
- * register through this file — these helpers are js-side only.
+ * The C-JIT uses per-shape generated typedefs and does NOT register
+ * through this file.
  */
 
 // Numbl's scalar formatter (formatNumber), shared with disp so cell-slot

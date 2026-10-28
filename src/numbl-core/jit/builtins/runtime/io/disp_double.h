@@ -1,7 +1,7 @@
 /* mtoc runtime helper: disp(x) for a real-scalar double.
  *
- * Mirrors numbl's `formatNumber` (numbl/src/numbl-core/runtime/display.ts)
- * so cross-runner test output matches. The actual formatting lives in
+ * Mirrors numbl's `formatNumber` (src/numbl-core/runtime/display.ts)
+ * so output matches the interpreter. The actual formatting lives in
  * `format_double.h`; this snippet only wraps it with a print + newline.
  */
 

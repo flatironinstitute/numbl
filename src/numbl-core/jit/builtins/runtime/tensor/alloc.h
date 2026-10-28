@@ -19,7 +19,7 @@ static double *mtoc2_alloc(size_t n_bytes) {
    * zero-element buffer, so the wasted byte is irrelevant. */
   double *p = (double *)malloc(n_bytes == 0 ? 1 : n_bytes);
   if (!p) {
-    fprintf(stderr, "mtoc2: out of memory (mtoc2_alloc requested %zu bytes)\n",
+    fprintf(stderr, "C-JIT: out of memory (mtoc2_alloc requested %zu bytes)\n",
             n_bytes);
     abort();
   }

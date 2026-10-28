@@ -14,7 +14,7 @@ static mtoc2_char_tensor_t mtoc2_char_tensor_copy(mtoc2_char_tensor_t src) {
   mtoc2_char_tensor_t out;
   out.data = (char *)malloc((size_t)(n > 0 ? n : 1));
   if (!out.data) {
-    fprintf(stderr, "mtoc2: out of memory in mtoc2_char_tensor_copy\n");
+    fprintf(stderr, "C-JIT: out of memory in mtoc2_char_tensor_copy\n");
     abort();
   }
   out.rows = src.rows;

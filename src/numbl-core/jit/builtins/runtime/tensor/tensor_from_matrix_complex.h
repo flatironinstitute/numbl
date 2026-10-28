@@ -1,7 +1,7 @@
 /* mtoc2 runtime helper: build a rows×cols complex tensor from two
  * parallel column-major `double[]` sources (`re` and `im`). See
  * `tensor_from_row_complex.h` for why we split rather than passing
- * `double _Complex *` (c2js can't translate that signature).
+ * `double _Complex *`.
  */
 
 #include <string.h>

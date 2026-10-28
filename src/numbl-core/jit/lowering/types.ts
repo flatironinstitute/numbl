@@ -2,12 +2,8 @@
  * mtoc2 type system. Built from scratch — not derived from numbl's
  * JitType. Designed to be the long-term home for static type info,
  * with "exact known value" tracking as a first-class feature on
- * every scalar (and eventually small arrays).
- *
- * MVP scope: scalar real double only. The full Type union and the
- * NumericType field layout already accommodate growth (complex,
- * arrays, strings, logicals, structs, classes) but the lowerer and
- * codegen reject anything outside scope with UnsupportedConstruct.
+ * every scalar (and eventually small arrays). The lowerer and codegen
+ * reject anything they cannot handle with UnsupportedConstruct.
  */
 
 import type { Span, Stmt } from "../parser/index.js";

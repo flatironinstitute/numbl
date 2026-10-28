@@ -44,7 +44,7 @@ function asScalarRealOrLogical(t: Type, what: string, surface: string): void {
   if (!isNumeric(t)) {
     throw new TypeError(
       `${what} must be a real or complex scalar (got ${typeToString(t)}); ` +
-        `'${surface}' requires scalar operands (numbl accepts tensors via toBool, but mtoc2 follows MATLAB)`
+        `'${surface}' requires scalar operands (numbl accepts tensors via toBool, but the JIT follows MATLAB)`
     );
   }
   if (t.elem !== "double" && t.elem !== "logical") {
@@ -55,7 +55,7 @@ function asScalarRealOrLogical(t: Type, what: string, surface: string): void {
   if (!isScalar(t)) {
     throw new TypeError(
       `${what} must be a scalar (got ${typeToString(t)}); ` +
-        `'${surface}' requires scalar operands (numbl accepts tensors via toBool, but mtoc2 follows MATLAB — use elementwise '|' / '&' when added)`
+        `'${surface}' requires scalar operands (numbl accepts tensors via toBool, but the JIT follows MATLAB — use elementwise '|' / '&' when added)`
     );
   }
 }

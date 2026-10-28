@@ -26,7 +26,7 @@
 #define MTOC2_DEFINE_CUMULATIVE(name, INIT, ACCUM)                            \
   static mtoc2_tensor_t mtoc2_tensor_##name##_dim(mtoc2_tensor_t a, int dim) {\
     if (dim < 1) {                                                            \
-      fprintf(stderr, "mtoc2: " #name "_dim: dim must be >= 1 (got %d)\n",    \
+      fprintf(stderr, "C-JIT: " #name "_dim: dim must be >= 1 (got %d)\n",    \
               dim);                                                           \
       abort();                                                                \
     }                                                                         \
@@ -96,7 +96,7 @@ MTOC2_DEFINE_CUMULATIVE(cummin,  INFINITY, MTOC2_CUM_ACC_MIN)
   static mtoc2_tensor_t                                                       \
   mtoc2_tensor_##name##_complex_dim(mtoc2_tensor_t a, int dim) {              \
     if (dim < 1) {                                                            \
-      fprintf(stderr, "mtoc2: " #name "_complex_dim: dim must be >= 1 (got %d)\n", \
+      fprintf(stderr, "C-JIT: " #name "_complex_dim: dim must be >= 1 (got %d)\n", \
               dim);                                                           \
       abort();                                                                \
     }                                                                         \

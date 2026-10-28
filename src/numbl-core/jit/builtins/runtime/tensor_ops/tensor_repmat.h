@@ -31,7 +31,7 @@ static mtoc2_tensor_t mtoc2_tensor_repmat(mtoc2_tensor_t in, int nreps,
                                           const long *reps_in) {
   if (nreps < 1 || nreps > MTOC2_MAX_NDIM) {
     fprintf(stderr,
-      "mtoc2: repmat nreps %d out of range [1, %d]\n", nreps, MTOC2_MAX_NDIM);
+      "C-JIT: repmat nreps %d out of range [1, %d]\n", nreps, MTOC2_MAX_NDIM);
     abort();
   }
   long reps[MTOC2_MAX_NDIM];
@@ -41,7 +41,7 @@ static mtoc2_tensor_t mtoc2_tensor_repmat(mtoc2_tensor_t in, int nreps,
   int out_ndim = nreps > in_ndim ? nreps : in_ndim;
   if (out_ndim > MTOC2_MAX_NDIM) {
     fprintf(stderr,
-      "mtoc2: repmat output ndim %d exceeds %d\n", out_ndim, MTOC2_MAX_NDIM);
+      "C-JIT: repmat output ndim %d exceeds %d\n", out_ndim, MTOC2_MAX_NDIM);
     abort();
   }
 
@@ -123,7 +123,7 @@ static mtoc2_tensor_t mtoc2_tensor_repmat_complex(mtoc2_tensor_t in,
                                                   const long *reps_in) {
   if (nreps < 1 || nreps > MTOC2_MAX_NDIM) {
     fprintf(stderr,
-      "mtoc2: repmat_complex nreps %d out of range [1, %d]\n",
+      "C-JIT: repmat_complex nreps %d out of range [1, %d]\n",
       nreps, MTOC2_MAX_NDIM);
     abort();
   }
@@ -134,7 +134,7 @@ static mtoc2_tensor_t mtoc2_tensor_repmat_complex(mtoc2_tensor_t in,
   int out_ndim = nreps > in_ndim ? nreps : in_ndim;
   if (out_ndim > MTOC2_MAX_NDIM) {
     fprintf(stderr,
-      "mtoc2: repmat_complex output ndim %d exceeds %d\n",
+      "C-JIT: repmat_complex output ndim %d exceeds %d\n",
       out_ndim, MTOC2_MAX_NDIM);
     abort();
   }

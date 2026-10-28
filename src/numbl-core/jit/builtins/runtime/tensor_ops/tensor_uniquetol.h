@@ -31,7 +31,7 @@ static mtoc2_tensor_t mtoc2_uniquetol_real(mtoc2_tensor_t a, double tol,
   if (n > 0) {
     uniques = (double *)malloc((size_t)n * sizeof(double));
     if (!uniques) {
-      fprintf(stderr, "mtoc2: out of memory (uniquetol)\n");
+      fprintf(stderr, "C-JIT: out of memory (uniquetol)\n");
       abort();
     }
     for (long i = 0; i < n; i++) {

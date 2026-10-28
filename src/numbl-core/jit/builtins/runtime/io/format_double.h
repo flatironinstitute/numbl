@@ -1,8 +1,8 @@
 /* mtoc runtime helper: format a double the same way numbl's
  * `formatNumber` does, into a caller-provided buffer.
  *
- * Used by both scalar and tensor disp so cross-runner output matches
- * numbl byte-for-byte. Kept in its own snippet so disp_double.h and
+ * Used by both scalar and tensor disp so output matches the
+ * interpreter byte-for-byte. Kept in its own snippet so disp_double.h and
  * disp_tensor.h can pull it in via the snippet dependency mechanism.
  *
  * Returns the number of characters written (excluding trailing NUL).

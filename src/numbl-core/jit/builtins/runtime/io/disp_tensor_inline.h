@@ -19,7 +19,7 @@ static void mtoc2__disp_real_slice_inline(double *data, long rows,
   if (cells == NULL || col_widths == NULL) {
     free(cells);
     free(col_widths);
-    fprintf(stderr, "mtoc2: out of memory in mtoc2_disp_tensor_inline\n");
+    fprintf(stderr, "C-JIT: out of memory in mtoc2_disp_tensor_inline\n");
     return;
   }
   for (long c = 0; c < cols; c++) {

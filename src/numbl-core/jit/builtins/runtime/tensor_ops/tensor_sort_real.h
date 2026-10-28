@@ -82,7 +82,7 @@ static mtoc2_tensor_t mtoc2_sort_real(mtoc2_tensor_t a, int descending) {
   mtoc2_sort_pair_t *buf =
     (mtoc2_sort_pair_t *)malloc((size_t)n * sizeof(mtoc2_sort_pair_t));
   if (!buf) {
-    fprintf(stderr, "mtoc2: out of memory (sort buffer)\n");
+    fprintf(stderr, "C-JIT: out of memory (sort buffer)\n");
     abort();
   }
   for (long i = 0; i < n; i++) {
@@ -114,7 +114,7 @@ static void mtoc2_sort_real_2(mtoc2_tensor_t a, int descending,
     mtoc2_sort_pair_t *buf =
       (mtoc2_sort_pair_t *)malloc((size_t)n * sizeof(mtoc2_sort_pair_t));
     if (!buf) {
-      fprintf(stderr, "mtoc2: out of memory (sort buffer)\n");
+      fprintf(stderr, "C-JIT: out of memory (sort buffer)\n");
       abort();
     }
     for (long i = 0; i < n; i++) {
@@ -223,7 +223,7 @@ static mtoc2_tensor_t mtoc2_sort_complex(mtoc2_tensor_t a, int descending) {
     (mtoc2_sort_complex_pair_t *)malloc(
       (size_t)n * sizeof(mtoc2_sort_complex_pair_t));
   if (!buf) {
-    fprintf(stderr, "mtoc2: out of memory (sort complex buffer)\n");
+    fprintf(stderr, "C-JIT: out of memory (sort complex buffer)\n");
     abort();
   }
   for (long i = 0; i < n; i++) {
@@ -264,7 +264,7 @@ static void mtoc2_sort_complex_2(mtoc2_tensor_t a, int descending,
       (mtoc2_sort_complex_pair_t *)malloc(
         (size_t)n * sizeof(mtoc2_sort_complex_pair_t));
     if (!buf) {
-      fprintf(stderr, "mtoc2: out of memory (sort complex buffer)\n");
+      fprintf(stderr, "C-JIT: out of memory (sort complex buffer)\n");
       abort();
     }
     for (long i = 0; i < n; i++) {

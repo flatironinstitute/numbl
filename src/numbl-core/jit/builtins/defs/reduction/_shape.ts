@@ -4,7 +4,7 @@
  * supplies its kernel spec (init, op, finalize, sign rule, empty
  * result) and lets this module drive transfer / codegen / arity.
  *
- * Numbl is the dialect oracle (see `../numbl/src/numbl-core/interpreter/
+ * Numbl is the dialect oracle (see `src/numbl-core/interpreter/
  * builtins/reductions.ts`). The shape rules here mirror numbl's
  * `shapeAfterReduction` against mtoc2's `DimInfo` lattice
  * (`{exact, value}` / `unknown`) plus concrete `shape` when set.

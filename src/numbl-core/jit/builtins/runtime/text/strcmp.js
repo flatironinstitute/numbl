@@ -1,5 +1,4 @@
-/* JS sibling of strcmp.h — input shape mirrors what mtoc2's js-aot /
- * interpreter pass to the helper: either a raw JS string (numbl-style
+/* JS sibling of strcmp.h. The input is either a raw JS string (numbl-style
  * scalar handle) or a `{mtoc2Tag:"char", value:string}` char wrapper.
  * The helper normalizes either form to its raw bytes before comparing.
  */

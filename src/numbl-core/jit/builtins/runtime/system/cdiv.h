@@ -7,7 +7,7 @@
  * algorithm (which factors out the larger-magnitude divisor
  * component) and explicit ±0 detection to land on the same byte
  * stream regardless of the underlying libc. This helper mirrors
- * that path so cross-runner output stays aligned.
+ * that path so output matches the interpreter.
  */
 
 #include <complex.h>

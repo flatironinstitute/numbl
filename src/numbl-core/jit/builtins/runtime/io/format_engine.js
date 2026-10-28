@@ -1,5 +1,5 @@
 // JS sibling of `format_engine.h`. Numbl-compatible printf-style
-// formatter, ported from `numbl/src/numbl-core/helpers/string.ts`'s
+// formatter, ported from `src/numbl-core/helpers/string.ts`'s
 // `sprintfFormat`. Shared by fprintf / sprintf / error / assert on
 // the JS side.
 //

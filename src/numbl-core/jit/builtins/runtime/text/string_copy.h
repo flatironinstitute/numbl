@@ -26,7 +26,7 @@ static mtoc2_string_t mtoc2_string_copy(mtoc2_string_t s) {
   }
   char *buf = (char *)malloc((size_t)s.len);
   if (!buf) {
-    fprintf(stderr, "mtoc2: out of memory in mtoc2_string_copy (%ld bytes)\n",
+    fprintf(stderr, "C-JIT: out of memory in mtoc2_string_copy (%ld bytes)\n",
             s.len);
     abort();
   }

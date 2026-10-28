@@ -105,8 +105,8 @@ function pairC(
   if ((ka === "rt" && kb === "ct") || (ka === "ct" && kb === "rt"))
     return `0.0`;
   throw new UnsupportedConstruct(
-    `'isequal' with these argument types is not yet supported by the AOT ` +
-      `backends (complex-tensor, char/string, struct or cell comparison); ` +
+    `'isequal' with these argument types is not yet supported by the JIT ` +
+      `(complex-tensor, char/string, struct or cell comparison); ` +
       `the interpreter handles it`
   );
 }
@@ -160,8 +160,8 @@ function pairJs(
   }
   if ((ka === "rt" && kb === "ct") || (ka === "ct" && kb === "rt")) return `0`;
   throw new UnsupportedConstruct(
-    `'isequal' with these argument types is not yet supported by the AOT ` +
-      `backends (complex-tensor, char/string, struct or cell comparison); ` +
+    `'isequal' with these argument types is not yet supported by the JIT ` +
+      `(complex-tensor, char/string, struct or cell comparison); ` +
       `the interpreter handles it`
   );
 }

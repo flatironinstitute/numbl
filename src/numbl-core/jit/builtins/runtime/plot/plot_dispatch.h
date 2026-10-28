@@ -4,14 +4,14 @@
  * Numbl plots by accumulating plot instructions in the runtime. Compiled
  * C writes each plotting call as one line of JSON through the host
  * output hook (`host_output.h`), prefixed by the ASCII RS (`\x1e`)
- * sentinel plus the tag `mtoc2:plot\t`; the host (`cOutputSink` in
+ * sentinel plus the tag `jit:plot\t`; the host (`cOutputSink` in
  * executors/jit/hostHelpers.ts) turns each record into a plot
  * instruction. RS never occurs in ordinary output, so records are found
  * by prefix without escaping user output.
  *
  * The wire shape per call is:
  *
- *   \x1e mtoc2:plot \t {"call":"<name>","args":[<arg>, ...]} \n
+ *   \x1e jit:plot \t {"call":"<name>","args":[<arg>, ...]} \n
  *
  * Argument encoding (one element per source-level arg):
  *   double   ->  bare numeric (NaN / ±Infinity rendered as `null`,
@@ -133,7 +133,7 @@ static void mtoc2__plot_emit_arg(const mtoc2_fprintf_arg_t *a) {
 
 static void mtoc2_plot_dispatch(const char *name, int nargs,
                                 const mtoc2_fprintf_arg_t *args) {
-  mtoc2__plot_emit_cstr("\x1emtoc2:plot\t{\"call\":");
+  mtoc2__plot_emit_cstr("\x1ejit:plot\t{\"call\":");
   mtoc2__plot_emit_json_string(name, (long)strlen(name));
   mtoc2__plot_emit_cstr(",\"args\":[");
   for (int i = 0; i < nargs; i++) {

@@ -17,7 +17,7 @@
 static void mtoc2_assert_scalar(double cond, const char *msg) {
   /* `cond != cond` filters NaN — numbl's `isNaN(v)` check. */
   if (cond != 0.0 && cond == cond) return;
-  fputs("mtoc2: assertion failed", stderr);
+  fputs("C-JIT: assertion failed", stderr);
   if (msg != NULL && msg[0] != '\0') {
     fputs(": ", stderr);
     fputs(msg, stderr);

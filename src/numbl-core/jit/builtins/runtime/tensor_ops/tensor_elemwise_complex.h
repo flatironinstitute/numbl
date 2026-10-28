@@ -1,8 +1,7 @@
 /* mtoc2 runtime helpers: elementwise binary + unary ops on complex
  * tensors. Sibling of `tensor_elemwise_real.h` — same `_tt` /
  * `_ts` / `_st` / `_bcast_tt` naming, the kernel walks both lanes,
- * and per-element math routes through `cscalar.h`'s helpers so the
- * c2js backend can translate the bodies straight (no bare
+ * and per-element math routes through `cscalar.h`'s helpers (no bare
  * `<complex.h>` operators).
  *
  * Each helper allocates a freshly-owned complex tensor via
@@ -21,9 +20,8 @@
 /* Both _tt and _bcast_tt accept either operand with `imag == NULL`
  * (a static-real tensor) so the emit layer can hand a real tensor
  * straight into a complex op without an explicit promote step. The
- * NULL-lane branches read 0.0 instead. The c2js backend uses `null`
- * as the equivalent sentinel; the JS-side helpers see `null` and the
- * same `cur.imag != null ? cur.imag[i] : 0.0` branch falls out. */
+ * NULL-lane branches read 0.0 instead. The JS siblings use `null`
+ * as the equivalent sentinel. */
 /* Per-element ops write both result lanes from the operands' lanes.
  * `ar` / `br` say the operand acts as real: no imag lane, or an imag
  * lane that is all zero (MATLAB treats such a complex array as real).

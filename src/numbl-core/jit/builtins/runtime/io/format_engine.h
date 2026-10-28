@@ -2,7 +2,7 @@
  * sprintf.
  *
  * Mirrors numbl's `sprintfFormat`
- * (numbl/src/numbl-core/helpers/string.ts) byte-for-byte:
+ * (src/numbl-core/helpers/string.ts) byte-for-byte:
  *   - spec set: d i u f e E g G x X o s c %
  *   - flags  - + 0 # space; precision `.N`; width digits; `*` consumes
  *     the next numeric arg as a width

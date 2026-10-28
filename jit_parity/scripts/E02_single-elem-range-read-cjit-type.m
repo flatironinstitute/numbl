@@ -2,7 +2,7 @@
 % folds to 1, assigned to a variable then displayed.
 % opt0 (interpreter): prints "20"   (correct)
 % opt1 (JS-JIT):      prints "20"   (correct, matches; JS is untyped)
-% opt2 (C-JIT):       RuntimeError: mtoc2-c-jit compile failed
+% opt2 (C-JIT):       RuntimeError: C-JIT compile failed
 %   error: incompatible types when assigning to type 'double' from type
 %          'mtoc2_tensor_t'
 % DIVERGES: opt2 (errors while opt0/opt1 succeed -> counts as divergence)

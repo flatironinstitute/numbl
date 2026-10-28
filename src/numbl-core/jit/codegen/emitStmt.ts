@@ -756,7 +756,7 @@ function emitCellIndexStore(
     lines.push(`${indent}  size_t _mtoc2_off = ${offsetExpr};`);
     lines.push(`${indent}  if (_mtoc2_off >= ${baseCName}.nslots) {`);
     lines.push(
-      `${indent}    fprintf(stderr, "mtoc2: cell index out of bounds\\n");`
+      `${indent}    fprintf(stderr, "C-JIT: cell index out of bounds\\n");`
     );
     lines.push(`${indent}    exit(1);`);
     lines.push(`${indent}  }`);
@@ -812,7 +812,7 @@ function emitCellIndexStore(
     lines.push(`${indent}    }`);
   }
   lines.push(
-    `${indent}    default: fprintf(stderr, "mtoc2: cell index out of bounds\\n"); exit(1);`
+    `${indent}    default: fprintf(stderr, "C-JIT: cell index out of bounds\\n"); exit(1);`
   );
   lines.push(`${indent}  }`);
   lines.push(`${indent}}`);

@@ -32,7 +32,7 @@ static void mtoc2__sprintf_writer(void *ctx, const char *bytes, long len) {
     while (new_cap < b->len + len) new_cap *= 2;
     char *nb = (char *)realloc(b->data, (size_t)new_cap);
     if (!nb) {
-      fprintf(stderr, "mtoc2: out of memory in mtoc2_sprintf\n");
+      fprintf(stderr, "C-JIT: out of memory in mtoc2_sprintf\n");
       abort();
     }
     b->data = nb;

@@ -330,7 +330,7 @@ function emitTensorRhsSizeCheck(
   );
   lines.push(`${indent}if (_mtoc2_n != _mtoc2_rhs_n) {`);
   lines.push(
-    `${indent}  fprintf(stderr, "mtoc2: Subscripted assignment dimension mismatch (lhs slice has %ld elements, rhs has %ld)\\n", _mtoc2_n, _mtoc2_rhs_n);`
+    `${indent}  fprintf(stderr, "C-JIT: Subscripted assignment dimension mismatch (lhs slice has %ld elements, rhs has %ld)\\n", _mtoc2_n, _mtoc2_rhs_n);`
   );
   lines.push(`${indent}  exit(1);`);
   lines.push(`${indent}}`);

@@ -65,7 +65,7 @@ export function defineCompare(
         if (a.isComplex || b.isComplex) {
           throw new UnsupportedConstruct(
             `'${name}' elementwise: complex tensor compare is not ` +
-              `supported in mtoc2 yet`
+              `supported by the JIT yet`
           );
         }
         // Result is a logical tensor shaped like the broadcast — we
@@ -115,7 +115,7 @@ export function defineCompare(
         throw new UnsupportedConstruct(
           `'${name}' on tensors that don't share static shape ` +
             `(broadcast / runtime-unknown) is not yet supported by ` +
-            `mtoc2's AOT backends; the interpreter handles it`
+            `the JIT; the interpreter handles it`
         );
       }
       const aCx = isScalarComplex(argTypes[0]);
@@ -151,7 +151,7 @@ export function defineCompare(
         throw new UnsupportedConstruct(
           `'${name}' on tensors that don't share static shape ` +
             `(broadcast / runtime-unknown) is not yet supported by ` +
-            `mtoc2's AOT backends; the interpreter handles it`
+            `the JIT; the interpreter handles it`
         );
       }
       const aCx = isScalarComplex(argTypes[0]);

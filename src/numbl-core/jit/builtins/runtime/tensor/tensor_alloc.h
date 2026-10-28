@@ -28,13 +28,13 @@ static mtoc2_tensor_t mtoc2_tensor_alloc(long rows, long cols) {
   if (__builtin_mul_overflow((size_t)rows, (size_t)cols, &n) ||
       __builtin_mul_overflow(n, sizeof(double), &bytes)) {
     fprintf(stderr,
-      "mtoc2: tensor allocation overflow (%ldx%ld elements)\n", rows, cols);
+      "C-JIT: tensor allocation overflow (%ldx%ld elements)\n", rows, cols);
     abort();
   }
 #else
   if ((size_t)cols != 0 && (size_t)rows > (SIZE_MAX / sizeof(double)) / (size_t)cols) {
     fprintf(stderr,
-      "mtoc2: tensor allocation overflow (%ldx%ld elements)\n", rows, cols);
+      "C-JIT: tensor allocation overflow (%ldx%ld elements)\n", rows, cols);
     abort();
   }
   n = (size_t)rows * (size_t)cols;

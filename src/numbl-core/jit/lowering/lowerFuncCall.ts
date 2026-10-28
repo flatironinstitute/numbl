@@ -120,8 +120,7 @@ export function lowerFuncCall(
   // `lowerIdent` already handles `pi` (no parens); this branch
   // handles the paren-form. `e.args.length === 0` is the gate so we
   // don't accidentally claim a 1-arg call like `pi(2,3)` (which
-  // numbl/MATLAB treat as a fill constructor — out of scope for
-  // mtoc2 v1).
+  // numbl/MATLAB treat as a fill constructor — out of scope here).
   if (args.length === 0) {
     const b = getBuiltin(e.name);
     if (b !== undefined) {
@@ -179,7 +178,7 @@ export function lowerFuncCall(
       const b = getBuiltin(e.name);
       if (!b) {
         throw new UnsupportedConstruct(
-          `builtin '${e.name}' is not supported by mtoc2`,
+          `builtin '${e.name}' is not supported by the JIT`,
           e.span
         );
       }

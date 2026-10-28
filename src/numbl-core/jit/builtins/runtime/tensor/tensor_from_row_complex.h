@@ -3,9 +3,8 @@
  * (mtoc2's emit layer) splits each source-level cell into its real
  * and imaginary parts via `mtoc2_creal` / `mtoc2_cimag` before
  * stuffing into the compound literals — that avoids passing
- * `double _Complex` arrays around at all, which keeps the body
- * c2js-translatable (no `<complex.h>` types in the signature or
- * body).
+ * `double _Complex` arrays around at all (no `<complex.h>` types in
+ * the signature or body).
  */
 
 #include <string.h>

@@ -242,7 +242,7 @@ export function declaredNargin(
       if (entry) params = paramsInFile(this, entry.fileName, target.name);
       break;
     }
-    // Builtins, class constructors/methods, JS/mtoc2 user functions: no
+    // Builtins, class constructors/methods, JS user functions: no
     // resolvable plain user-function AST here — leave undefined.
   }
   return params !== undefined ? narginFromParams(params) : undefined;

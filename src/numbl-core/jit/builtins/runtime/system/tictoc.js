@@ -1,8 +1,6 @@
 // JS sibling of `tictoc.h`. Same "one global timer" semantics. Uses
 // `performance.now()` to match numbl's wall-clock source; the output
-// format string mirrors numbl's `"Elapsed time is %.6f seconds.\n"`
-// so the cross-runner's masking regex still treats both runtimes as
-// equivalent.
+// format string mirrors numbl's `"Elapsed time is %.6f seconds.\n"`.
 //
 // Module-scope state for the shared `tic` slot. The codegen path
 // inlines this declaration alongside the helpers; the interpreter

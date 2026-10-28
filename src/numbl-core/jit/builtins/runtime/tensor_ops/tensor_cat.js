@@ -15,7 +15,7 @@ import { mtoc2_tensor_alloc_nd_complex } from "../tensor/tensor_alloc_nd_complex
 
 export function mtoc2_tensor_cat(dim, nin, xs) {
   if (dim < 1) {
-    throw new Error(`mtoc2: cat dim ${dim} must be >= 1`);
+    throw new Error(`JIT: cat dim ${dim} must be >= 1`);
   }
   const dimIdx = dim - 1;
 
@@ -69,9 +69,7 @@ export function mtoc2_tensor_cat(dim, nin, xs) {
       for (let d = 0; d < ndim; d++) {
         if (d === dimIdx) continue;
         if (p.shape[d] !== refShape[d]) {
-          throw new Error(
-            `mtoc2: cat dimension mismatch on dimension ${d + 1}`
-          );
+          throw new Error(`JIT: cat dimension mismatch on dimension ${d + 1}`);
         }
       }
       return true;
@@ -138,7 +136,7 @@ function inputLanesComplex(x) {
 
 export function mtoc2_tensor_cat_complex(dim, nin, xs) {
   if (dim < 1) {
-    throw new Error(`mtoc2: cat_complex dim ${dim} must be >= 1`);
+    throw new Error(`JIT: cat_complex dim ${dim} must be >= 1`);
   }
   const dimIdx = dim - 1;
 
@@ -179,7 +177,7 @@ export function mtoc2_tensor_cat_complex(dim, nin, xs) {
         if (d === dimIdx) continue;
         if (p.shape[d] !== refShape[d]) {
           throw new Error(
-            `mtoc2: cat_complex dimension mismatch on dimension ${d + 1}`
+            `JIT: cat_complex dimension mismatch on dimension ${d + 1}`
           );
         }
       }

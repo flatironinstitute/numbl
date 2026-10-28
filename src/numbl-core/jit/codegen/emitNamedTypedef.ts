@@ -166,7 +166,7 @@ export function emitNamedTypedef(
 /** Emit `<name>_disp(v)` — prints a `key: value` line per field. The
  *  format is intentionally narrow: it matches what numbl's `disp` on
  *  a scalar struct produces for the common scalar / tensor field
- *  shapes (so the cross-runner stays byte-exact). Anything outside
+ *  shapes. Anything outside
  *  that subset would fail at lowering, not here. */
 function emitStructDisp(spec: NamedTypedefSpec, state: RuntimeState): string[] {
   // Each `disp_double`/`disp_tensor` call pulls in its own snippet on

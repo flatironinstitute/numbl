@@ -266,7 +266,7 @@ function marshalTensorInput(
   owned: unknown[]
 ): unknown {
   const shape = [...v.shape];
-  while (shape.length < 2) shape.push(1); // mtoc2 minimum ndim is 2.
+  while (shape.length < 2) shape.push(1); // minimum ndim is 2.
   if (shape.length > JIT_MAX_NDIM) return undefined;
   const n = v.data.length;
   const real = copyIn(ctx, v.data, n, owned);

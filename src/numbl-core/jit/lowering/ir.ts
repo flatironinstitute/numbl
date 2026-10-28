@@ -1,7 +1,5 @@
 /**
- * mtoc2 intermediate representation. Built from scratch; only what the
- * MVP scope needs (scalar real double, arith + comparisons, disp,
- * if/while/for, user functions with specialization).
+ * mtoc2 intermediate representation.
  *
  * Every node carries a `Span` for error attribution. Every IRExpr
  * carries a `Type`.

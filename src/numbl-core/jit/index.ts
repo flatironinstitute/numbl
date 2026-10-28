@@ -1,8 +1,7 @@
 /**
  * Public surface of numbl's vendored JIT compiler. This is the single
  * module the executor registry (`src/numbl-core/executors/jit/*`) imports
- * from — it replaces the former cross-repo `src/numbl-core/mtoc2/index.ts`
- * bridge. Everything the JIT exposes to the rest of numbl appears here
+ * from. Everything the JIT exposes to the rest of numbl appears here
  * exactly once.
  */
 

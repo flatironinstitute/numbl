@@ -58,7 +58,7 @@ static double mtoc2__variance_fiber(const double *data, long base, long n,
   static mtoc2_tensor_t mtoc2_##name##_dim(mtoc2_tensor_t a, int dim,          \
                                            int w) {                            \
     if (dim < 1) {                                                             \
-      fprintf(stderr, "mtoc2: " #name "_dim: dim must be >= 1 (got %d)\n",     \
+      fprintf(stderr, "C-JIT: " #name "_dim: dim must be >= 1 (got %d)\n",     \
               dim);                                                            \
       abort();                                                                 \
     }                                                                          \

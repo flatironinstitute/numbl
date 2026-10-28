@@ -1,6 +1,6 @@
 // JS sibling of `cdiv.h`. Scalar complex division matching numbl's
 // signed-Inf-on-zero-divisor behavior via Smith's algorithm. Mirrors
-// the C side so cross-runner output stays byte-for-byte.
+// the C side so output stays byte-for-byte.
 
 export function mtoc2_cdiv(a, b) {
   const ar = a.re,

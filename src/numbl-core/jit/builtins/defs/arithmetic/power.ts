@@ -2,7 +2,7 @@
  * `power` builtin — backs the `.^` (elementwise power) binary
  * operator.
  *
- * Mirrors `mElemPow` in `../numbl/src/numbl-core/helpers/arithmetic.ts`
+ * Mirrors `mElemPow` in `src/numbl-core/helpers/arithmetic.ts`
  * (line 1075) modulo the complex-result paths. Numbl produces a
  * complex result for `(neg)^(non-integer)`; mtoc2 has no complex
  * type and rejects that combination at lowering time (same precedent
@@ -121,7 +121,7 @@ function checkDomain(a: NumericType, b: NumericType): string | null {
 
   return (
     `'.^' with possibly-negative base and non-integer exponent is not yet ` +
-    `supported (would produce a complex result; mtoc2 has no complex type). ` +
+    `supported by the JIT (it would produce a complex result). ` +
     `Use 'abs(base)' or ensure the base is statically nonneg, or pass an ` +
     `integer exponent.`
   );

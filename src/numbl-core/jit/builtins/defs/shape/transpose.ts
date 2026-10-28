@@ -73,7 +73,7 @@ export const transpose: Builtin = {
       throw new UnsupportedConstruct(
         `transpose requires a 2-D operand (got ${a.dims.length}-D); ` +
           `use 'permute' for higher-rank reorderings ` +
-          `(numbl flattens trailing dims into cols; mtoc2 follows MATLAB and rejects)`
+          `(numbl flattens trailing dims into cols; the JIT follows MATLAB and rejects)`
       );
     }
 

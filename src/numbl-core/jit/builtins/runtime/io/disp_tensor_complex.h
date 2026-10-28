@@ -7,10 +7,7 @@
  * lines up with sibling cells of differing widths.
  *
  * Builds each `double _Complex` cell via `mtoc2_cmake` rather than
- * the `I` macro so the c2js backend can translate the body. The
- * actual format helper (`mtoc2_format_complex`) is on c2js's skip
- * list and substituted with a JS implementation that walks
- * `{re, im}` objects.
+ * the `I` macro. The JS sibling formats `{re, im}` objects.
  */
 
 #include <stdio.h>
@@ -28,7 +25,7 @@ static void mtoc2__disp_complex_slice(
   if (!cells || !col_widths) {
     free(cells);
     free(col_widths);
-    fprintf(stderr, "mtoc2: out of memory in mtoc2_disp_tensor_complex\n");
+    fprintf(stderr, "C-JIT: out of memory in mtoc2_disp_tensor_complex\n");
     return;
   }
 

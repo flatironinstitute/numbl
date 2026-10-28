@@ -1,4 +1,4 @@
-// JS sibling for struct disp. The c-aot path emits a per-typedef
+// JS sibling for struct disp. The C-JIT emits a per-typedef
 // `<typedef>_disp(v)` function via emitNamedTypedef; JS doesn't have
 // per-struct codegen, so we ship one generic helper that walks the
 // struct's keys at runtime and dispatches on the value's shape.

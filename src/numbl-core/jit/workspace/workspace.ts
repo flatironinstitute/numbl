@@ -338,7 +338,7 @@ export class Workspace {
         );
         if (!ast) {
           throw new UnsupportedConstruct(
-            `'${entry.fileName}' has no function definitions; mtoc2 cannot ` +
+            `'${entry.fileName}' has no function definitions; the JIT cannot ` +
               `use it as a workspace function`,
             span
           );
@@ -395,7 +395,7 @@ export class Workspace {
             throw new UnsupportedConstruct(
               `function '${name}' resolves to a subfunction of class ` +
                 `'${className}', but the call site has no method scope ` +
-                `(mtoc2 only resolves class-file subfunctions from inside ` +
+                `(the JIT only resolves class-file subfunctions from inside ` +
                 `that class's methods)`,
               span
             );
@@ -412,7 +412,7 @@ export class Workspace {
               `function '${name}' resolves to a subfunction of class ` +
                 `'${className}', but the owning method scope ` +
                 `'${methodScope}' is not an external method file ` +
-                `(classdef-body subfunctions are not yet supported by mtoc2)`,
+                `(classdef-body subfunctions are not yet supported by the JIT)`,
               span
             );
           }
@@ -437,7 +437,7 @@ export class Workspace {
         }
         throw new UnsupportedConstruct(
           `function '${name}' resolves to a subfunction of a ` +
-            `private file (private/ directories are not yet supported by mtoc2)`,
+            `private file (private/ directories are not yet supported by the JIT)`,
           span
         );
       }
@@ -453,12 +453,12 @@ export class Workspace {
       case "privateFunction":
         throw new UnsupportedConstruct(
           `private functions (under a 'private/' directory) are not yet ` +
-            `supported by mtoc2`,
+            `supported by the JIT`,
           span
         );
       case "jsUserFunction":
         throw new UnsupportedConstruct(
-          `JS user functions (.numbl.js) are not yet supported by mtoc2`,
+          `JS user functions (.numbl.js) are not yet supported by the JIT`,
           span
         );
       default: {

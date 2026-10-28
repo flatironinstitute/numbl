@@ -1,8 +1,8 @@
 /**
  * JS-side scalar-complex fold functions for unary math builtins.
  *
- * Mirrors the cscalar.h `mtoc2_c*` helpers — both the C side and
- * c2js's JS-runtime side must agree with these formulas. Used by
+ * Mirrors the `mtoc2_c*` helpers in cscalar.h and cscalar.js; all
+ * three must agree on these formulas. Used by
  * `_unary_real.ts`'s factory at type-system-fold time when an input
  * has an exact `{re, im}` carrier.
  *

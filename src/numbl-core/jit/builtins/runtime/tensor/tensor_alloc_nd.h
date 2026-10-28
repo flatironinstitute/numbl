@@ -22,7 +22,7 @@ static mtoc2_tensor_t mtoc2_tensor_alloc_nd(int ndim, const long *dims) {
      * leave the tensor in a malformed state with a 1-element default
      * buffer; better to abort with a clear message. */
     fprintf(stderr,
-      "mtoc2: tensor ndim %d out of range [1, %d]\n", ndim, MTOC2_MAX_NDIM);
+      "C-JIT: tensor ndim %d out of range [1, %d]\n", ndim, MTOC2_MAX_NDIM);
     abort();
   }
   mtoc2_tensor_t out;
@@ -40,13 +40,13 @@ static mtoc2_tensor_t mtoc2_tensor_alloc_nd(int ndim, const long *dims) {
 #if defined(__has_builtin) && __has_builtin(__builtin_mul_overflow)
     if (__builtin_mul_overflow(n, (size_t)d, &new_n)) {
       fprintf(stderr,
-        "mtoc2: tensor allocation overflow at dim %d (size %ld)\n", i, d);
+        "C-JIT: tensor allocation overflow at dim %d (size %ld)\n", i, d);
       abort();
     }
 #else
     if ((size_t)d != 0 && n > (SIZE_MAX / sizeof(double)) / (size_t)d) {
       fprintf(stderr,
-        "mtoc2: tensor allocation overflow at dim %d (size %ld)\n", i, d);
+        "C-JIT: tensor allocation overflow at dim %d (size %ld)\n", i, d);
       abort();
     }
     new_n = n * (size_t)d;
@@ -58,7 +58,7 @@ static mtoc2_tensor_t mtoc2_tensor_alloc_nd(int ndim, const long *dims) {
 #if defined(__has_builtin) && __has_builtin(__builtin_mul_overflow)
   if (__builtin_mul_overflow(n, sizeof(double), &bytes)) {
     fprintf(stderr,
-      "mtoc2: tensor allocation overflow at byte-count (%zu elements)\n", n);
+      "C-JIT: tensor allocation overflow at byte-count (%zu elements)\n", n);
     abort();
   }
 #else

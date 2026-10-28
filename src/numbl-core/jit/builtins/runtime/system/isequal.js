@@ -1,5 +1,5 @@
 // JS sibling of `isequal.h`. Same real-numeric equality semantics for
-// the js-aot backend. Tensors carry `shape` / `data` (the JS analogue
+// the JS-JIT. Tensors carry `shape` / `data` (the JS analogue
 // of the C struct's `dims` / `real`).
 
 export function mtoc2_isequal_tt(a, b) {

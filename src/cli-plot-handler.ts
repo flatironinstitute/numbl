@@ -1,7 +1,5 @@
 /**
- * Lazy plot-server handler used by numbl's CLI and reused by sibling
- * projects (mtoc2) that drive the same plot pipeline from a different
- * execution backend.
+ * Lazy plot-server handler used by numbl's CLI.
  *
  * The pattern:
  *   - On the first batch of `PlotInstruction`s, start the plot server
@@ -18,7 +16,7 @@
  * The `disabled` flag short-circuits the whole thing: when true,
  * `onDrawnow` is `undefined` (the caller drops instructions) and
  * `flushAndWait` is a no-op. Used by the `--no-plot` / non-`--plot`
- * CLI paths and the cross-runner harness, neither of which wants a
+ * CLI paths, which do not want a
  * browser tab to pop open during script execution.
  */
 

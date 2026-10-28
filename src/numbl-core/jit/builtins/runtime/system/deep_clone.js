@@ -1,6 +1,6 @@
 /* Deep-clone an owned-typed runtime value so a subsequent member /
  * indexed write through one alias doesn't leak to others. Mirrors
- * the c-aot per-typedef `_copy` protocol: every Var-RHS Assign /
+ * the C-JIT per-typedef `_copy` protocol: every Var-RHS Assign /
  * MemberLoad-RHS Assign / function-call arg of an owned type is
  * wrapped through this helper at emit time, so JS-side aliasing
  * stops at the assignment boundary.

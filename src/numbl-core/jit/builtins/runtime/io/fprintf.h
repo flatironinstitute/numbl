@@ -1,12 +1,12 @@
 /* mtoc2 runtime helper: fprintf — write formatted text to stdout.
  *
  * Matches numbl's `fprintf` semantics
- * (numbl/src/numbl-core/runtime/specialBuiltins.ts):
+ * (src/numbl-core/runtime/specialBuiltins.ts):
  *   - `fprintf(fmt, args...)`         → write to stdout
  *   - `fprintf(1, fmt, args...)`      → write to stdout
  *   - `fprintf(2, fmt, args...)`      → numbl routes fid=2 to its
  *     single `output` stream too; mtoc2 matches by sending fid=2 to
- *     stdout (cross-runner parity requires byte-for-byte stdout match).
+ *     stdout.
  *
  * The fid is resolved at lowering (literal 1 or 2 only); the codegen
  * always emits `mtoc2_fprintf(stdout, …)`. Other fids are deferred at

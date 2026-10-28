@@ -48,7 +48,7 @@ let cscalarStructRegistered = false;
  *  to call from each compile() invocation; the second call short-
  *  circuits.
  *
- *  Layout MUST match `mtoc2/src/builtins/runtime/tensor/tensor.h`:
+ *  Layout MUST match `jit/builtins/runtime/tensor/tensor.h`:
  *  ```
  *  typedef struct {
  *    double *real;

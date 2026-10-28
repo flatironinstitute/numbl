@@ -11,13 +11,12 @@
 //    host operates in-process and consumes the same value graph the
 //    emitted code already holds.
 //
-// 2. Wire-format mode (standalone AOT / viewer tee): when no host
-//    hook is present, fall back to the RS-prefixed JSON record on
-//    stdout that the launcher splits and forwards. Same shape the C
+// 2. Wire-format mode: when no host hook is present, fall back to
+//    the RS-prefixed JSON record on stdout. Same shape the C
 //    sibling emits, so a single viewer parses both backends.
 //
 // Wire shape per call (mode 2):
-//   \x1e mtoc2:plot \t {"call":"<name>","args":[<arg>, ...]} \n
+//   \x1e jit:plot \t {"call":"<name>","args":[<arg>, ...]} \n
 //
 // Arg encoding (per source-level arg):
 //   number → bare numeric (non-finite → null, matching the C side
@@ -60,5 +59,5 @@ export function mtoc2_plot_dispatch(name, ...args) {
     return;
   }
   const record = { call: name, args: args.map(encodeArg) };
-  $write("\x1emtoc2:plot\t" + JSON.stringify(record) + "\n");
+  $write("\x1ejit:plot\t" + JSON.stringify(record) + "\n");
 }

@@ -34,7 +34,7 @@ static double mtoc2_dot_real(mtoc2_tensor_t a, mtoc2_tensor_t b) {
   for (int i = 0; i < a.ndim; i++) na *= a.dims[i];
   for (int i = 0; i < b.ndim; i++) nb *= b.dims[i];
   if (na != nb) {
-    fprintf(stderr, "mtoc2: dot: vectors must be same length\n");
+    fprintf(stderr, "C-JIT: dot: vectors must be same length\n");
     abort();
   }
   double acc = 0.0;
@@ -68,7 +68,7 @@ static double _Complex mtoc2_dot_complex(mtoc2_tensor_t a, mtoc2_tensor_t b) {
   for (int i = 0; i < a.ndim; i++) na *= a.dims[i];
   for (int i = 0; i < b.ndim; i++) nb *= b.dims[i];
   if (na != nb) {
-    fprintf(stderr, "mtoc2: dot_complex: vectors must be same length\n");
+    fprintf(stderr, "C-JIT: dot_complex: vectors must be same length\n");
     abort();
   }
   int aHasImag = (a.imag != NULL);

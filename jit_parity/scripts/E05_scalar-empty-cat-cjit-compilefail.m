@@ -2,7 +2,7 @@
 % MATLAB drops the empty -> C is the scalar 5 (1x1).
 % opt0 (interp): 1x1 val=5
 % opt1 (JS-JIT): 1x1 val=5
-% opt2 (C-JIT):  RuntimeError "mtoc2-c-jit compile failed" with gcc errors
+% opt2 (C-JIT):  RuntimeError "C-JIT compile failed" with gcc errors
 %   "request for member 'dims' in something not a structure or union"
 %   on C.dims[0]  <-- DIVERGES (compile failure ESCAPES the JS fallback)
 % DIVERGING MODE: opt2 only.

@@ -19,13 +19,6 @@
  * success and aborts via `mtoc2_oob_abort` on failure. The `loc`
  * string is "<file>:<offset>" from the index's source span — formatted
  * by the emitter so the user sees the violating access site.
- *
- * `abort()` is the right exit signal: AddressSanitizer-built binaries
- * already abort on heap-buffer-overflow, so mirroring that gives the
- * same exit code (non-zero, surfaced through execFile in the cross-
- * runner). The cross-runner can't compare stdout when one runner errors,
- * so the unit test suite (vitest) is the home for OOB regression
- * coverage; this helper just makes the runtime error deterministic.
  */
 
 #include <math.h>
@@ -53,11 +46,8 @@ static void mtoc2_oob_abort(
       "%s: Index in position %d exceeds array bounds (got %ld, valid %ld..%ld)\n",
       loc, axis + 1, got, lo, hi);
   }
-  /* exit(1) rather than abort(): abort raises SIGABRT, which
-   * spawnSync surfaces as `signal` instead of `status`. The CLI
-   * falls through to `process.exit(run.status ?? 0)` and would
-   * report a successful run. exit(1) gives a clean non-zero
-   * status that the cross-runner sees as "mtoc2 errored". */
+  /* exit(1) rather than abort(): a clean non-zero exit status
+   * rather than SIGABRT. */
   exit(1);
 }
 

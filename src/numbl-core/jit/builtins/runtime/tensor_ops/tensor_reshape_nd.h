@@ -40,13 +40,13 @@ static mtoc2_tensor_t mtoc2_reshape_nd(
     if (dims[i] == -1) {
       if (infer_idx != -1) {
         fprintf(stderr,
-          "mtoc2: reshape: at most one '[]' auto-infer slot allowed\n");
+          "C-JIT: reshape: at most one '[]' auto-infer slot allowed\n");
         abort();
       }
       infer_idx = i;
     } else if (dims[i] < 0) {
       fprintf(stderr,
-        "mtoc2: reshape: dim %d must be a non-negative integer "
+        "C-JIT: reshape: dim %d must be a non-negative integer "
         "(got %ld)\n", i + 1, dims[i]);
       abort();
     } else {
@@ -59,13 +59,13 @@ static mtoc2_tensor_t mtoc2_reshape_nd(
   if (infer_idx != -1) {
     if (explicit_prod == 0 && in_total != 0) {
       fprintf(stderr,
-        "mtoc2: reshape: input has %zu elements but the explicit dims "
+        "C-JIT: reshape: input has %zu elements but the explicit dims "
         "around '[]' multiply to 0\n", in_total);
       abort();
     }
     if (explicit_prod > 0 && in_total % explicit_prod != 0) {
       fprintf(stderr,
-        "mtoc2: reshape: input has %zu elements, not divisible by %zu "
+        "C-JIT: reshape: input has %zu elements, not divisible by %zu "
         "(the explicit dims around '[]')\n", in_total, explicit_prod);
       abort();
     }
@@ -76,7 +76,7 @@ static mtoc2_tensor_t mtoc2_reshape_nd(
     out_total = explicit_prod;
     if (in_total != out_total) {
       fprintf(stderr,
-        "mtoc2: reshape: number of elements must not change "
+        "C-JIT: reshape: number of elements must not change "
         "(in=%zu, out=%zu)\n", in_total, out_total);
       abort();
     }

@@ -55,7 +55,7 @@ static void mtoc2__squeeze_trailing(int *ndim, long *dims) {
                                                                               \
   static mtoc2_tensor_t mtoc2_##name##_dim(mtoc2_tensor_t a, int dim) {       \
     if (dim < 1) {                                                            \
-      fprintf(stderr, "mtoc2: " #name "_dim: dim must be >= 1 (got %d)\n",    \
+      fprintf(stderr, "C-JIT: " #name "_dim: dim must be >= 1 (got %d)\n",    \
               dim);                                                           \
       abort();                                                                \
     }                                                                         \
@@ -118,7 +118,7 @@ static void mtoc2__squeeze_trailing(int *ndim, long *dims) {
                                                                               \
   static mtoc2_tensor_t mtoc2_##name##_dim(mtoc2_tensor_t a, int dim) {       \
     if (dim < 1) {                                                            \
-      fprintf(stderr, "mtoc2: " #name "_dim: dim must be >= 1 (got %d)\n",    \
+      fprintf(stderr, "C-JIT: " #name "_dim: dim must be >= 1 (got %d)\n",    \
               dim);                                                           \
       abort();                                                                \
     }                                                                         \
@@ -182,7 +182,7 @@ static void mtoc2__squeeze_trailing(int *ndim, long *dims) {
                                                                               \
   static mtoc2_tensor_t mtoc2_##name##_dim(mtoc2_tensor_t a, int dim) {       \
     if (dim < 1) {                                                            \
-      fprintf(stderr, "mtoc2: " #name "_dim: dim must be >= 1 (got %d)\n",    \
+      fprintf(stderr, "C-JIT: " #name "_dim: dim must be >= 1 (got %d)\n",    \
               dim);                                                           \
       abort();                                                                \
     }                                                                         \
