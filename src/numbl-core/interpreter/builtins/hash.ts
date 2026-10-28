@@ -10,7 +10,7 @@ import {
   type RuntimeValue,
 } from "../../runtime/types.js";
 import { RTV, RuntimeError } from "../../runtime/index.js";
-import { registerIBuiltin, type IBuiltinResolution } from "./types.js";
+import { builtin } from "./builtin.js";
 
 function valueToByteString(v: RuntimeValue): string {
   if (isRuntimeChar(v)) return v.value;
@@ -182,22 +182,17 @@ function sha256Hex(input: string): string {
 }
 
 // hash(hfun, str)
-registerIBuiltin({
+builtin({
   name: "hash",
-  resolve: (argTypes): IBuiltinResolution | null => {
-    if (argTypes.length !== 2) return null;
-    return {
-      outputTypes: [{ kind: "char" }],
-      apply: args => {
-        const algoRaw = valueToByteString(args[0]);
-        const algo = algoRaw.toUpperCase().replace(/-/g, "");
-        const msg = valueToByteString(args[1]);
-        if (algo === "MD5") return RTV.char(md5Hex(msg));
-        if (algo === "SHA256") return RTV.char(sha256Hex(msg));
-        throw new RuntimeError(
-          `hash: unsupported hash function '${algoRaw}' (supported: MD5, SHA256)`
-        );
-      },
-    };
+  nargin: 2,
+  apply: args => {
+    const algoRaw = valueToByteString(args[0]);
+    const algo = algoRaw.toUpperCase().replace(/-/g, "");
+    const msg = valueToByteString(args[1]);
+    if (algo === "MD5") return RTV.char(md5Hex(msg));
+    if (algo === "SHA256") return RTV.char(sha256Hex(msg));
+    throw new RuntimeError(
+      `hash: unsupported hash function '${algoRaw}' (supported: MD5, SHA256)`
+    );
   },
 });

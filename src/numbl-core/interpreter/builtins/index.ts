@@ -46,8 +46,11 @@ export {
   registerBuiltinHelp,
   inferJitType,
   inferDispatchType,
+  callIBuiltin,
 } from "./types.js";
 export type { IBuiltin, IBuiltinResolution, BuiltinHelp } from "./types.js";
+export { builtin, makeBuiltin } from "./builtin.js";
+export type { BuiltinSpec, BuiltinContext, Arity } from "./builtin.js";
 export { resetAppdataStore, convertJsonValue } from "./misc.js";
 
 // Register IBuiltin names so isBuiltin() recognizes them. The runtime

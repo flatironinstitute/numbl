@@ -10,10 +10,7 @@ import {
 } from "../runtime/types.js";
 import { colMajorIndex, RTV, RuntimeValue } from "../runtime/index.js";
 import { RuntimeError } from "../runtime/index.js";
-import {
-  getIBuiltin,
-  inferDispatchType,
-} from "../interpreter/builtins/types.js";
+import { getIBuiltin, callIBuiltin } from "../interpreter/builtins/types.js";
 import { allocFloat64Array } from "../runtime/alloc.js";
 
 /** Ensure data is Float64Array (needed by LAPACK bridges). */
@@ -144,11 +141,7 @@ export function applyBuiltin(
 ): RuntimeValue {
   const ib = getIBuiltin(name);
   if (!ib) throw new RuntimeError(`${caller}: builtin '${name}' not found`);
-  const argTypes = args.map(inferDispatchType);
-  const resolution = ib.resolve(argTypes, nargout);
-  if (!resolution)
-    throw new RuntimeError(`${caller}: builtin '${name}' returned no result`);
-  const result = resolution.apply(args, nargout);
+  const result = callIBuiltin(ib, args, nargout);
   if (Array.isArray(result)) return result[0];
-  return result;
+  return result as RuntimeValue;
 }

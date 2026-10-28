@@ -18,6 +18,8 @@ import {
 } from "../../runtime/types.js";
 import { tensorOps, OpUnary } from "../../ops/index.js";
 import { RTV } from "../../runtime/constructors.js";
+import { RuntimeError } from "../../runtime/error.js";
+import { checkNargout, numericArg } from "./args.js";
 import { type JitType, signFromNumber, unifyJitTypes } from "../../jitTypes.js";
 import { sparseToDense } from "../../helpers/sparse-arithmetic.js";
 import { allocFloat64Array } from "../../runtime/alloc.js";
@@ -44,8 +46,51 @@ export interface BuiltinHelp {
 export interface IBuiltin {
   name: string;
   help?: BuiltinHelp;
-  /** Given input JIT types + nargout, return output types and a specialized apply, or null. */
+  /** Given input JIT types + nargout, return output types and a specialized
+   *  apply, or null. Legacy form; builtins defined with `builtin()` (see
+   *  builtin.ts) get a resolve that always succeeds and also set `direct`. */
   resolve: (argTypes: JitType[], nargout: number) => IBuiltinResolution | null;
+  /** Set by `builtin()`: explicit arity and an entry point that needs no
+   *  argument types. Callers use it in place of `resolve` when present. */
+  direct?: DirectBuiltin;
+}
+
+export interface DirectBuiltin {
+  /** Accepted input count [min, max]; max may be Infinity. */
+  nargin: readonly [number, number];
+  /** Accepted output count [min, max]; max 0 marks a void builtin. */
+  nargout: readonly [number, number];
+  /** Value of `nargin(@name)`: the max input count, or -1 when unbounded. */
+  reportedNargin: number;
+  /** Check arity, then run. Returns undefined for a void builtin. */
+  call: (
+    args: RuntimeValue[],
+    nargout: number
+  ) => RuntimeValue | RuntimeValue[] | undefined;
+}
+
+/** Call a registered builtin on runtime values. Uses the direct entry when
+ *  the builtin has one; otherwise resolves on the arguments' dispatch types.
+ *  A void builtin returns undefined and errors when outputs are requested. */
+export function callIBuiltin(
+  ib: IBuiltin,
+  args: RuntimeValue[],
+  nargout: number
+): RuntimeValue | RuntimeValue[] | undefined {
+  if (ib.direct) return ib.direct.call(args, nargout);
+  const argTypes = args.map(inferDispatchType);
+  const resolution = ib.resolve(argTypes, nargout);
+  if (!resolution) {
+    throw new RuntimeError(
+      `Builtin '${ib.name}' does not support these argument types: (${argTypes.map(t => t.kind).join(", ")})`
+    );
+  }
+  if (resolution.outputTypes.length === 0) {
+    checkNargout(nargout, 0, 0);
+    resolution.apply(args, nargout);
+    return undefined;
+  }
+  return resolution.apply(args, nargout);
 }
 
 // ── Registry ────────────────────────────────────────────────────────────
@@ -84,11 +129,12 @@ const narginCache = new Map<string, number>();
  *  few kinds. MATLAB reports the maximum positional input count, or a
  *  negative value for a variable-input function: when every probed count up
  *  to the limit resolves (or none does), return -1; otherwise the largest
- *  accepted count. This is a heuristic until builtins carry explicit nargin
- *  metadata. */
+ *  accepted count. This is a heuristic for legacy builtins without explicit
+ *  metadata. Builtins defined with `builtin()` report their declared arity. */
 export function getIBuiltinNargin(name: string): number | undefined {
   const ib = registry.get(name);
   if (!ib) return undefined;
+  if (ib.direct) return ib.direct.reportedNargin;
   const cached = narginCache.get(name);
   if (cached !== undefined) return cached;
   const kinds: JitType[] = [
@@ -691,11 +737,14 @@ type BooleanJitType = Extract<JitType, { kind: "boolean" }>;
 type ComplexJitType = Extract<JitType, { kind: "complex_or_number" }>;
 type TensorJitType = Extract<JitType, { kind: "tensor" }>;
 
-interface UnaryElemwiseSpec {
+interface UnaryElemwiseSpec extends UnaryElemwiseFns {
   numberType?: (a: NumberJitType) => JitType | null;
   booleanType?: (a: BooleanJitType) => JitType | null;
   complexType?: (a: ComplexJitType) => JitType | null;
   tensorType?: (a: TensorJitType) => JitType | null;
+}
+
+export interface UnaryElemwiseFns {
   realFn: (x: number) => number;
   complexFn: (re: number, im: number) => { re: number; im: number };
   /** Use applyUnaryElemwiseMaybeComplex instead of applyUnaryElemwise */
@@ -800,6 +849,71 @@ export function unaryElemwiseCases(
   return cases;
 }
 
+// ── Apply-only element-wise helpers (for builtin()) ─────────────────────
+//
+// Each returns an `apply` for `builtin({ nargin: 1, apply })`. Input goes
+// through `numericArg`, so logical and char input are handled the way MATLAB
+// handles them, sparse input is densified, and any other type raises
+// MATLAB's invalid-data-type error.
+
+type UnaryApply = (args: RuntimeValue[]) => RuntimeValue;
+
+/** Unary element-wise math (sin, exp, sqrt, ...). With `maybeComplex`, a
+ *  real input outside the real domain (realFn returns NaN) is recomputed
+ *  with complexFn. */
+export function unaryElemwise(
+  spec: UnaryElemwiseFns,
+  name: string
+): UnaryApply {
+  if (spec.maybeComplex)
+    return args =>
+      applyUnaryElemwiseMaybeComplex(
+        numericArg(args[0]),
+        spec.realFn,
+        spec.complexFn,
+        name,
+        spec.nativeOpCode
+      );
+  return args =>
+    applyUnaryElemwise(numericArg(args[0]), spec.realFn, spec.complexFn, name);
+}
+
+/** Unary element-wise function whose result is always real (abs, real,
+ *  imag, angle). */
+export function unaryRealResult(
+  realFn: (x: number) => number,
+  complexFn: (re: number, im: number) => number,
+  name: string
+): UnaryApply {
+  return args =>
+    applyUnaryRealResult(numericArg(args[0]), realFn, complexFn, name);
+}
+
+/** Element-wise numeric predicate (isnan, isinf, isfinite): a logical
+ *  scalar for scalar input, else a logical tensor of the input's shape. */
+export function unaryPredicate(
+  realTest: (x: number) => boolean,
+  complexTest: (re: number, im: number) => boolean
+): UnaryApply {
+  return args => {
+    let v = numericArg(args[0]);
+    if (isRuntimeSparseMatrix(v)) v = sparseToDense(v);
+    if (typeof v === "number") return realTest(v);
+    if (isRuntimeComplexNumber(v)) return complexTest(v.re, v.im);
+    const n = v.data.length;
+    const out = allocFloat64Array(n);
+    if (!v.imag) {
+      for (let i = 0; i < n; i++) out[i] = realTest(v.data[i]) ? 1 : 0;
+    } else {
+      for (let i = 0; i < n; i++)
+        out[i] = complexTest(v.data[i], v.imag[i]) ? 1 : 0;
+    }
+    const t = makeTensor(out, undefined, v.shape.slice());
+    t._isLogical = true;
+    return t;
+  };
+}
+
 /** Shorthand: build cases where all kinds return always-real output. */
 export function unaryRealResultCases(
   realFn: (x: number) => number,
@@ -854,67 +968,6 @@ export function unaryRealResultCases(
         ];
       },
       apply: applyFn,
-    },
-  ];
-}
-
-/** Build cases for numeric predicates (isnan, isinf, isfinite) that return logical. */
-export function predicateCases(
-  scalarTest: (x: number) => boolean,
-  complexTest: (re: number, im: number) => boolean,
-  tensorTest: (x: number) => boolean,
-  tensorComplexTest: (re: number, im: number) => boolean,
-  name: string
-): BuiltinCase[] {
-  return [
-    {
-      match: argTypes => {
-        if (argTypes.length !== 1) return null;
-        const k = argTypes[0].kind;
-        if (k === "number" || k === "boolean" || k === "complex_or_number")
-          return [{ kind: "boolean" }];
-        return null;
-      },
-      apply: args => {
-        const v = args[0];
-        if (typeof v === "boolean") return scalarTest(v ? 1 : 0);
-        if (typeof v === "number") return scalarTest(v);
-        if (isRuntimeComplexNumber(v)) return complexTest(v.re, v.im);
-        throw new Error(`${name}: unsupported argument type`);
-      },
-    },
-    {
-      match: argTypes => {
-        if (argTypes.length !== 1) return null;
-        const a = argTypes[0];
-        if (a.kind !== "tensor") return null;
-        return [
-          {
-            kind: "tensor" as const,
-            isComplex: false,
-            shape: a.shape,
-            ndim: a.ndim,
-            nonneg: true,
-            isLogical: true,
-          },
-        ];
-      },
-      apply: args => {
-        const v = args[0];
-        if (!isRuntimeTensor(v))
-          throw new Error(`${name}: unsupported argument type`);
-        const n = v.data.length;
-        const out = allocFloat64Array(n);
-        if (!v.imag) {
-          for (let i = 0; i < n; i++) out[i] = tensorTest(v.data[i]) ? 1 : 0;
-        } else {
-          for (let i = 0; i < n; i++)
-            out[i] = tensorComplexTest(v.data[i], v.imag[i]) ? 1 : 0;
-        }
-        const t = makeTensor(out, undefined, v.shape.slice());
-        t._isLogical = true;
-        return t;
-      },
     },
   ];
 }

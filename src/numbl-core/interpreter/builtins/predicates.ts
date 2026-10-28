@@ -10,21 +10,21 @@ import {
   isRuntimeStruct,
   isRuntimeStructArray,
   isRuntimeString,
+  isRuntimeStringArray,
   isRuntimeFunction,
 } from "../../runtime/types.js";
-import { defineBuiltin, predicateCases } from "./types.js";
+import { builtin } from "./builtin.js";
+import { unaryPredicate } from "./types.js";
 import { imagAllZero } from "../../helpers/effectively-real.js";
 
 // ── isnan ───────────────────────────────────────────────────────────────
 
-defineBuiltin({
+builtin({
   name: "isnan",
-  cases: predicateCases(
+  nargin: 1,
+  apply: unaryPredicate(
     Number.isNaN,
-    (re, im) => Number.isNaN(re) || Number.isNaN(im),
-    Number.isNaN,
-    (re, im) => Number.isNaN(re) || Number.isNaN(im),
-    "isnan"
+    (re, im) => Number.isNaN(re) || Number.isNaN(im)
   ),
 });
 
@@ -34,65 +34,47 @@ function isInfVal(x: number): boolean {
   return !isFinite(x) && !Number.isNaN(x);
 }
 
-defineBuiltin({
+builtin({
   name: "isinf",
-  cases: predicateCases(
-    isInfVal,
-    (re, im) => isInfVal(re) || isInfVal(im),
-    isInfVal,
-    (re, im) => isInfVal(re) || isInfVal(im),
-    "isinf"
-  ),
+  nargin: 1,
+  apply: unaryPredicate(isInfVal, (re, im) => isInfVal(re) || isInfVal(im)),
 });
 
 // ── isfinite ────────────────────────────────────────────────────────────
 
-defineBuiltin({
+builtin({
   name: "isfinite",
-  cases: predicateCases(
-    isFinite,
-    (re, im) => isFinite(re) && isFinite(im),
-    isFinite,
-    (re, im) => isFinite(re) && isFinite(im),
-    "isfinite"
-  ),
+  nargin: 1,
+  apply: unaryPredicate(isFinite, (re, im) => isFinite(re) && isFinite(im)),
 });
 
 // ── isreal ──────────────────────────────────────────────────────────────
 
-defineBuiltin({
+builtin({
   name: "isreal",
-  cases: [
-    {
-      match: argTypes => {
-        if (argTypes.length !== 1) return null;
-        const k = argTypes[0].kind;
-        if (k === "unknown") return null;
-        return [{ kind: "boolean" }];
-      },
-      apply: args => {
-        const v = args[0];
-        if (typeof v === "number") return true;
-        if (typeof v === "boolean") return true;
-        if (isRuntimeComplexNumber(v)) return v.im === 0;
-        // A complex tensor whose imaginary lane is entirely zero is real
-        // in value (consistent with the complex-scalar `v.im === 0` test
-        // above, and with the JIT, which routinely produces such tensors
-        // when it cannot prove realness at compile time).
-        if (isRuntimeTensor(v)) return imagAllZero(v.imag);
-        if (isRuntimeSparseMatrix(v)) return !v.pi || imagAllZero(v.pi);
-        // MATLAB: isreal is false for cells, structs, strings, and function
-        // handles. char and other numeric-ish values are real (fall through).
-        if (
-          isRuntimeCell(v) ||
-          isRuntimeStruct(v) ||
-          isRuntimeStructArray(v) ||
-          isRuntimeString(v) ||
-          isRuntimeFunction(v)
-        )
-          return false;
-        return true;
-      },
-    },
-  ],
+  nargin: 1,
+  apply: args => {
+    const v = args[0];
+    if (typeof v === "number") return true;
+    if (typeof v === "boolean") return true;
+    if (isRuntimeComplexNumber(v)) return v.im === 0;
+    // A complex tensor whose imaginary lane is entirely zero is real
+    // in value (consistent with the complex-scalar `v.im === 0` test
+    // above, and with the JIT, which routinely produces such tensors
+    // when it cannot prove realness at compile time).
+    if (isRuntimeTensor(v)) return imagAllZero(v.imag);
+    if (isRuntimeSparseMatrix(v)) return !v.pi || imagAllZero(v.pi);
+    // MATLAB: isreal is false for cells, structs, strings, and function
+    // handles. char and other numeric-ish values are real (fall through).
+    if (
+      isRuntimeCell(v) ||
+      isRuntimeStruct(v) ||
+      isRuntimeStructArray(v) ||
+      isRuntimeString(v) ||
+      isRuntimeStringArray(v) ||
+      isRuntimeFunction(v)
+    )
+      return false;
+    return true;
+  },
 });

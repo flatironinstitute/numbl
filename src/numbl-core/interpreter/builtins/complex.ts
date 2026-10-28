@@ -5,23 +5,19 @@
 import {
   isRuntimeComplexNumber,
   isRuntimeSparseMatrix,
-  isRuntimeTensor,
 } from "../../runtime/types.js";
 import { sparseToDense } from "../../helpers/sparse-arithmetic.js";
-import {
-  defineBuiltin,
-  unaryRealResultCases,
-  type BuiltinCase,
-  mkc,
-  makeTensor,
-} from "./types.js";
+import { builtin } from "./builtin.js";
+import { numericArg } from "./args.js";
+import { unaryRealResult, mkc, makeTensor } from "./types.js";
 import { allocFloat64Array } from "../../runtime/alloc.js";
 
 // ── real ────────────────────────────────────────────────────────────────
 
-defineBuiltin({
+builtin({
   name: "real",
-  cases: unaryRealResultCases(
+  nargin: 1,
+  apply: unaryRealResult(
     x => x,
     re => re,
     "real"
@@ -30,9 +26,10 @@ defineBuiltin({
 
 // ── imag ────────────────────────────────────────────────────────────────
 
-defineBuiltin({
+builtin({
   name: "imag",
-  cases: unaryRealResultCases(
+  nargin: 1,
+  apply: unaryRealResult(
     () => 0,
     (_re, im) => im,
     "imag"
@@ -41,89 +38,31 @@ defineBuiltin({
 
 // ── conj ────────────────────────────────────────────────────────────────
 
-const conjCases: BuiltinCase[] = [
-  {
-    match: argTypes => {
-      if (argTypes.length !== 1) return null;
-      const a = argTypes[0];
-      if (a.kind === "number" || a.kind === "boolean")
-        return [{ kind: "number" }];
-      return null;
-    },
-    apply: args => {
-      const v = args[0];
-      if (typeof v === "boolean") return v ? 1 : 0;
-      return v;
-    },
-  },
-  {
-    match: argTypes => {
-      if (argTypes.length !== 1) return null;
-      if (argTypes[0].kind !== "complex_or_number") return null;
-      return [{ kind: "complex_or_number" }];
-    },
-    apply: args => {
-      const v = args[0];
-      if (typeof v === "number") return v;
-      if (isRuntimeComplexNumber(v)) return mkc(v.re, -v.im);
-      throw new Error("conj: unsupported argument type");
-    },
-  },
-  {
-    match: argTypes => {
-      if (argTypes.length !== 1) return null;
-      const a = argTypes[0];
-      if (a.kind !== "tensor") return null;
-      return [
-        {
-          kind: "tensor",
-          isComplex: a.isComplex,
-          shape: a.shape,
-          ndim: a.ndim,
-        },
-      ];
-    },
-    apply: args => {
-      const v = args[0];
-      if (!isRuntimeTensor(v))
-        throw new Error("conj: unsupported argument type");
-      const n = v.data.length;
-      const outR = allocFloat64Array(n);
-      outR.set(v.data);
-      if (!v.imag) return makeTensor(outR, undefined, v.shape.slice());
-      const outI = allocFloat64Array(n);
-      for (let i = 0; i < n; i++) outI[i] = -v.imag[i];
-      return makeTensor(outR, outI, v.shape.slice());
-    },
-  },
-  {
-    match: argTypes => {
-      if (argTypes.length !== 1) return null;
-      const a = argTypes[0];
-      if (a.kind !== "sparse_matrix") return null;
-      const shape =
-        a.m !== undefined && a.n !== undefined ? [a.m, a.n] : undefined;
-      return [{ kind: "tensor", isComplex: a.isComplex, shape }];
-    },
-    apply: args => {
-      const v = args[0];
-      if (isRuntimeSparseMatrix(v))
-        return conjCases[2].apply([sparseToDense(v)], 1);
-      throw new Error("conj: unsupported argument type");
-    },
-  },
-];
-
-defineBuiltin({
+builtin({
   name: "conj",
-  cases: conjCases,
+  nargin: 1,
+  apply: args => {
+    let v = numericArg(args[0]);
+    if (typeof v === "number") return v;
+    if (isRuntimeComplexNumber(v)) return mkc(v.re, -v.im);
+    if (isRuntimeSparseMatrix(v)) v = sparseToDense(v);
+    const n = v.data.length;
+    const outR = allocFloat64Array(n);
+    outR.set(v.data);
+    if (!v.imag) return makeTensor(outR, undefined, v.shape.slice());
+    const outI = allocFloat64Array(n);
+    for (let i = 0; i < n; i++) outI[i] = -v.imag[i];
+    return makeTensor(outR, outI, v.shape.slice());
+  },
 });
 
 // ── angle ───────────────────────────────────────────────────────────────
 
-defineBuiltin({
+builtin({
   name: "angle",
-  cases: unaryRealResultCases(
+  nargin: 1,
+  mfile: true,
+  apply: unaryRealResult(
     x => (isNaN(x) ? NaN : x >= 0 ? 0 : Math.PI),
     (re, im) => Math.atan2(im, re),
     "angle"
