@@ -14,11 +14,9 @@ The execution pipeline is: Parse → AST-walk via the `Interpreter` class (`src/
 
 ### Interpreter builtins (IBuiltins)
 
-The interpreter has its own builtin system in `src/numbl-core/interpreter/builtins/`. These use the `IBuiltin` interface (`types.ts`) with:
+The interpreter has its own builtin system in `src/numbl-core/interpreter/builtins/`. New builtins are defined with `builtin({ name, nargin, nargout, help, apply })` (`builtin.ts`): an `apply` on runtime values plus explicit arity. Older files still use the legacy `IBuiltin.resolve(argTypes, nargout)` form (`defineBuiltin` cases with `match`/`apply`); these are being converted to `builtin()`. See "Adding builtins" below.
 
-- **`resolve(argTypes, nargout)`**: Given JIT type info for arguments, returns output types and a specialized `apply` function — or `null` to reject.
-
-(The JIT compiler does **not** emit through `IBuiltin`; it has its own builtin registry with `emitJs`/`emitC` hooks under `src/numbl-core/jit/builtins/`.)
+(The JIT compiler does **not** emit through `IBuiltin` and never reads interpreter builtin types; it has its own builtin registry with `emitJs`/`emitC` hooks under `src/numbl-core/jit/builtins/`.)
 
 The JIT sits on top of the interpreter as a registry of named executors (`src/numbl-core/executors/`). Each executor handles one shape (top-level / loop / call) with one backend (JS-JIT under `--opt 1`; C-JIT, then JS-JIT, under `--opt 2`, Node only). The executors call numbl's in-tree JIT compiler, a self-contained subsystem under `src/numbl-core/jit/` (lowering → IR → JS/C codegen, builtins, runtime snippets) with no external dependency. The registry lowers each unit once via the shared lowering pipeline (`executors/lowering.ts`) and tries the executors for its shape in registration order. See [developer_reference/executors.md](developer_reference/executors.md) for the registry design and [developer_reference/jit/overview.md](developer_reference/jit/overview.md) for JIT trigger points and `--opt` levels.
 
@@ -78,16 +76,26 @@ Do **not** run `npm run format` manually. Prettier runs automatically via a pre-
 
 ## Adding builtins
 
-New builtins go in `src/numbl-core/interpreter/builtins/`. Each file registers IBuiltins via `registerIBuiltin()` from `types.ts`. Key patterns:
+New builtins go in `src/numbl-core/interpreter/builtins/` and are defined with `builtin()` from `builtin.ts`:
 
-- `unaryElemwiseCases({ realFn, complexFn, maybeComplex }, name)` for unary element-wise math
-- `unaryRealResultCases(realFn, complexFn, name)` for unary functions that always return real (e.g., abs)
-- For two-argument scalar functions, build a case manually with `match: argTypes => binaryNumberOnly(argTypes)` and `apply: args => applyBinaryScalar(args, fn, name)`
-- Custom `match` / `apply` cases for anything more complex (shape-dependent, multi-output, etc.)
+```ts
+builtin({
+  name: "hypot",
+  help: { signatures: ["C = hypot(A, B)"], description: "..." },
+  nargin: 2, // exactly 2; or [min, max], max may be Infinity (default: any)
+  nargout: 1, // up to 1 output (the default); 0 marks a void builtin
+  apply: (args, nargout, ctx) => ..., // ctx.rt is the active Runtime
+});
+```
 
-New builtins should include inline `help` via the `help` field on `defineBuiltin`. See [adding-builtin-help.md](adding-builtin-help.md) for guidelines.
+- Arity is checked before `apply` runs, with MATLAB's messages and identifiers (`MATLAB:minrhs`, `MATLAB:maxrhs`, `MATLAB:maxlhs`; set `mfile: true` when MATLAB implements the function as an M-file, which switches to `MATLAB:TooManyInputs` / `MATLAB:TooManyOutputs`). `nargin(@name)` reports the max input count, or -1 when unbounded.
+- `apply` receives runtime values and must reject what it cannot handle. Use the helpers in `args.ts` (`numericArg`, `realNumericArg`, `realScalarArg`, `boolToNumber`, `builtinError`) rather than silently coercing; they raise MATLAB's errors (e.g. "Argument must be real." `MATLAB:math:mustBeReal`).
+- For unary element-wise math use `apply: unaryElemwise({ realFn, complexFn, maybeComplex }, name)`, `unaryRealResult(realFn, complexFn, name)` (always-real result, e.g. abs), or `unaryPredicate(realTest, complexTest)` (isnan-style), all in `types.ts`.
+- Return one value, or an array of values when `nargout > 1`. A void builtin's return value is discarded.
 
-Type rules must handle all relevant JitType kinds (`number`, `boolean`, `complex_or_number`, `tensor`, `string`, `char`, `struct`, `class_instance`, and others — see [developer_reference/compiler/type-system.md](developer_reference/compiler/type-system.md) for the full list). Return `null` for unsupported types to fall back to the interpreter.
+See `predicates.ts`, `logical.ts`, `complex.ts`, and `hash.ts` for converted examples. The legacy forms (`defineBuiltin` with `match`/`apply` cases, hand-written `resolve`) still work but should not be used for new code; their `outputTypes` are only used to detect void builtins.
+
+New builtins should include inline `help`. See [adding-builtin-help.md](adding-builtin-help.md) for guidelines.
 
 To make a builtin JIT-compilable, add a matching definition to the JIT compiler's own builtin set under `src/numbl-core/jit/builtins/defs/` (with `emitJs`/`emitC` hooks); a source builtin with no JIT counterpart simply runs on the interpreter.
 

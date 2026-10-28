@@ -43,7 +43,11 @@ export class RuntimeError extends Error {
   /** File sources for resolving source lines in call stack display */
   fileSources: Map<string, string> | null;
 
-  constructor(message: string, span?: Span | null) {
+  constructor(
+    message: string,
+    span?: Span | null,
+    options?: { identifier?: string }
+  ) {
     super(message);
     this.name = "RuntimeError";
     this.span = span ?? null;
@@ -52,7 +56,7 @@ export class RuntimeError extends Error {
     this.file = span?.file ?? null;
     this.snippet = null;
     this.callStack = null;
-    this.identifier = "";
+    this.identifier = options?.identifier ?? "";
     this.fileSources = null;
   }
 

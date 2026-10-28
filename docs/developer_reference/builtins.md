@@ -1,41 +1,31 @@
 # Builtins
 
-Built-in functions (numbl's `IBuiltin`s) are the implementations of MATLAB's non-language-level functions: arithmetic helpers, array construction, linear algebra, FFT, string ops, predicates, and so on. They live in a single in-process registry keyed by name.
+Built-in functions (numbl's `IBuiltin`s) are the implementations of MATLAB's non-language-level functions: arithmetic helpers, array construction, linear algebra, FFT, string ops, predicates, and so on. They live in a single in-process registry keyed by name (`interpreter/builtins/types.ts`).
 
-## Two complementary paths
+## Interpreter and JIT
 
-Each builtin is consulted in two ways:
+The interpreter calls a builtin on runtime values. The JIT compiler (`src/numbl-core/jit`) has its **own** builtin registry (`jit/builtins`), separate from the interpreter's table. Each JIT builtin carries a type-transfer rule plus `emitJs` / `emitC` hooks that synthesize inline JS / C for the lowered call; the same set drives both the `--opt 1` (JS) and `--opt 2` (C) backends. The JIT never reads interpreter builtin metadata. A source builtin with no JIT counterpart simply isn't lowered: the call declines and runs on the interpreter. This split lets a builtin have a general implementation while providing a tight fast path for common cases.
 
-1. **Interpreter path** — the interpreter calls `resolve(argTypes, nargout)`, receives a specialized `apply` function, and invokes it on the runtime values. This path always works.
-2. **JIT path** — the JIT compiler (`src/numbl-core/jit`) has its **own** builtin registry (`jit/builtins`), separate from the interpreter's `IBuiltin` table. Each JIT builtin carries a type-transfer rule plus `emitJs` / `emitC` hooks that synthesize inline JS / C for the lowered call; the same set drives both the `--opt 1` (JS) and `--opt 2` (C) backends. A source builtin with no JIT counterpart simply isn't lowered — the call declines and runs on the interpreter.
+## Defining a builtin
 
-This split lets a builtin have a sophisticated general implementation while providing a tight fast path for common cases.
-
-## Interface sketch
+Builtins are defined with `builtin(spec)` (`interpreter/builtins/builtin.ts`):
 
 - `name` — the function name as seen by user code.
-- `help` — structured metadata (signatures, description) surfaced by the `help` command. Required for user-facing builtins.
-- `resolve(argTypes, nargout)` — decides whether this builtin accepts the given argument types. Returns `{ outputTypes, apply }` on success or `null` to reject (falling back to the next lookup or erroring).
+- `help` — signatures and a description, surfaced by `help`. Required for user-facing builtins.
+- `nargin` — accepted input count: a number (exactly that many) or `[min, max]` (`max` may be `Infinity`). Default: any.
+- `nargout` — accepted output count: a number `n` (up to `n`, i.e. `[0, n]`) or `[min, max]`. Default 1. `nargout: 0` marks a void builtin: its result is discarded, `ans` is not set, and requesting an output errors.
+- `mfile` — set when MATLAB implements the function as an M-file; this only changes the "too many" error identifiers (below).
+- `apply(args, nargout, ctx)` — the implementation, on runtime values. It returns one value, or an array when `nargout > 1`. `ctx.name` is the builtin's name and `ctx.rt` the active `Runtime` (output, file I/O, figures, search path).
 
-(There is no JIT-emission hook on `IBuiltin`. The JIT compiler's builtins are a separate set under `src/numbl-core/jit/builtins/defs/`, each with its own `emitJs` / `emitC` hooks.)
+There are no argument-type rules. `apply` sees whatever values the caller passed and must reject what it cannot handle; `args.ts` provides coercion helpers that raise MATLAB's errors instead of silently dropping data (`numericArg`, `realNumericArg`, `realScalarArg`, `boolToNumber`, `builtinError`). For unary element-wise math, `types.ts` provides ready-made applies: `unaryElemwise`, `unaryRealResult`, and `unaryPredicate`.
 
-## Registration helpers
+Arity is checked before `apply` runs, using MATLAB's messages and identifiers: "Not enough input arguments." (`MATLAB:minrhs`), "Too many input arguments." (`MATLAB:maxrhs`, or `MATLAB:TooManyInputs` with `mfile`), "Too many output arguments." (`MATLAB:maxlhs`, or `MATLAB:TooManyOutputs` with `mfile`). `nargin(@name)` reports the maximum input count, or -1 when it is unbounded (MATLAB reports -1 for nearly all variadic builtins, e.g. `zeros`, `numel`, `fprintf`).
 
-Common patterns have shared helpers so a new builtin often needs only a few lines:
+`builtin()` produces an ordinary `IBuiltin` with a `direct` entry (the arity metadata and a `call` that checks arity and runs `apply`). All callers go through `callIBuiltin` (`types.ts`), which uses `direct` when present.
 
-- unary element-wise math (real-input, real-result or complex-if-needed);
-- unary real-result math (e.g., absolute value);
-- binary scalar functions.
+## Legacy form
 
-More complex builtins (multiple outputs, shape-dependent behavior, custom dispatch) implement `resolve` directly. To make a builtin JIT-compilable, add a matching definition (with `emitJs`/`emitC`) to the JIT compiler's builtin set under `src/numbl-core/jit/builtins/defs/`.
-
-## Type responsibilities
-
-`resolve` is responsible for:
-
-- rejecting types the builtin does not support (return `null`, letting the interpreter either error or try another path);
-- returning accurate output `JitType`s — the JIT propagates these to callers and will miscompile if they are wrong;
-- respecting integer, logical, complex, and shape refinements where possible, so downstream callers can be specialized too.
+Builtins not yet converted implement `resolve(argTypes, nargout)`, usually through `defineBuiltin({ name, cases: [{ match, apply }] })`. `callIBuiltin` infers a dispatch type for each argument, and the first case whose `match` accepts them runs; if none does, the call fails with "Builtin 'name' does not support these argument types". The returned `outputTypes` are only used to detect void builtins (an empty list); nothing else reads them. `nargin(@name)` for a legacy builtin is estimated by probing `resolve` with up to 10 arguments of a few kinds (the largest accepted count, or -1 when every count is accepted). New code should use `builtin()`.
 
 ## Builtins that need the runtime or the caller's scope
 

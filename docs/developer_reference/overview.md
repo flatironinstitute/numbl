@@ -44,7 +44,7 @@ A single entry point (the `executeCode` function) accepts source, options, and a
 - [runtime/values-and-tensors.md](runtime/values-and-tensors.md) — `RuntimeValue`, tensors, memory layout.
 - [runtime/refcount.md](runtime/refcount.md) — refcount-driven pool reclamation, slot ownership, transient scopes.
 - [runtime/native-addon.md](runtime/native-addon.md) — LAPACK/FFTW bindings and JS fallbacks.
-- [builtins.md](builtins.md) — the `IBuiltin` registry, resolution, JIT emission.
+- [builtins.md](builtins.md) — defining builtins with `builtin()`, arity and errors, the legacy `resolve` form.
 - [stdlib.md](stdlib.md) — `.m`-defined standard library and bundle generation.
 - [cli.md](cli.md) — CLI commands, options, environment variables.
 - [web-app.md](web-app.md) — browser IDE, worker, VFS, blocking input.

@@ -36,7 +36,7 @@ import { incref, decref } from "./refcount.js";
 import {
   getIBuiltin as _getIBuiltin,
   getIBuiltinNargin,
-  inferDispatchType as _inferDispatchType,
+  callIBuiltin,
 } from "../interpreter/builtins/index.js";
 import { COLON_SENTINEL } from "./sentinels.js";
 import {
@@ -72,25 +72,10 @@ export function invokeBuiltin(
   const ib = _getIBuiltin(name);
   if (!ib) return NOT_A_BUILTIN;
   const margs = args.map(a => ensureRuntimeValue(a));
-  const argTypes = margs.map(_inferDispatchType);
-  const resolution = ib.resolve(argTypes, nargout);
-  if (!resolution) {
-    throw new RuntimeError(
-      `Builtin '${name}' does not support these argument types: (${argTypes.map(t => t.kind).join(", ")})`
-    );
-  }
-  const isVoid = resolution.outputTypes.length === 0;
-  if (isVoid && nargout > 0) {
-    throw new RuntimeError("Too many output arguments.");
-  }
-  if (!rt.profilingEnabled) {
-    const result = resolution.apply(margs, nargout);
-    return isVoid ? undefined : result;
-  }
+  if (!rt.profilingEnabled) return callIBuiltin(ib, margs, nargout);
   rt.profileEnter("builtin:interp:" + name);
   try {
-    const result = resolution.apply(margs, nargout);
-    return isVoid ? undefined : result;
+    return callIBuiltin(ib, margs, nargout);
   } finally {
     rt.profileLeave();
   }

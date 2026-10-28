@@ -23,20 +23,21 @@ There are two ways, depending on whether you're adding a new builtin or document
 
 ### New builtins (preferred)
 
-Pass `help` inline when calling `defineBuiltin`:
+Pass `help` inline when calling `builtin`:
 
 ```typescript
-defineBuiltin({
+builtin({
   name: "myFunc",
   help: {
     signatures: ["Y = myFunc(X)", "Y = myFunc(X, N)"],
     description: "Does something useful, element-wise.",
   },
-  cases: [...],
+  nargin: [1, 2],
+  apply: args => ...,
 });
 ```
 
-This also works with `registerIBuiltin` via the `help` field on `IBuiltin`.
+This also works with the legacy `defineBuiltin` and `registerIBuiltin` via the `help` field on `IBuiltin`.
 
 ### Existing builtins (bulk)
 
@@ -55,7 +56,7 @@ This file uses `registerBuiltinHelp()` to populate a separate help registry that
 
 ### Signatures
 
-- List every supported calling form. Check the actual `match` functions in the implementation -- don't guess.
+- List every supported calling form. Check the implementation (`nargin` and `apply`, or `match` for legacy builtins) -- don't guess.
 - Use the conventional output variable names: `Y` for general output, `TF` for logical, `[M, I]` for value+index, etc.
 - Include multi-output forms: `[U, S, V] = svd(A)`.
 - Include optional arguments as separate signatures rather than brackets: write two lines `sort(A)` and `sort(A, DIM)` instead of `sort(A [, DIM])`.
@@ -72,7 +73,7 @@ This file uses `registerBuiltinHelp()` to populate a separate help registry that
 
 Before submitting, verify each entry against the source:
 
-1. Read the `match` function to confirm which argument patterns are accepted.
+1. Read the `nargin` metadata and `apply` (or the legacy `match` functions) to confirm which argument patterns are accepted.
 2. Read the `apply` function to confirm behavior (return types, special cases).
 3. Test with `npx tsx src/cli.ts eval "help myFunc"` to check formatting.
 
