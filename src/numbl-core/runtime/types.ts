@@ -387,6 +387,12 @@ export class RuntimeClassInstance extends Refcounted {
    *  this instance is an enumeration member and `_builtinData` holds its
    *  underlying (superclass) value. Drives ==/~=, switch, and char coercion. */
   _enumMember: string | undefined;
+  /** A handle object that was deleted (`delete(h)`): its properties can no
+   *  longer be used. */
+  _deleted = false;
+  /** Run when the last reference to the object goes away (used to remove
+   *  a `listener(...)` object from its sources). */
+  _onDestroy: (() => void) | undefined;
 
   constructor(
     className: string,
@@ -428,6 +434,7 @@ export class RuntimeClassInstance extends Refcounted {
   }
 
   protected _destroy(rt: RefcountRuntime): void {
+    this._onDestroy?.();
     for (const v of this.fields.values()) decref(rt, v);
     if (this._builtinData !== undefined) decref(rt, this._builtinData);
   }

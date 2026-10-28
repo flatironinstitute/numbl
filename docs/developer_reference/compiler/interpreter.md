@@ -25,6 +25,7 @@ The `Interpreter` class holds state only. The evaluation code is in modules of p
 | `callConvention.ts`     | binding inputs, running a body in a new frame, collecting outputs; nested functions            |
 | `oop.ts`                | instantiation, constructors, superclass calls, class methods, enumerations, Constant props     |
 | `metaClass.ts`          | `?Name` and `metaclass`: meta.class objects                                                    |
+| `events.ts`             | events and listeners: `addlistener`, `notify`, property events, deleting handle objects        |
 | `argumentsBlock.ts`     | `arguments` blocks: binding and validating inputs (positional, repeating, name-value), outputs |
 | `valueValidation.ts`    | size/class/validator checks shared by `arguments` blocks and property declarations             |
 | `propertyValidation.ts` | classdef property declarations, applied to defaults and assignments                            |

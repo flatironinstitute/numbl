@@ -10,7 +10,12 @@ import {
   toString,
   RuntimeError,
 } from "../../runtime/index.js";
-import { isRuntimeCell, isRuntimeGraphicsHandle } from "../../runtime/types.js";
+import {
+  isRuntimeCell,
+  isRuntimeClassInstance,
+  isRuntimeClassInstanceArray,
+  isRuntimeGraphicsHandle,
+} from "../../runtime/types.js";
 import type { Runtime } from "../../runtime/runtime.js";
 import type { FileIOAdapter } from "../../fileIOAdapter.js";
 import { builtin } from "./builtin.js";
@@ -82,6 +87,21 @@ builtin({
         if (instr) {
           const idx = rt.plotInstructions.indexOf(instr as never);
           if (idx >= 0) rt.plotInstructions.splice(idx, 1);
+        }
+        continue;
+      }
+      // delete(h): delete handle objects.
+      if (isRuntimeClassInstance(arg) || isRuntimeClassInstanceArray(arg)) {
+        const objs = isRuntimeClassInstance(arg) ? [arg] : arg.elements;
+        for (const obj of objs) {
+          if (!obj.isHandleClass)
+            throw new RuntimeError(
+              `Undefined function 'delete' for input arguments of type '${obj.className}'.`,
+              null,
+              { identifier: "MATLAB:UndefinedFunction" }
+            );
+          if (rt.deleteHandle) rt.deleteHandle(obj);
+          else obj._deleted = true;
         }
         continue;
       }

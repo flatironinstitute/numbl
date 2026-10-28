@@ -12,6 +12,7 @@ import "./logical.js";
 import "./utility.js";
 import "./mexception.js";
 import "./introspection.js";
+import "./events.js";
 import "./array-construction.js";
 import "./reductions.js";
 import "./strings.js";

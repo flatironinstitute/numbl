@@ -692,7 +692,8 @@ function nameColumns(names: string[], width: number): string {
 }
 
 // methods(obj) / methods('ClassName'): the public, non-hidden methods,
-// sorted; listed in columns without an output, static methods separately.
+// sorted; listed in columns without an output, static methods separately
+// and the methods a handle class inherits from `handle` left out.
 builtin({
   name: "methods",
   nargin: 1,
@@ -708,8 +709,11 @@ builtin({
       );
     if (!found || !className) return undefined;
     const statics = scope.classStaticMethods(className);
-    const width = Math.max(...names.map(n => n.length)) + 2;
-    const regular = names.filter(n => !statics.has(n));
+    // The inherited methods of `handle` are not displayed, but referred to.
+    const inherited = scope.inheritedHandleMethods(className);
+    const shown = names.filter(n => !inherited.has(n));
+    const width = Math.max(...shown.map(n => n.length)) + 2;
+    const regular = shown.filter(n => !statics.has(n));
     let text =
       `\nMethods for class ${className}:\n\n` +
       nameColumns(regular, width) +
@@ -718,10 +722,12 @@ builtin({
       text +=
         "Static methods:\n\n" +
         nameColumns(
-          names.filter(n => statics.has(n)),
+          shown.filter(n => statics.has(n)),
           width
         ) +
         "\n";
+    if (inherited.size > 0)
+      text += `Call "methods('handle')" for methods of ${className} inherited from handle.\n\n`;
     rt.output(text);
     return undefined;
   },

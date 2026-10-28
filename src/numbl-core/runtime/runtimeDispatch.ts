@@ -51,6 +51,7 @@ import { ensureRuntimeValue } from "./runtimeHelpers.js";
 import type { Runtime } from "./runtime.js";
 import { allocFloat64Array } from "./alloc.js";
 import { readableProperty } from "./runtimeMemberAccess.js";
+import { invalidHandleError } from "./classAccess.js";
 import { coerceToTensor } from "../helpers/shape-utils.js";
 
 // ── Builtin invocation ──────────────────────────────────────────────────
@@ -403,6 +404,7 @@ export function methodDispatch(
         // A property the running code may not read goes to an overloaded
         // subsref (below), or raises MATLAB's access error.
         const prop = readableProperty(rt, firstRV.className, name);
+        if (firstRV._deleted && prop) throw invalidHandleError();
         if (prop !== "subsref" && prop?.constant) {
           const value = rt.constantPropertyValue!(prop);
           const remaining = args.slice(1);

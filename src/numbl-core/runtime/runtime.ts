@@ -333,6 +333,25 @@ export class Runtime {
     | ((className: string, name: string, value: RuntimeValue) => RuntimeValue)
     | null = null;
 
+  /** Trigger a property event (PreSet/PostSet of a SetObservable property,
+   *  PreGet/PostGet of a GetObservable one) on a handle object (set by the
+   *  interpreter). */
+  public propertyEvent:
+    | ((
+        obj: RuntimeClassInstance,
+        prop: PropertyInfo,
+        event: "PreSet" | "PostSet" | "PreGet" | "PostGet"
+      ) => void)
+    | null = null;
+
+  /** Delete a handle object: `delete(h)` on a class without a delete
+   *  method (set by the interpreter). */
+  public deleteHandle: ((obj: RuntimeClassInstance) => void) | null = null;
+
+  /** Whether a handle object is valid: not deleted nor being deleted (set
+   *  by the interpreter). */
+  public isValidHandle: ((obj: RuntimeClassInstance) => boolean) | null = null;
+
   // Resolves a function called by name (`dispatch`) from the running code's
   // scope; with `targetClassName`, the method of that class. Set by
   // Interpreter.installRuntimeCallbacks(). Returns a callable taking

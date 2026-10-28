@@ -6,6 +6,7 @@
 import {
   HANDLE_BASE_CLASSES,
   type ClassInfo,
+  type EventInfo,
   type MemberAccess,
   type MethodInfo,
   type PropertyInfo,
@@ -28,6 +29,16 @@ export const HANDLE_CLASS_METHODS = [
   "notify",
 ];
 
+/** The event every handle class inherits from `handle`, triggered when an
+ *  object is deleted. */
+export const OBJECT_BEING_DESTROYED: EventInfo = {
+  name: "ObjectBeingDestroyed",
+  definingClass: "handle",
+  listenAccess: "public",
+  notifyAccess: "private",
+  hidden: false,
+};
+
 export class ClassTable {
   /** Workspace classes: qualified name → ClassInfo. */
   readonly workspaceClasses = new Map<string, ClassInfo>();
@@ -38,6 +49,7 @@ export class ClassTable {
   /** Member lookups by "class\0member", cleared when the table changes. */
   private readonly propertyCache = new Map<string, PropertyInfo | null>();
   private readonly methodCache = new Map<string, MethodInfo | null>();
+  private readonly eventsCache = new Map<string, EventInfo[]>();
 
   /** Register a workspace class. First wins: earlier search paths take
    *  priority, as for workspace functions. */
@@ -61,6 +73,7 @@ export class ClassTable {
   private clearMemberCaches(): void {
     this.propertyCache.clear();
     this.methodCache.clear();
+    this.eventsCache.clear();
   }
 
   /** Workspace classes, then main-file classes. */
@@ -210,6 +223,36 @@ export class ClassTable {
       this.methodCache.set(key, found);
     }
     return found ?? undefined;
+  }
+
+  /** The declaration of event `name` that instances of `className` see
+   *  (own, else inherited; `ObjectBeingDestroyed` for a handle class).
+   *  Undefined for an unknown class or event. */
+  findEvent(className: string, name: string): EventInfo | undefined {
+    return this.allEvents(className).find(e => e.name === name);
+  }
+
+  /** All events of `className`: its own, then inherited ones in
+   *  method-resolution order, then `ObjectBeingDestroyed` for a handle
+   *  class (MATLAB's order). */
+  allEvents(className: string): EventInfo[] {
+    const cached = this.eventsCache.get(className);
+    if (cached) return cached;
+    const info = this.get(className);
+    if (!info) return [];
+    const out: EventInfo[] = [];
+    const seen = new Set<string>();
+    for (const c of this.lineage(info)) {
+      for (const e of c.events.values()) {
+        if (seen.has(e.name)) continue;
+        seen.add(e.name);
+        out.push(e);
+      }
+    }
+    if (this.isHandleClass(info) && !seen.has(OBJECT_BEING_DESTROYED.name))
+      out.push(OBJECT_BEING_DESTROYED);
+    this.eventsCache.set(className, out);
+    return out;
   }
 
   /** Whether code of class `context` (undefined: code outside any class)

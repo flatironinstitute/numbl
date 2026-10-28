@@ -26,9 +26,11 @@ import {
   classPublicMethods,
   classPublicProperties,
   classStaticMethods,
+  inheritedHandleMethods,
 } from "./oop.js";
 import { metaClassFor } from "./metaClass.js";
 import { strToFunc } from "./handles.js";
+import { createListeners, listedEvents, notifyEvent } from "./events.js";
 
 /** The value(s) of evaluated text: undefined when it ran as statements. */
 type EvalResult = RuntimeValue | RuntimeValue[] | undefined;
@@ -87,10 +89,23 @@ export interface CallerScope {
   classPublicMethods: (className: string) => Set<string> | undefined;
   /** The static ones among a classdef class's public methods. */
   classStaticMethods: (className: string) => Set<string>;
+  /** The methods of `handle` a handle class inherits without redefining. */
+  inheritedHandleMethods: (className: string) => Set<string>;
   /** The meta.class object describing a class (`?Name`, `metaclass`). */
   metaClass: (className: string) => RuntimeValue;
   /** A function handle from text (`str2func`). */
   str2func: (text: string) => RuntimeValue;
+  /** `addlistener` (tied to the sources) or `listener`: see
+   *  `createListeners`. */
+  addListener: (
+    args: RuntimeValue[],
+    tied: boolean,
+    fn: string
+  ) => RuntimeValue;
+  /** `notify(src, EventName[, eventData])`. */
+  notify: (args: RuntimeValue[]) => void;
+  /** The events `events(obj)` lists, or undefined for an unknown class. */
+  classEvents: (className: string) => string[] | undefined;
 }
 
 const scopes = new WeakMap<Interpreter, CallerScope>();
@@ -149,8 +164,13 @@ export function callerScope(interp: Interpreter): CallerScope {
     classPublicProperties: n => classPublicProperties(interp, n),
     classPublicMethods: n => classPublicMethods(interp, n),
     classStaticMethods: n => classStaticMethods(interp, n),
+    inheritedHandleMethods: n => inheritedHandleMethods(interp, n),
     metaClass: n => metaClassFor(interp, n),
     str2func: text => strToFunc(interp, text),
+    addListener: (args, tied, fn) => createListeners(interp, args, tied, fn),
+    notify: args => notifyEvent(interp, args),
+    classEvents: n =>
+      interp.code.classes.get(n) ? listedEvents(interp, n) : undefined,
   };
   scopes.set(interp, scope);
   return scope;

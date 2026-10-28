@@ -335,6 +335,7 @@ function formatClassInstance(v: RuntimeClassInstance): string {
   if (MEXCEPTION_PROPERTIES.every(p => v.fields.has(p))) {
     return formatPropertyList(v);
   }
+  if (v._deleted) return `  handle to deleted ${v.className}`;
   const lines: string[] = [`  ${v.className} with properties:\n`];
   // A classdef object shows its public, non-hidden properties (Constant
   // and Dependent ones included), then any dynamic properties.

@@ -24,7 +24,8 @@
 
 import type { AbstractSyntaxTree, Stmt } from "../parser/types.js";
 import type { Runtime } from "../runtime/runtime.js";
-import type { RuntimeValue } from "../runtime/types.js";
+import type { RuntimeClassInstance, RuntimeValue } from "../runtime/types.js";
+import type { PropertyInfo } from "../workspace/classInfo.js";
 import type { CodeIndex } from "../workspace/codeIndex.js";
 import type { FunctionIndex } from "../workspace/functionIndex.js";
 import {
@@ -44,8 +45,15 @@ import { callResolved, interpretTarget } from "./calls.js";
 import { callerScope } from "./callerScope.js";
 import { callBody } from "./callConvention.js";
 import { MEXCEPTION_CLASS } from "../runtime/mexception.js";
+import { HANDLE_CLASS_METHODS } from "../workspace/classTable.js";
 import { constantPropertyValue } from "./oop.js";
 import { META_CLASS_ALIASES } from "./metaClass.js";
+import {
+  EventRegistry,
+  destroyHandle,
+  isValid,
+  propertyEvent,
+} from "./events.js";
 
 // ── Interpreter ──────────────────────────────────────────────────────────
 
@@ -114,6 +122,10 @@ export class Interpreter {
   readonly constantsInProgress = new Set<string>();
   /** @internal meta.class objects by class name (`?Name`, `metaclass`). */
   readonly metaClasses = new Map<string, RuntimeValue>();
+  /** @internal meta.property objects by property (`metaPropertyFor`). */
+  readonly metaProperties = new Map<PropertyInfo, RuntimeClassInstance>();
+  /** @internal Event listeners by source object (`events.ts`). */
+  readonly events = new EventRegistry();
 
   /** @internal Pre-built line break tables for offset→line lookup per file. */
   lineTableCache = new Map<string, number[]>();
@@ -266,16 +278,26 @@ export class Interpreter {
 
     this.rt.validateProperty = (className, name, value) =>
       validatePropertyValue(this, className, name, value);
+
+    this.rt.propertyEvent = (obj, prop, event) =>
+      propertyEvent(this, obj, prop, event);
+    this.rt.deleteHandle = obj => void destroyHandle(this, obj);
+    this.rt.isValidHandle = obj => isValid(this, obj);
   }
 
   /** False when a call `obj.name(...)` on an instance of `className` is not
-   *  a classdef method: the class has no classdef (a built-in class) or
-   *  derives from MException and no class in its lineage defines `name`. */
+   *  a classdef method: the class has no classdef (a built-in class), or no
+   *  class in its lineage defines `name` and the class derives from
+   *  MException or `name` is a method of `handle` (`notify`, `delete`,
+   *  ...), which are builtins. */
   private classDefinesMethod(className: string, name: string): boolean {
     const classes = this.code.classes;
     const info = classes.get(className);
     if (!info) return false;
-    if (!classes.ancestors(className).includes(MEXCEPTION_CLASS)) return true;
+    const maybeBuiltin =
+      classes.ancestors(className).includes(MEXCEPTION_CLASS) ||
+      (HANDLE_CLASS_METHODS.includes(name) && classes.isHandleClass(info));
+    if (!maybeBuiltin) return true;
     return classes
       .lineage(info)
       .some(

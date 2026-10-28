@@ -16,11 +16,15 @@ import { incref } from "../runtime/refcount.js";
 import { allocFloat64Array } from "../runtime/alloc.js";
 import type {
   ClassInfo,
+  EventInfo,
   MemberAccess,
   MethodInfo,
   PropertyInfo,
 } from "../workspace/classInfo.js";
-import { HANDLE_CLASS_METHODS } from "../workspace/classTable.js";
+import {
+  HANDLE_CLASS_METHODS,
+  OBJECT_BEING_DESTROYED,
+} from "../workspace/classTable.js";
 import {
   MEXCEPTION_CLASS,
   MEXCEPTION_PROPERTIES,
@@ -33,6 +37,7 @@ const CLASS = "matlab.metadata.Class";
 const PROPERTY = "matlab.metadata.Property";
 const METHOD = "matlab.metadata.Method";
 const ENUM_VALUE = "matlab.metadata.EnumeratedValue";
+const EVENT = "matlab.metadata.Event";
 
 /** Ancestors of the meta classes, for `isa` (`meta.class` is an alias). */
 export const META_CLASS_ALIASES: Record<string, string[]> = {
@@ -40,6 +45,7 @@ export const META_CLASS_ALIASES: Record<string, string[]> = {
   [PROPERTY]: ["meta.property", "handle"],
   [METHOD]: ["meta.method", "handle"],
   [ENUM_VALUE]: ["meta.EnumeratedValue", "handle"],
+  [EVENT]: ["meta.event", "handle"],
 };
 
 /** Built-in classes `?Name` describes (with no members). */
@@ -158,6 +164,13 @@ function fillBuiltinClass(
         ),
       ],
       ["MethodList", objectList(METHOD, methods)],
+      [
+        "EventList",
+        objectList(
+          EVENT,
+          handle ? [eventMeta(interp, OBJECT_BEING_DESTROYED, obj)] : []
+        ),
+      ],
       ["EnumerationMemberList", objectList(ENUM_VALUE, [])],
       ["SuperclassList", objectList(CLASS, [])],
     ],
@@ -215,7 +228,23 @@ function fillClass(
         !restricted(p.getAccess) ||
         !restricted(p.setAccess)
     )
-    .map(p => propertyMeta(interp, p));
+    .map(p => metaPropertyFor(interp, p));
+  // Likewise a superclass's events that only it may listen to and notify.
+  const events = table
+    .allEvents(name)
+    .filter(
+      e =>
+        e.definingClass === name ||
+        !restricted(e.listenAccess) ||
+        !restricted(e.notifyAccess)
+    )
+    .map(e =>
+      eventMeta(
+        interp,
+        e,
+        e.definingClass === name ? obj : metaClassFor(interp, e.definingClass)
+      )
+    );
   const enumMembers = (info.enumMembers ?? []).map(m =>
     metaObject(interp, ENUM_VALUE, [
       ["Name", RTV.char(m.name)],
@@ -247,6 +276,7 @@ function fillClass(
       ["RestrictsSubclassing", RTV.logical(false)],
       ["PropertyList", objectList(PROPERTY, properties)],
       ["MethodList", objectList(METHOD, methodMetas(interp, info, obj))],
+      ["EventList", objectList(EVENT, events)],
       ["EnumerationMemberList", objectList(ENUM_VALUE, enumMembers)],
       [
         "SuperclassList",
@@ -258,6 +288,24 @@ function fillClass(
     ],
     obj
   );
+}
+
+/** The meta.property object describing a property, one per property and
+ *  run (as `PropertyList` and a property event's `Source` hold it). */
+export function metaPropertyFor(
+  interp: Interpreter,
+  p: PropertyInfo
+): RuntimeClassInstance {
+  let cached = interp.metaProperties.get(p);
+  if (cached) return cached;
+  // Describing the defining class describes its properties.
+  metaClassFor(interp, p.definingClass);
+  cached = interp.metaProperties.get(p);
+  if (cached) return cached;
+  const obj = propertyMeta(interp, p);
+  incref(obj);
+  interp.metaProperties.set(p, obj);
+  return obj;
 }
 
 function propertyMeta(
@@ -276,8 +324,8 @@ function propertyMeta(
     ["Abstract", RTV.logical(p.abstract)],
     ["Transient", RTV.logical(p.transient)],
     ["Hidden", RTV.logical(p.hidden)],
-    ["GetObservable", RTV.logical(false)],
-    ["SetObservable", RTV.logical(false)],
+    ["GetObservable", RTV.logical(p.getObservable)],
+    ["SetObservable", RTV.logical(p.setObservable)],
     ["AbortSet", RTV.logical(false)],
     ["NonCopyable", RTV.logical(false)],
     ["HasDefault", RTV.logical(value !== undefined)],
@@ -287,6 +335,22 @@ function propertyMeta(
     ["GetMethod", EMPTY()],
     ["SetMethod", EMPTY()],
     ["DefiningClass", metaClassFor(interp, p.definingClass)],
+  ]);
+}
+
+function eventMeta(
+  interp: Interpreter,
+  e: EventInfo,
+  definingClass: RuntimeValue
+): RuntimeClassInstance {
+  return metaObject(interp, EVENT, [
+    ["Name", RTV.char(e.name)],
+    ["Description", RTV.char("")],
+    ["DetailedDescription", RTV.char("")],
+    ["Hidden", RTV.logical(e.hidden)],
+    ["NotifyAccess", accessValue(interp, e.notifyAccess)],
+    ["ListenAccess", accessValue(interp, e.listenAccess)],
+    ["DefiningClass", definingClass],
   ]);
 }
 
