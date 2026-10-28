@@ -33,11 +33,17 @@ import {
   RuntimeClassInstance,
   isRuntimeChar,
   isRuntimeClassInstance,
+  isRuntimeComplexNumber,
+  isRuntimeLogical,
+  isRuntimeNumber,
   isRuntimeString,
+  isRuntimeTensor,
 } from "../../runtime/types.js";
 import { RTV, RuntimeError } from "../../runtime/index.js";
 import { toNumber, toString } from "../../runtime/convert.js";
-import { registerIBuiltin } from "./types.js";
+import { builtin } from "./builtin.js";
+import { builtinError } from "./args.js";
+import { unsupportedFormError } from "./text-args.js";
 
 // MATLAB serial date number for Jan 1, 1970 00:00:00 UTC.
 const MATLAB_EPOCH_DAYS = 719529;
@@ -195,7 +201,7 @@ function isDuration(v: RuntimeValue): v is RuntimeClassInstance {
 
 // ── datetime constructor ───────────────────────────────────────────────────
 
-registerIBuiltin({
+builtin({
   name: "datetime",
   help: {
     signatures: [
@@ -212,119 +218,111 @@ registerIBuiltin({
       "(only '', 'local', 'UTC') and 'Format' name-value pairs are " +
       "supported; the Format pattern is used by char() and display.",
   },
-  resolve: () => ({
-    outputTypes: [
-      {
-        kind: "class_instance",
-        className: "datetime",
-        isHandleClass: false,
-        fields: {},
-      },
-    ],
-    apply: args => {
-      // Split off trailing 'TimeZone'/'Format' name-value pairs (any order).
-      let timeZone: string | undefined;
-      let format: string | undefined;
-      let positional = args;
-      while (positional.length >= 2) {
-        const name = argToString(positional[positional.length - 2]);
-        if (name === null) break;
-        const lc = name.toLowerCase();
-        if (lc !== "timezone" && lc !== "format") break;
-        const value = argToString(positional[positional.length - 1]);
-        if (value === null)
-          throw new RuntimeError(`datetime: ${name} value must be text`);
-        if (lc === "timezone") timeZone = value;
-        else format = value;
-        positional = positional.slice(0, -2);
-      }
-      const tzLc = timeZone?.toLowerCase();
-      if (
-        tzLc !== undefined &&
-        tzLc !== "" &&
-        tzLc !== "local" &&
-        tzLc !== "utc"
-      ) {
-        throw new RuntimeError(
-          `datetime: unsupported TimeZone '${timeZone}' (supported: '', 'local', 'UTC')`
-        );
-      }
-      // With TimeZone 'UTC', current-time forms use UTC calendar components.
-      const utc = tzLc === "utc";
-      const finish = (dt: RuntimeClassInstance) =>
-        withTimeZoneFormat(dt, timeZone, format);
-
-      if (positional.length === 0) {
-        return finish(
-          utc ? datetimeFromUtcMs(Date.now()) : datetimeFromDate(new Date())
-        );
-      }
-
-      // datetime('now' | 'today' | 'yesterday' | 'tomorrow')
-      if (positional.length === 1) {
-        const s = argToString(positional[0]);
-        if (s !== null) {
-          const lc = s.toLowerCase();
-          if (lc === "now") {
-            return finish(
-              utc ? datetimeFromUtcMs(Date.now()) : datetimeFromDate(new Date())
-            );
-          }
-          if (lc === "today" || lc === "yesterday" || lc === "tomorrow") {
-            const offset = lc === "tomorrow" ? 1 : lc === "yesterday" ? -1 : 0;
-            const [Y, M, D] = todayParts(offset, utc);
-            return finish(makeDatetime(Y, M, D, 0, 0, 0));
-          }
-          throw new RuntimeError(
-            `datetime: unrecognized relative-day string '${s}'`
-          );
-        }
-      }
-
-      // datetime(X, 'ConvertFrom', dateType)
-      if (positional.length === 3) {
-        const flag = argToString(positional[1]);
-        const kind = argToString(positional[2]);
-        if (flag !== null && flag.toLowerCase() === "convertfrom") {
-          if (kind === null)
-            throw new RuntimeError("datetime: dateType must be text");
-          const x = toNumber(positional[0]);
-          const k = kind.toLowerCase();
-          if (k === "datenum") return finish(datetimeFromDatenum(x));
-          if (k === "posixtime") return finish(datetimeFromUtcMs(x * 1000));
-          if (k === "excel") {
-            return finish(datetimeFromUtcMs((x - 25569) * 86400000));
-          }
-          if (k === "excel1904") {
-            return finish(datetimeFromUtcMs((x - 24107) * 86400000));
-          }
-          throw new RuntimeError(
-            `datetime: unsupported ConvertFrom type '${kind}'`
-          );
-        }
-      }
-
-      // datetime(Y, M, D [, H, MI, S [, MS]])
-      if (
-        positional.length === 3 ||
-        positional.length === 6 ||
-        positional.length === 7
-      ) {
-        const Y = toNumber(positional[0]);
-        const M = toNumber(positional[1]);
-        const D = toNumber(positional[2]);
-        const H = positional.length >= 6 ? toNumber(positional[3]) : 0;
-        const MI = positional.length >= 6 ? toNumber(positional[4]) : 0;
-        const S = positional.length >= 6 ? toNumber(positional[5]) : 0;
-        const MS = positional.length >= 7 ? toNumber(positional[6]) : 0;
-        return finish(makeDatetime(Y, M, D, H, MI, S + MS / 1000));
-      }
-
+  nargin: [0, Infinity],
+  mfile: true,
+  apply: args => {
+    // Split off trailing 'TimeZone'/'Format' name-value pairs (any order).
+    let timeZone: string | undefined;
+    let format: string | undefined;
+    let positional = args;
+    while (positional.length >= 2) {
+      const name = argToString(positional[positional.length - 2]);
+      if (name === null) break;
+      const lc = name.toLowerCase();
+      if (lc !== "timezone" && lc !== "format") break;
+      const value = argToString(positional[positional.length - 1]);
+      if (value === null)
+        throw new RuntimeError(`datetime: ${name} value must be text`);
+      if (lc === "timezone") timeZone = value;
+      else format = value;
+      positional = positional.slice(0, -2);
+    }
+    const tzLc = timeZone?.toLowerCase();
+    if (
+      tzLc !== undefined &&
+      tzLc !== "" &&
+      tzLc !== "local" &&
+      tzLc !== "utc"
+    ) {
       throw new RuntimeError(
-        `datetime: unsupported argument pattern (nargin=${args.length})`
+        `datetime: unsupported TimeZone '${timeZone}' (supported: '', 'local', 'UTC')`
       );
-    },
-  }),
+    }
+    // With TimeZone 'UTC', current-time forms use UTC calendar components.
+    const utc = tzLc === "utc";
+    const finish = (dt: RuntimeClassInstance) =>
+      withTimeZoneFormat(dt, timeZone, format);
+
+    if (positional.length === 0) {
+      return finish(
+        utc ? datetimeFromUtcMs(Date.now()) : datetimeFromDate(new Date())
+      );
+    }
+
+    // datetime('now' | 'today' | 'yesterday' | 'tomorrow')
+    if (positional.length === 1) {
+      const s = argToString(positional[0]);
+      if (s !== null) {
+        const lc = s.toLowerCase();
+        if (lc === "now") {
+          return finish(
+            utc ? datetimeFromUtcMs(Date.now()) : datetimeFromDate(new Date())
+          );
+        }
+        if (lc === "today" || lc === "yesterday" || lc === "tomorrow") {
+          const offset = lc === "tomorrow" ? 1 : lc === "yesterday" ? -1 : 0;
+          const [Y, M, D] = todayParts(offset, utc);
+          return finish(makeDatetime(Y, M, D, 0, 0, 0));
+        }
+        throw new RuntimeError(
+          `datetime: unrecognized relative-day string '${s}'`
+        );
+      }
+    }
+
+    // datetime(X, 'ConvertFrom', dateType)
+    if (positional.length === 3) {
+      const flag = argToString(positional[1]);
+      const kind = argToString(positional[2]);
+      if (flag !== null && flag.toLowerCase() === "convertfrom") {
+        if (kind === null)
+          throw new RuntimeError("datetime: dateType must be text");
+        const x = toNumber(positional[0]);
+        const k = kind.toLowerCase();
+        if (k === "datenum") return finish(datetimeFromDatenum(x));
+        if (k === "posixtime") return finish(datetimeFromUtcMs(x * 1000));
+        if (k === "excel") {
+          return finish(datetimeFromUtcMs((x - 25569) * 86400000));
+        }
+        if (k === "excel1904") {
+          return finish(datetimeFromUtcMs((x - 24107) * 86400000));
+        }
+        throw new RuntimeError(
+          `datetime: unsupported ConvertFrom type '${kind}'`
+        );
+      }
+    }
+
+    // datetime(Y, M, D [, H, MI, S [, MS]])
+    if (
+      positional.length === 3 ||
+      positional.length === 6 ||
+      positional.length === 7
+    ) {
+      const Y = toNumber(positional[0]);
+      const M = toNumber(positional[1]);
+      const D = toNumber(positional[2]);
+      const H = positional.length >= 6 ? toNumber(positional[3]) : 0;
+      const MI = positional.length >= 6 ? toNumber(positional[4]) : 0;
+      const S = positional.length >= 6 ? toNumber(positional[5]) : 0;
+      const MS = positional.length >= 7 ? toNumber(positional[6]) : 0;
+      return finish(makeDatetime(Y, M, D, H, MI, S + MS / 1000));
+    }
+
+    throw new RuntimeError(
+      `datetime: unsupported argument pattern (nargin=${args.length})`
+    );
+  },
 });
 
 // ── duration constructor-like builtins: seconds / minutes / hours / days ───
@@ -346,7 +344,7 @@ const DURATION_UNITS: DurationUnit[] = [
 ];
 
 for (const unit of DURATION_UNITS) {
-  registerIBuiltin({
+  builtin({
     name: unit.name,
     help: {
       signatures: [`${unit.name}(N)`, `${unit.name}(D)`],
@@ -354,19 +352,27 @@ for (const unit of DURATION_UNITS) {
         `If N is numeric, create a duration of N ${unit.name}. ` +
         `If D is a duration, return its total number of ${unit.name} as a double.`,
     },
-    resolve: () => ({
-      outputTypes: [{ kind: "unknown" }],
-      apply: args => {
-        if (args.length !== 1) {
-          throw new RuntimeError(`${unit.name}: expected 1 argument`);
-        }
-        const a = args[0];
-        if (isDuration(a)) {
-          return RTV.num(durationSeconds(a) / unit.factorToSeconds);
-        }
-        return makeDuration(toNumber(a) * unit.factorToSeconds);
-      },
-    }),
+    nargin: [0, 1],
+    mfile: true,
+    apply: args => {
+      if (args.length === 0)
+        throw unsupportedFormError(unit.name, "calling with no input");
+      const a = args[0];
+      if (isDuration(a)) {
+        return RTV.num(durationSeconds(a) / unit.factorToSeconds);
+      }
+      if (
+        !isRuntimeNumber(a) &&
+        !isRuntimeLogical(a) &&
+        !isRuntimeTensor(a) &&
+        !isRuntimeComplexNumber(a)
+      )
+        throw builtinError(
+          "MATLAB:duration:InvalidDurationData",
+          "Input data must be a real, numeric array, or a duration array."
+        );
+      return makeDuration(toNumber(a) * unit.factorToSeconds);
+    },
   });
 }
 
