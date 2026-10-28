@@ -5,14 +5,15 @@
  * Equality follows numbl's `valuesEqualSimple` (interpreter/utility.ts):
  *   - real / logical scalars compare by `==` (NaN ≠ NaN);
  *   - a scalar equals a 1×1 tensor with the matching value;
- *   - tensors are equal iff same rank, same extent, same data — and a
- *     real tensor is never equal to a complex tensor (numbl's rule);
+ *   - tensors are equal iff same rank, same extent, same data; as in
+ *     MATLAB, only values count, so a real tensor equals a complex one
+ *     whose imaginary parts are all zero;
  *   - complex scalars compare real and imaginary parts;
  *   - char / string compare as text; structs compare field-by-field.
  *
- * The JIT covers the dominant real-numeric scalar/tensor combinations
- * inline / via the `jit_isequal_*` helpers and rejects the rarer
- * combinations (complex tensors, char/string, struct/cell) with an
+ * The JIT covers the numeric scalar/tensor combinations inline / via the
+ * `jit_isequal_*` helpers and rejects the rest (char/string,
+ * struct/cell) with an
  * `UnsupportedConstruct` so the limitation is explicit.
  */
 import { TypeError, UnsupportedConstruct } from "../../../lowering/errors.js";
@@ -71,42 +72,27 @@ function pairC(
     useComplex();
     return `(creal(${aC}) == creal(${bC}) && cimag(${aC}) == cimag(${bC}) ? 1.0 : 0.0)`;
   }
-  // Real scalar vs tensor.
-  if (ka === "rs" && kb === "rt") {
+  const isT = (k: NumKind) => k === "rt" || k === "ct";
+  // Scalar `re + im*i` parts in C.
+  const partsC = (k: NumKind, x: string): string =>
+    k === "cs" ? (useComplex(), `creal(${x}), cimag(${x})`) : `${x}, 0.0`;
+  // Scalar vs tensor (real or complex).
+  if ((ka === "rs" || ka === "cs") && isT(kb)) {
     useTensorHelper();
-    return `jit_isequal_st(${aC}, ${bC})`;
+    return `jit_isequal_st(${partsC(ka, aC)}, ${bC})`;
   }
-  if (ka === "rt" && kb === "rs") {
+  if (isT(ka) && (kb === "rs" || kb === "cs")) {
     useTensorHelper();
-    return `jit_isequal_st(${bC}, ${aC})`;
+    return `jit_isequal_st(${partsC(kb, bC)}, ${aC})`;
   }
-  // Real scalar vs complex tensor → numbl: a complex tensor always
-  // carries an imag lane, so a real scalar can never equal it.
-  if ((ka === "rs" && kb === "ct") || (ka === "ct" && kb === "rs"))
-    return `0.0`;
-  // Complex scalar vs real tensor: equal iff imag is zero and the
-  // tensor is a 1×1 with the matching real value.
-  if (ka === "cs" && kb === "rt") {
-    useTensorHelper();
-    useComplex();
-    return `(cimag(${aC}) == 0.0 ? jit_isequal_st(creal(${aC}), ${bC}) : 0.0)`;
-  }
-  if (ka === "rt" && kb === "cs") {
-    useTensorHelper();
-    useComplex();
-    return `(cimag(${bC}) == 0.0 ? jit_isequal_st(creal(${bC}), ${aC}) : 0.0)`;
-  }
-  // Real tensor vs real tensor.
-  if (ka === "rt" && kb === "rt") {
+  // Tensor vs tensor (real or complex).
+  if (isT(ka) && isT(kb)) {
     useTensorHelper();
     return `jit_isequal_tt(${aC}, ${bC})`;
   }
-  // Real tensor vs complex tensor → never equal (numbl tensorsEqual).
-  if ((ka === "rt" && kb === "ct") || (ka === "ct" && kb === "rt"))
-    return `0.0`;
   throw new UnsupportedConstruct(
     `'isequal' with these argument types is not yet supported by the JIT ` +
-      `(complex-tensor, char/string, struct or cell comparison); ` +
+      `(char/string, struct or cell comparison); ` +
       `the interpreter handles it`
   );
 }
@@ -137,31 +123,25 @@ function pairJs(
     return `(${aJs}.im === 0 && ${aJs}.re === ${bN} ? 1 : 0)`;
   if (ka === "cs" && kb === "cs")
     return `(${aJs}.re === ${bJs}.re && ${aJs}.im === ${bJs}.im ? 1 : 0)`;
-  if (ka === "rs" && kb === "rt") {
+  const isT = (k: NumKind) => k === "rt" || k === "ct";
+  // Scalar `re + im*i` parts in JS.
+  const partsJs = (k: NumKind, x: string, xN: string): string =>
+    k === "cs" ? `${x}.re, ${x}.im` : `${xN}, 0`;
+  if ((ka === "rs" || ka === "cs") && isT(kb)) {
     useTensorHelper();
-    return `jit_isequal_st(${aN}, ${bJs})`;
+    return `jit_isequal_st(${partsJs(ka, aJs, aN)}, ${bJs})`;
   }
-  if (ka === "rt" && kb === "rs") {
+  if (isT(ka) && (kb === "rs" || kb === "cs")) {
     useTensorHelper();
-    return `jit_isequal_st(${bN}, ${aJs})`;
+    return `jit_isequal_st(${partsJs(kb, bJs, bN)}, ${aJs})`;
   }
-  if ((ka === "rs" && kb === "ct") || (ka === "ct" && kb === "rs")) return `0`;
-  if (ka === "cs" && kb === "rt") {
-    useTensorHelper();
-    return `(${aJs}.im === 0 ? jit_isequal_st(${aJs}.re, ${bJs}) : 0)`;
-  }
-  if (ka === "rt" && kb === "cs") {
-    useTensorHelper();
-    return `(${bJs}.im === 0 ? jit_isequal_st(${bJs}.re, ${aJs}) : 0)`;
-  }
-  if (ka === "rt" && kb === "rt") {
+  if (isT(ka) && isT(kb)) {
     useTensorHelper();
     return `jit_isequal_tt(${aJs}, ${bJs})`;
   }
-  if ((ka === "rt" && kb === "ct") || (ka === "ct" && kb === "rt")) return `0`;
   throw new UnsupportedConstruct(
     `'isequal' with these argument types is not yet supported by the JIT ` +
-      `(complex-tensor, char/string, struct or cell comparison); ` +
+      `(char/string, struct or cell comparison); ` +
       `the interpreter handles it`
   );
 }
