@@ -6,7 +6,7 @@
  *   variable > nested function > explicit import > local function (same
  *   file) > wildcard import > private function > class method (object
  *   argument) > workspace / `.numbl.js` function > class constructor >
- *   constant / interpreter special / builtin
+ *   constant / builtin
  *
  * The function tiers are `resolveFunction`'s. A workspace `.m` (including
  * the bundled stdlib) shadows a builtin, and `.m` wins over `.numbl.js`.
@@ -16,7 +16,6 @@
  */
 
 import { getConstant } from "../helpers/constants.js";
-import { getInterpreterSpecialBuiltin } from "../interpreter/interpreterSpecialBuiltins.js";
 import type { Environment, FunctionDef } from "../interpreter/types.js";
 import type { RuntimeValue } from "../runtime/types.js";
 import type { ImportEntry } from "../workspace/functionIndex.js";
@@ -40,9 +39,6 @@ export type NameResolution =
   /** A builtin constant such as `pi` or `true` (no arguments). */
   | { kind: "constant"; name: string; value: RuntimeValue }
   | { kind: "nested"; name: string; fn: FunctionDef; env: Environment }
-  /** An interpreter special (eval, exist, ...): a builtin that needs the
-   *  caller's scope. `target` is the registered builtin it falls back to. */
-  | { kind: "special"; name: string; target: Target<"builtin"> | null }
   | { kind: "builtin"; name: string; target: Target<"builtin"> }
   /** A local function of the main file. */
   | { kind: "mainLocal"; name: string; target: Target<"localFunction"> }
@@ -126,8 +122,6 @@ function classifyTarget(
       const value = getConstant(name);
       if (value !== undefined) return { kind: "constant", name, value };
     }
-    if (getInterpreterSpecialBuiltin(name))
-      return { kind: "special", name, target };
     return target
       ? { kind: "builtin", name, target }
       : { kind: "notFound", name };
@@ -243,7 +237,6 @@ export function definingFile(
   switch (r.kind) {
     case "variable":
     case "constant":
-    case "special":
     case "builtin":
     case "enumMember":
     case "notFound":

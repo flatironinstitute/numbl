@@ -15,7 +15,6 @@ import {
 } from "../../runtime/types.js";
 import type { RuntimeValue } from "../../runtime/types.js";
 import { toString, numel } from "../../runtime/index.js";
-import type { JitType } from "../../jitTypes.js";
 import { makeTensor, mkc } from "./types.js";
 import { builtin } from "./builtin.js";
 import { builtinError, numericArg } from "./args.js";
@@ -29,27 +28,6 @@ import { sparseToDense } from "../../helpers/sparse-arithmetic.js";
 // class-name string — `zeros(2,3,'int32')` — and the `'like'` prototype form
 // — `zeros(sz,'like',p)`. numbl only has the double type, so we accept and
 // ignore the class spec rather than erroring on the extra arg.
-
-function isClassNameType(t: JitType): boolean {
-  return t.kind === "char" || t.kind === "string";
-}
-
-/** Drop a trailing class-name spec from the JIT arg types (used in `match`
- *  so the size cases still apply when a class string is present). */
-export function stripClassNameTypes(argTypes: JitType[]): JitType[] {
-  const n = argTypes.length;
-  if (n === 0) return argTypes;
-  // `..., 'like', proto`: a string followed by a non-string prototype.
-  if (
-    n >= 2 &&
-    isClassNameType(argTypes[n - 2]) &&
-    !isClassNameType(argTypes[n - 1])
-  )
-    return argTypes.slice(0, n - 2);
-  // `..., classname`
-  if (isClassNameType(argTypes[n - 1])) return argTypes.slice(0, n - 1);
-  return argTypes;
-}
 
 /** Drop a trailing class-name spec from the runtime args (used in `apply`). */
 export function stripClassNameArgs(args: RuntimeValue[]): RuntimeValue[] {

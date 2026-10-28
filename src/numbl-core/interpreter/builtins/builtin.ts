@@ -12,9 +12,9 @@
  *     apply: args => ...,
  *   });
  *
- * `builtin()` produces an ordinary IBuiltin (with a `direct` entry), so all
- * call paths (interpreter, JIT fallback, `builtin(...)`, method dispatch,
- * function handles) work unchanged.
+ * A builtin that needs the calling scope (its variables, caller, input
+ * names; eval, exist, nargin, ...) declares `scope: true` and reads it as
+ * `ctx.scope`.
  */
 
 import type { Runtime } from "../../runtime/runtime.js";
@@ -24,10 +24,9 @@ import { getCurrentRuntime } from "../../runtime/refcount.js";
 import {
   registerIBuiltin,
   type BuiltinHelp,
-  type DirectBuiltin,
   type IBuiltin,
-  type IBuiltinResolution,
-} from "./types.js";
+} from "../../runtime/builtinRegistry.js";
+import type { CallerScope } from "../callerScope.js";
 import { checkNargin, checkNargout } from "./args.js";
 
 /** An argument count: exactly `n`, or an inclusive range `[min, max]`
@@ -44,13 +43,19 @@ export interface BuiltinContext {
   readonly rt: Runtime;
 }
 
-export type BuiltinApply = (
+/** The context of a builtin declared with `scope: true`. */
+export interface ScopedBuiltinContext extends BuiltinContext {
+  /** The scope the builtin was called from. */
+  readonly scope: CallerScope;
+}
+
+export type BuiltinApply<C extends BuiltinContext = BuiltinContext> = (
   args: RuntimeValue[],
   nargout: number,
-  ctx: BuiltinContext
+  ctx: C
 ) => RuntimeValue | RuntimeValue[] | void;
 
-export interface BuiltinSpec {
+interface BuiltinSpecBase {
   name: string;
   help?: BuiltinHelp;
   /** Accepted input count. Default: any number. */
@@ -64,10 +69,23 @@ export interface BuiltinSpec {
    *  inputs/outputs as MATLAB:TooManyInputs / MATLAB:TooManyOutputs rather
    *  than MATLAB:maxrhs / MATLAB:maxlhs. */
   mfile?: boolean;
+}
+
+export interface PlainBuiltinSpec extends BuiltinSpecBase {
+  scope?: false;
   /** Called after the arity check. Return one value, or an array of
    *  values when `nargout > 1`. */
   apply: BuiltinApply;
 }
+
+export interface ScopedBuiltinSpec extends BuiltinSpecBase {
+  /** The builtin needs the calling scope, given to `apply` as
+   *  `ctx.scope`. */
+  scope: true;
+  apply: BuiltinApply<ScopedBuiltinContext>;
+}
+
+export type BuiltinSpec = PlainBuiltinSpec | ScopedBuiltinSpec;
 
 function inputRange(a: Arity | undefined): [number, number] {
   if (a === undefined) return [0, Infinity];
@@ -91,16 +109,15 @@ function validRange(name: string, what: string, [lo, hi]: number[]): void {
     throw new Error(`builtin '${name}': invalid ${what} [${lo}, ${hi}]`);
 }
 
-/** MATLAB's `nargin(@f)` for a builtin: the maximum input count, or -1 when
- *  it is unbounded (MATLAB reports -1 for nearly all variadic builtins,
- *  e.g. zeros, numel, fprintf, cellfun). */
-function reportedNargin([, hi]: readonly [number, number]): number {
-  return hi === Infinity ? -1 : hi;
+function activeRuntime(): Runtime {
+  const rt = getCurrentRuntime();
+  if (!rt) throw new RuntimeError("no active runtime");
+  return rt as Runtime;
 }
 
 /** Build the IBuiltin for a spec without registering it. */
 export function makeBuiltin(spec: BuiltinSpec): IBuiltin {
-  const { name, apply } = spec;
+  const { name } = spec;
   const mfile = spec.mfile ?? false;
   const nargin = inputRange(spec.nargin);
   const nargout = outputRange(spec.nargout);
@@ -110,34 +127,35 @@ export function makeBuiltin(spec: BuiltinSpec): IBuiltin {
   const [outMin, outMax] = nargout;
   const isVoid = outMax === 0;
 
-  const ctx: BuiltinContext = {
+  const plain: BuiltinContext = {
     name,
     get rt(): Runtime {
-      const rt = getCurrentRuntime();
-      if (!rt) throw new RuntimeError("no active runtime");
-      return rt as Runtime;
+      return activeRuntime();
     },
   };
-
-  const call: DirectBuiltin["call"] = (args, n) => {
-    checkNargin(args.length, inMin, inMax, mfile);
-    checkNargout(n, outMin, outMax, mfile);
-    const result = apply(args, n, ctx);
-    return isVoid ? undefined : (result as RuntimeValue | RuntimeValue[]);
-  };
-
-  // Legacy entry for callers that still go through resolve. It accepts any
-  // argument types; `call` does the checking.
-  const resolution: IBuiltinResolution = {
-    outputTypes: isVoid ? [] : [{ kind: "unknown" }],
-    apply: call as IBuiltinResolution["apply"],
-  };
+  // Only a builtin declared with `scope: true` gets `ctx.scope`.
+  const ctx = spec.scope
+    ? Object.defineProperty(plain, "scope", {
+        get(): CallerScope {
+          const scope = activeRuntime().callerScope?.();
+          if (!scope) throw new RuntimeError(`${name}: no calling scope`);
+          return scope as CallerScope;
+        },
+      })
+    : plain;
+  const apply = spec.apply as BuiltinApply;
 
   return {
     name,
     help: spec.help,
-    resolve: () => resolution,
-    direct: { nargin, nargout, reportedNargin: reportedNargin(nargin), call },
+    nargin,
+    nargout,
+    call: (args, n) => {
+      checkNargin(args.length, inMin, inMax, mfile);
+      checkNargout(n, outMin, outMax, mfile);
+      const result = apply(args, n, ctx);
+      return isVoid ? undefined : (result as RuntimeValue | RuntimeValue[]);
+    },
   };
 }
 

@@ -15,7 +15,7 @@ import {
   isRuntimeString,
   isRuntimeDictionary,
 } from "../../runtime/types.js";
-import { hashKey } from "./dictionary.js";
+import { hashKey } from "../../runtime/dictionary.js";
 import { builtin } from "./builtin.js";
 
 builtin({

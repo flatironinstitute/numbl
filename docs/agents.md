@@ -14,7 +14,7 @@ The execution pipeline is: Parse → AST-walk via the `Interpreter` class (`src/
 
 ### Interpreter builtins (IBuiltins)
 
-The interpreter has its own builtin system in `src/numbl-core/interpreter/builtins/`. New builtins are defined with `builtin({ name, nargin, nargout, help, apply })` (`builtin.ts`): an `apply` on runtime values plus explicit arity. Older files still use the legacy `IBuiltin.resolve(argTypes, nargout)` form (`defineBuiltin` cases with `match`/`apply`); these are being converted to `builtin()`. See "Adding builtins" below.
+The interpreter has its own builtin system in `src/numbl-core/interpreter/builtins/`. Every builtin is defined with `builtin({ name, nargin, nargout, help, apply })` (`builtin.ts`): an `apply` on runtime values plus explicit arity, registered in `runtime/builtinRegistry.ts`. See "Adding builtins" below.
 
 (The JIT compiler does **not** emit through `IBuiltin` and never reads interpreter builtin types; it has its own builtin registry with `emitJs`/`emitC` hooks under `src/numbl-core/jit/builtins/`.)
 
@@ -88,12 +88,14 @@ builtin({
 });
 ```
 
+A builtin that needs the calling scope (its variables, caller, input names; e.g. `eval`, `exist`, `nargin`) adds `scope: true` and reads `ctx.scope` (a `CallerScope`, `interpreter/callerScope.ts`). See `scope.ts` for examples.
+
 - Arity is checked before `apply` runs, with MATLAB's messages and identifiers (`MATLAB:minrhs`, `MATLAB:maxrhs`, `MATLAB:maxlhs`; set `mfile: true` when MATLAB implements the function as an M-file, which switches to `MATLAB:TooManyInputs` / `MATLAB:TooManyOutputs`). `nargin(@name)` reports the max input count, or -1 when unbounded.
 - `apply` receives runtime values and must reject what it cannot handle. Use the helpers in `args.ts` (`numericArg`, `realNumericArg`, `realScalarArg`, `boolToNumber`, `builtinError`) rather than silently coercing; they raise MATLAB's errors (e.g. "Argument must be real." `MATLAB:math:mustBeReal`).
 - For unary element-wise math use `apply: unaryElemwise({ realFn, complexFn, maybeComplex }, name)`, `unaryRealResult(realFn, complexFn, name)` (always-real result, e.g. abs), or `unaryPredicate(realTest, complexTest)` (isnan-style), all in `types.ts`.
 - Return one value, or an array of values when `nargout > 1`. A void builtin's return value is discarded.
 
-See `predicates.ts`, `logical.ts`, `complex.ts`, and `hash.ts` for converted examples. The legacy forms (`defineBuiltin` with `match`/`apply` cases, hand-written `resolve`) still work but should not be used for new code; their `outputTypes` are only used to detect void builtins.
+See `predicates.ts`, `logical.ts`, `complex.ts`, and `hash.ts` for examples.
 
 New builtins should include inline `help`. See [adding-builtin-help.md](adding-builtin-help.md) for guidelines.
 

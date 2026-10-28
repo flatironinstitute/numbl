@@ -22,7 +22,7 @@ import { ensureRuntimeValue } from "../runtime/runtimeHelpers.js";
 import { allocFloat64Array } from "../runtime/alloc.js";
 import { incref, decref } from "../runtime/refcount.js";
 import { applyHandleProperty } from "../runtime/struct-access.js";
-import { getIBuiltin } from "../interpreter/builtins/types.js";
+import { getIBuiltin } from "../runtime/builtinRegistry.js";
 import {
   builtin,
   type Arity,
@@ -420,15 +420,13 @@ graphicsBuiltin("drawuihtml", {}, (nargout, args, rt) => {
 // setting `htmlComponent.Data`). The handle is incref'd so it survives after
 // the run while the host keeps this runtime alive to dispatch events. A new
 // registration for the same component replaces (and decrefs) the old one.
-graphicsBuiltin("registeruihtmlcallback", {}, (_nargout, args, rt) => {
-  if (args.length < 3) return undefined;
+graphicsBuiltin("registeruihtmlcallback", { nargout: 0 }, (_n, args, rt) => {
+  if (args.length < 3) return;
   const compId = toString(args[0]);
   const eventType = toString(args[1]);
   const fcn = args[2];
-  if (eventType !== "HTMLEventReceived" && eventType !== "DataChanged") {
-    return undefined;
-  }
-  if (!isRuntimeFunction(fcn)) return undefined;
+  if (eventType !== "HTMLEventReceived" && eventType !== "DataChanged") return;
+  if (!isRuntimeFunction(fcn)) return;
   const entry = rt.uihtmlCallbacks.get(compId) ?? {};
   const prev = entry[eventType];
   if (prev) decref(rt, prev);
@@ -443,7 +441,7 @@ graphicsBuiltin("registeruihtmlcallback", {}, (_nargout, args, rt) => {
 // forwards it to the iframe, where it fires the page's addEventListener(name).
 graphicsBuiltin(
   "sendEventToHTMLSource",
-  { nargin: [2, 3] },
+  { nargin: [2, 3], nargout: 0 },
   (_nargout, args, rt) => {
     const src = args[0];
     if (!isRuntimeStruct(src) || !src.fields.has("ComponentId")) {

@@ -25,7 +25,7 @@ The `Interpreter` class holds state only. The evaluation code is in modules of p
 | `callConvention.ts`  | binding inputs, running a body in a new frame, collecting outputs; nested functions        |
 | `oop.ts`             | instantiation, constructors, superclass calls, class methods, enumerations, introspection  |
 | `argumentsBlock.ts`  | `arguments` block defaults and name-value struct parameters                                |
-| `specialContext.ts`  | the context the special builtins see (`interpreterSpecialBuiltins.ts`), eval of text       |
+| `callerScope.ts`     | the calling scope that builtins declared with `scope: true` see, eval of text              |
 
 ## Call frames
 
@@ -45,7 +45,9 @@ Control-flow transfers (break, continue, return) are signalled by typed signal o
 
 A call expression or bare name is resolved by `resolveName` (see [function-resolution.md](function-resolution.md)) from the running frame: its file, class and method, and its `Environment`. The result says what the name is (variable, constant, nested, local, private or workspace function, class method or constructor, package function, builtin, ...), and `callResolved` runs it. A user function's `FunctionDef` comes from `functionBodyFor`, which also gives the file and class context to run it in. A workspace or stdlib `.m` shadows a builtin of the same name.
 
-Builtin calls go through `invokeBuiltin`, which checks the builtin's arity and runs its `apply`. See [builtins.md](../builtins.md). Special builtins that need the caller's frame (`eval`, `evalin`, `exist`, `nargin`, `inputname`, ...) are in `interpreterSpecialBuiltins.ts` and run first.
+Builtin calls go through `invokeBuiltin`, which checks the builtin's arity and runs its `apply`. See [builtins.md](../builtins.md). Builtins that need the caller's frame (`eval`, `evalin`, `exist`, `nargin`, `inputname`, ...) declare `scope: true` and read it as `ctx.scope`, a `CallerScope` (`callerScope.ts`) whose frame-derived fields read `interp.frame` at the time of the call. The interpreter hands it to them through `rt.callerScope`, set in `installRuntimeCallbacks`, so they behave the same whether called directly, through a handle, `feval` or `builtin(...)`.
+
+A call used as a statement requests no outputs (nargout 0), also when the callee is reached through indexing (`c{i}()`, `s.f()`). The first output, if the function assigned it (or the first element of `varargout`), becomes `ans`; a function that returns nothing leaves `ans` unset.
 
 ## JIT integration
 

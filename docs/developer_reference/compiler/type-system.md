@@ -1,6 +1,6 @@
 # Type System (`JitType`)
 
-`JitType` is the static type language used by the JIT for specialization. It does not exist at parse time; the interpreter itself is untyped. `JitType` values are produced by the JIT's lowering pass from argument values and propagated by each builtin's `resolve` function.
+`JitType` (`src/numbl-core/jitTypes.ts`) is the type language the executors use to classify values for JIT specialization. It does not exist at parse time; the interpreter itself is untyped. `inferJitType` produces a `JitType` from a runtime value, the executors key their caches on it (`jitTypeKey`), and `executors/jit/typeAdapter.ts` translates it into the JIT compiler's own `Type` (`jit/lowering/types.ts`).
 
 ## Kinds
 
@@ -36,6 +36,4 @@ At join points — loop back-edges, branches that reconverge, function-return me
 
 ## How builtins participate
 
-Each `IBuiltin` receives `argTypes: JitType[]` in `resolve`. It returns the output `JitType` for each output position, plus the `apply` function for the interpreter. The JIT trusts these output types when lowering callers. A builtin that returns the wrong type is a correctness bug that surfaces as a JIT bail (best case) or wrong results (worst case).
-
-See [builtins.md](../builtins.md) for the resolution interface.
+Interpreter builtins do not see `JitType`s: they take runtime values (see [builtins.md](../builtins.md)). The JIT compiler's own builtins (`jit/builtins`) carry type-transfer rules over its `Type`.

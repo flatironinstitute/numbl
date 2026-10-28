@@ -31,13 +31,12 @@ import {
   isRuntimeDictionary,
   kstr,
 } from "../runtime/types.js";
-import { isBuiltin } from "../helpers/registry.js";
 import { incref, decref } from "./refcount.js";
 import {
-  getIBuiltin as _getIBuiltin,
+  getIBuiltin,
   getIBuiltinNargin,
-  callIBuiltin,
-} from "../interpreter/builtins/index.js";
+  isBuiltin,
+} from "./builtinRegistry.js";
 import { COLON_SENTINEL } from "./sentinels.js";
 import {
   getBroadcastShape,
@@ -67,13 +66,13 @@ export function invokeBuiltin(
 ): unknown {
   const custom = rt.customBuiltins[name];
   if (custom) return custom(nargout, args);
-  const ib = _getIBuiltin(name);
+  const ib = getIBuiltin(name);
   if (!ib) return NOT_A_BUILTIN;
   const margs = args.map(a => ensureRuntimeValue(a));
-  if (!rt.profilingEnabled) return callIBuiltin(ib, margs, nargout);
+  if (!rt.profilingEnabled) return ib.call(margs, nargout);
   rt.profileEnter("builtin:interp:" + name);
   try {
-    return callIBuiltin(ib, margs, nargout);
+    return ib.call(margs, nargout);
   } finally {
     rt.profileLeave();
   }

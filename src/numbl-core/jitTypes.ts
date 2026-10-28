@@ -8,6 +8,24 @@
  * in-tree JS-JIT / C-JIT pipeline and were deleted with it.
  */
 
+import {
+  isRuntimeChar,
+  isRuntimeClassInstance,
+  isRuntimeClassInstanceArray,
+  isRuntimeSparseMatrix,
+  isRuntimeStruct,
+  isRuntimeStructArray,
+  type RuntimeCell,
+  type RuntimeChar,
+  type RuntimeClassInstance,
+  type RuntimeClassInstanceArray,
+  type RuntimeSparseMatrix,
+  type RuntimeStruct,
+  type RuntimeStructArray,
+  type RuntimeTensor,
+  type RuntimeValue,
+} from "./runtime/types.js";
+
 // ── JIT Type System ─────────────────────────────────────────────────────
 
 export type SignCategory = "positive" | "nonneg" | "nonpositive" | "negative";
@@ -68,22 +86,7 @@ export function signFromNumber(v: number): SignCategory | undefined {
   return undefined; // NaN
 }
 
-export function isNonneg(t: JitType): boolean {
-  if (t.kind === "number") return t.sign === "nonneg" || t.sign === "positive";
-  if (t.kind === "boolean") return true;
-  if (t.kind === "tensor") return !!t.nonneg;
-  return false;
-}
-
-export function flipSign(s?: SignCategory): SignCategory | undefined {
-  if (s === "positive") return "negative";
-  if (s === "negative") return "positive";
-  if (s === "nonneg") return "nonpositive";
-  if (s === "nonpositive") return "nonneg";
-  return undefined;
-}
-
-export function unifySign(
+function unifySign(
   a?: SignCategory,
   b?: SignCategory
 ): SignCategory | undefined {
@@ -362,82 +365,181 @@ export function unifyJitTypes(a: JitType, b: JitType): JitType {
   return { kind: "unknown" };
 }
 
-export function isScalarType(t: JitType): boolean {
-  return (
-    t.kind === "number" ||
-    t.kind === "boolean" ||
-    t.kind === "complex_or_number" ||
-    t.kind === "string" ||
-    t.kind === "char"
-  );
-}
+// ── Inference from runtime values ───────────────────────────────────────
 
-export function isNumericScalarType(t: JitType): boolean {
-  return (
-    t.kind === "number" ||
-    t.kind === "boolean" ||
-    t.kind === "complex_or_number"
-  );
-}
-
-export function isTensorType(t: JitType): boolean {
-  return t.kind === "tensor";
-}
-
-export function isComplexType(t: JitType): boolean {
-  return (
-    t.kind === "complex_or_number" ||
-    (t.kind === "tensor" && t.isComplex === true)
-  );
-}
-
-/** True when the type guarantees an integer value at runtime (safe for |0). */
-export function isKnownInteger(t: JitType): boolean {
-  return t.kind === "boolean" || (t.kind === "number" && t.isInteger === true);
-}
-
-/** Types that support arithmetic binary operations in the JIT. */
-export function isArithmeticType(t: JitType): boolean {
-  return (
-    t.kind === "number" ||
-    t.kind === "boolean" ||
-    t.kind === "complex_or_number" ||
-    t.kind === "tensor"
-  );
-}
-
-function isVectorShape(shape: number[]): boolean {
-  if (shape.length === 1) return shape[0] !== -1;
-  if (shape.length === 2) {
-    return (
-      (shape[0] === 1 && shape[1] !== -1) || (shape[1] === 1 && shape[0] !== -1)
-    );
+/** The JitType of a runtime value (executor classification). */
+export function inferJitType(value: unknown): JitType {
+  if (typeof value === "boolean") return { kind: "boolean", value };
+  if (typeof value === "number") {
+    const sign = signFromNumber(value);
+    return { kind: "number", exact: value, ...(sign ? { sign } : {}) };
   }
-  return false;
-}
-
-export function shapeAfterReduction(
-  shape: number[],
-  dim?: number
-): { scalar: true } | { scalar: false; shape: number[] } {
-  if (dim !== undefined) {
-    // Reduction along a dimension beyond ndims returns the shape unchanged
-    // (MATLAB: sum(A, dim) where dim > ndims(A) returns A)
-    if (dim > shape.length) {
-      if (shape.every(d => d === 1)) return { scalar: true };
-      return { scalar: false, shape: [...shape] };
+  if (typeof value === "string") {
+    return { kind: "string", value };
+  }
+  if (isRuntimeChar(value as RuntimeChar)) {
+    return { kind: "char", value: (value as RuntimeChar).value };
+  }
+  if (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { kind?: string }).kind === "complex_number"
+  ) {
+    return { kind: "complex_or_number" };
+  }
+  if (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { kind?: string }).kind === "tensor"
+  ) {
+    const t = value as RuntimeTensor;
+    const shape = t.shape.length >= 2 ? t.shape.slice() : [1, ...t.shape];
+    if (t.imag) return { kind: "tensor", isComplex: true, shape };
+    return {
+      kind: "tensor",
+      isComplex: false,
+      shape,
+      ...(t._isLogical ? { isLogical: true } : {}),
+    };
+  }
+  if (isRuntimeStruct(value as RuntimeValue)) {
+    const s = value as RuntimeStruct;
+    const fields: Record<string, JitType> = {};
+    for (const [k, v] of s.fields) {
+      // Nested struct_array fields (e.g. `T.nodes`) get a real
+      // `struct_array` JitType so the JIT loop lowering can chain
+      // through `T.nodes(i).leaf`. Top-level struct_array values stay
+      // `unknown`.
+      if (isRuntimeStructArray(v)) {
+        fields[k] = inferStructArrayType(v as RuntimeStructArray);
+      } else {
+        fields[k] = inferJitType(v);
+      }
     }
-    const result = [...shape];
-    result[dim - 1] = 1;
-    while (result.length > 2 && result[result.length - 1] === 1) result.pop();
-    if (result.every(d => d === 1)) return { scalar: true };
-    return { scalar: false, shape: result };
+    return { kind: "struct", fields };
   }
-  if (isVectorShape(shape)) return { scalar: true };
-  const firstNonSingleton = shape.findIndex(d => d !== 1);
-  if (firstNonSingleton === -1) return { scalar: true };
-  const result = [...shape];
-  result[firstNonSingleton] = 1;
-  while (result.length > 2 && result[result.length - 1] === 1) result.pop();
-  return { scalar: false, shape: result };
+  if (isRuntimeSparseMatrix(value as RuntimeValue)) {
+    const sp = value as RuntimeSparseMatrix;
+    return { kind: "sparse_matrix", isComplex: !!sp.pi, m: sp.m, n: sp.n };
+  }
+  if (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { kind?: string }).kind === "cell"
+  ) {
+    const c = value as RuntimeCell;
+    return { kind: "cell", shape: c.shape.slice() };
+  }
+  if (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { kind?: string }).kind === "dictionary"
+  ) {
+    return { kind: "dictionary" };
+  }
+  if (isRuntimeClassInstance(value as RuntimeValue)) {
+    const ci = value as RuntimeClassInstance;
+    const fields: Record<string, JitType> = {};
+    for (const [k, v] of ci.fields) {
+      fields[k] = inferJitType(v);
+    }
+    return {
+      kind: "class_instance",
+      className: ci.className,
+      isHandleClass: ci.isHandleClass,
+      fields,
+    };
+  }
+  if (isRuntimeClassInstanceArray(value as RuntimeValue)) {
+    // An object array dispatches like a class instance (e.g. an enumeration
+    // member array passed to `uint32`/`double`); element access is what
+    // distinguishes them, not the dispatch type.
+    const arr = value as RuntimeClassInstanceArray;
+    return {
+      kind: "class_instance",
+      className: arr.className,
+      isHandleClass: false,
+      fields: {},
+    };
+  }
+  if (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { kind?: string }).kind === "function"
+  ) {
+    return { kind: "function_handle" };
+  }
+  return { kind: "unknown" };
+}
+
+/**
+ * Infer a `struct_array` JitType from a runtime struct array. Walks
+ * every element, collects per-field JIT types, and unifies them across
+ * elements. Used only from the `struct` branch of `inferJitType`;
+ * top-level struct array values are `{kind: "unknown"}`.
+ */
+function inferStructArrayType(sa: RuntimeStructArray): JitType {
+  if (sa.elements.length === 0) {
+    return { kind: "struct_array", length: 0 };
+  }
+  const elemFields: Record<string, JitType> = {};
+  const first = sa.elements[0];
+  for (const [k, v] of first.fields) {
+    elemFields[k] = inferJitType(v);
+  }
+  for (let i = 1; i < sa.elements.length; i++) {
+    const el = sa.elements[i];
+    for (const k of Object.keys(elemFields)) {
+      const v = el.fields.get(k);
+      if (v === undefined) {
+        delete elemFields[k];
+        continue;
+      }
+      const before = elemFields[k];
+      const vType = inferJitType(v);
+      elemFields[k] = unifyStructArrayFieldTypes(before, vType);
+    }
+  }
+  return {
+    kind: "struct_array",
+    elemFields,
+    length: sa.elements.length,
+  };
+}
+
+/**
+ * Unify two element types for a struct array field. Unlike generic
+ * `unifyJitTypes`, this widens mixed real-tensor / numeric-scalar
+ * combinations to `tensor[?x?]` instead of bailing to `unknown`.
+ *
+ * Rationale: chunkie (and many MATLAB libraries) store 1-element vector
+ * fields as bare numeric scalars (e.g. `T.nodes(i).xi = 87` when a leaf
+ * has a single point) while other elements hold genuine row-vector
+ * tensors. Treating the whole field as `unknown` bails the JIT on
+ * `T.nodes(i).xi` reads even though the pattern is semantically sound
+ * — a scalar is a 1x1 tensor in MATLAB. The JIT codegen for
+ * `StructArrayMemberRead` with a tensor leaf wraps the element read in
+ * `$h.asTensor(...)` so a runtime scalar is promoted to a 1x1 tensor
+ * before the tensor-read fast paths see it.
+ */
+function unifyStructArrayFieldTypes(a: JitType, b: JitType): JitType {
+  // Try the normal unification first — it handles same-kind merges
+  // correctly (number+number, tensor+tensor, etc.)
+  const normal = unifyJitTypes(a, b);
+  if (normal.kind !== "unknown") return normal;
+  // Normal unify returned unknown — this happens for mixed
+  // tensor-vs-scalar combinations. In MATLAB, a scalar is a 1x1
+  // tensor, so we widen to tensor[?x?] when one side is a real tensor
+  // and the other is a numeric scalar.
+  const isRealTensor = (t: JitType) =>
+    t.kind === "tensor" && t.isComplex !== true;
+  const isNumScalar = (t: JitType) =>
+    t.kind === "number" || t.kind === "boolean";
+  if (
+    (isRealTensor(a) && isNumScalar(b)) ||
+    (isNumScalar(a) && isRealTensor(b))
+  ) {
+    return { kind: "tensor", isComplex: false };
+  }
+  return normal;
 }

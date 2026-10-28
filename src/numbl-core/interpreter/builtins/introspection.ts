@@ -1,7 +1,8 @@
 /**
  * Introspection builtins: size, length, numel, ndims, isempty, isscalar,
  * isvector, isrow, iscolumn, ismatrix, islogical, isnumeric, isfloat,
- * isinteger, ischar, isstring, iscell, isstruct, issparse, class.
+ * isinteger, ischar, isstring, iscell, isstruct, issparse, class, isa,
+ * superclasses, properties, ismethod.
  */
 
 import {
@@ -583,5 +584,98 @@ builtin({
       out.push(RTV.char(joinPath(parts)));
     }
     return RTV.cell(out, [...cells[0].shape]);
+  },
+});
+
+// ── isa, superclasses, properties, ismethod ──────────────────────────────
+
+builtin({
+  name: "isa",
+  nargin: 2,
+  apply: (args, _nargout, ctx) => ctx.rt.isa(args[0], args[1]),
+});
+
+/** The class an object or a class name (char/string) refers to. */
+function referencedClass(v: RuntimeValue): string | undefined {
+  if (isRuntimeClassInstance(v) || isRuntimeClassInstanceArray(v))
+    return v.className;
+  if (isRuntimeChar(v) || isRuntimeString(v)) return toString(v);
+  return undefined;
+}
+
+/** A column cell of string names. */
+const nameColumn = (names: string[]) =>
+  RTV.cell(
+    names.map(n => RTV.string(n)),
+    [names.length, 1]
+  );
+
+// superclasses(obj) / superclasses('ClassName'): the names of the class's
+// ancestors (not the class itself); 0x1 for a class without superclasses
+// or a built-in type.
+builtin({
+  name: "superclasses",
+  nargin: 1,
+  apply: (args, _nargout, ctx) => {
+    const className = referencedClass(args[0]);
+    return nameColumn(className ? ctx.rt.classAncestors(className) : []);
+  },
+});
+
+// properties(obj) / properties('ClassName'): the public properties; a 0x1
+// cell for anything that is not a class.
+builtin({
+  name: "properties",
+  nargin: 1,
+  scope: true,
+  apply: (args, _nargout, { scope }) => {
+    const className = referencedClass(args[0]);
+    const names = className
+      ? scope.classPublicProperties(className)
+      : undefined;
+    return names ? nameColumn(names) : RTV.cell([], [0, 1]);
+  },
+});
+
+// ismethod(obj, name): whether `name` is a public method of the object's
+// class (a char/string first argument names the class). Built-in types are
+// not modelled and give false.
+builtin({
+  name: "ismethod",
+  nargin: 2,
+  mfile: true,
+  scope: true,
+  apply: (args, _nargout, { scope }) => {
+    const className = referencedClass(args[0]);
+    const nameArg = args[1];
+    let methodName: string | undefined;
+    if (isRuntimeChar(nameArg) || isRuntimeString(nameArg))
+      methodName = toString(nameArg);
+    else if (isRuntimeCell(nameArg) && nameArg.data.length === 1) {
+      const el = nameArg.data[0];
+      if (isRuntimeChar(el) || isRuntimeString(el)) methodName = toString(el);
+    }
+    if (!className || methodName === undefined) return RTV.logical(false);
+    const names = scope.classPublicMethods(className);
+    return RTV.logical(names !== undefined && names.has(methodName));
+  },
+});
+
+// Internal: the runtime representation of a value, for tests.
+builtin({
+  name: "__inferred_type_str",
+  nargin: 1,
+  apply: args => {
+    const v = args[0];
+    if (typeof v === "number") return RTV.string("Number");
+    if (typeof v === "boolean") return RTV.string("Boolean");
+    if (isRuntimeTensor(v)) return RTV.string("Tensor");
+    if (isRuntimeCell(v)) return RTV.string("Cell");
+    if (isRuntimeClassInstance(v))
+      return RTV.string(`ClassInstance(${v.className})`);
+    if (isRuntimeChar(v)) return RTV.string("Char");
+    if (isRuntimeString(v)) return RTV.string("String");
+    if (isRuntimeFunction(v)) return RTV.string("Function");
+    return RTV.string("Unknown");
   },
 });

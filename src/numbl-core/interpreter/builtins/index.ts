@@ -48,24 +48,23 @@ import "./ode.js";
 import "./gmres.js";
 import "./eigs.js";
 
+import "./scope.js";
+// The plot builtins register at module load.
+import "../../plotting/builtins.js";
+
 export {
   getIBuiltin,
   getIBuiltinHelp,
   getIBuiltinNargin,
   getAllIBuiltinNames,
-  registerBuiltinHelp,
-  inferJitType,
-  inferDispatchType,
-  callIBuiltin,
-} from "./types.js";
-export type { IBuiltin, IBuiltinResolution, BuiltinHelp } from "./types.js";
+  isBuiltin,
+} from "../../runtime/builtinRegistry.js";
+export type { IBuiltin, BuiltinHelp } from "../../runtime/builtinRegistry.js";
 export { builtin, makeBuiltin } from "./builtin.js";
-export type { BuiltinSpec, BuiltinContext, Arity } from "./builtin.js";
-export { resetAppdataStore, convertJsonValue } from "./misc.js";
-
-// Register IBuiltin names so isBuiltin() recognizes them. The plot
-// builtins register at module load, so load them first.
-import "../../plotting/builtins.js";
-import { registerExtraBuiltinNames } from "../../helpers/registry.js";
-import { getAllIBuiltinNames as _getAllIBuiltinNames } from "./types.js";
-registerExtraBuiltinNames(_getAllIBuiltinNames());
+export type {
+  BuiltinSpec,
+  BuiltinContext,
+  ScopedBuiltinContext,
+  Arity,
+} from "./builtin.js";
+export { resetAppdataStore } from "./misc.js";

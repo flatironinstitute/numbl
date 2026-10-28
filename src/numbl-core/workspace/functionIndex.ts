@@ -6,7 +6,6 @@
  */
 
 import type { Stmt } from "../parser/index.js";
-import { getAllBuiltinNames } from "../helpers/registry.js";
 import { getAllIBuiltinNames } from "../interpreter/builtins/index.js";
 import type { CodeIndex } from "./codeIndex.js";
 
@@ -78,7 +77,7 @@ export function buildFunctionIndex(code: CodeIndex): FunctionIndex {
   const classes = code.classes;
 
   // 1. Builtins
-  const builtins = new Set([...getAllBuiltinNames(), ...getAllIBuiltinNames()]);
+  const builtins = new Set(getAllIBuiltinNames());
 
   // JS user functions resolve at workspace priority (after .m, before
   // builtins).

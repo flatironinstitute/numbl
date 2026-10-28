@@ -57,7 +57,7 @@ struct (`HTMLEventName`/`HTMLEventData` or `Data`/`PreviousData`, plus a `src`
 struct carrying the component id), and invokes the handle the same way `feval`
 does. New plot output produced by the callback is flushed through `onDrawnow`.
 
-**Outgoing (`sendEventToHTMLSource`).** A special builtin reads the component id
+**Outgoing (`sendEventToHTMLSource`).** A builtin reads the component id
 from `src`, `jsonencode`s the data, and calls a runtime hook; the host relays it
 to the matching iframe, where the bootstrap delivers it to the page's
 `addEventListener(name)` listeners.

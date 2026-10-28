@@ -104,7 +104,7 @@ export function evalExprNargout(
       return evalFuncCall(interp, expr, nargout);
 
     case "Index":
-      return evalIndex(interp, expr);
+      return evalIndex(interp, expr, nargout);
 
     case "IndexCell":
       return evalIndexCell(interp, expr);

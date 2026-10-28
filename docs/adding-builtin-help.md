@@ -37,7 +37,7 @@ builtin({
 });
 ```
 
-This also works with the legacy `defineBuiltin` and `registerIBuiltin` via the `help` field on `IBuiltin`.
+The help is stored on the registered `IBuiltin` (`runtime/builtinRegistry.ts`).
 
 ### Existing builtins (bulk)
 

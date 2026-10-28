@@ -44,14 +44,30 @@ builtin({
       return undefined;
     }
     return nargout <= 1
-      ? RTV.char(ok ? "true" : "false")
+      ? RTV.logical(ok)
       : [
-          RTV.char(ok ? "true" : "false"),
+          RTV.logical(ok),
           RTV.char(ok ? "" : `Cannot create directory '${dirPath}'`),
           RTV.char(""),
         ];
   },
 });
+
+for (const [name, kind] of [
+  ["isfolder", "dir"],
+  ["isfile", "file"],
+] as const) {
+  builtin({
+    name,
+    nargin: 1,
+    apply: (args, _nargout, ctx) => {
+      const io = requireFileIO(ctx.rt);
+      if (!io.existsPath)
+        throw new RuntimeError(`${name} is not available in this environment`);
+      return RTV.logical(io.existsPath(toString(args[0])) === kind);
+    },
+  });
+}
 
 builtin({
   name: "delete",
@@ -96,9 +112,9 @@ builtin({
       return undefined;
     }
     return nargout <= 1
-      ? RTV.num(ok ? 1 : 0)
+      ? RTV.logical(ok)
       : [
-          RTV.num(ok ? 1 : 0),
+          RTV.logical(ok),
           RTV.char(ok ? "" : `Cannot remove directory '${dirPath}'`),
           RTV.char(""),
         ];
@@ -135,9 +151,9 @@ for (const [name, verb] of [
         return undefined;
       }
       return nargout <= 1
-        ? RTV.num(ok ? 1 : 0)
+        ? RTV.logical(ok)
         : [
-            RTV.num(ok ? 1 : 0),
+            RTV.logical(ok),
             RTV.char(
               ok ? "" : `Cannot ${verb} '${source}' to '${destination}'`
             ),
@@ -171,8 +187,8 @@ function setFileAttrib(
     return undefined;
   }
   return nargout <= 1
-    ? RTV.num(ok ? 1 : 0)
-    : [RTV.num(ok ? 1 : 0), RTV.char(msg), RTV.char("")];
+    ? RTV.logical(ok)
+    : [RTV.logical(ok), RTV.char(msg), RTV.char("")];
 }
 
 builtin({
@@ -202,18 +218,19 @@ builtin({
       ? RTV.struct(
           new Map<string, RuntimeValue>([
             ["Name", RTV.char(info.Name)],
-            ["archive", RTV.num(0)],
-            ["system", RTV.num(0)],
-            ["hidden", RTV.num(0)],
-            ["directory", RTV.num(info.directory ? 1 : 0)],
-            ["UserRead", RTV.num(info.UserRead ? 1 : 0)],
-            ["UserWrite", RTV.num(info.UserWrite ? 1 : 0)],
-            ["UserExecute", RTV.num(info.UserExecute ? 1 : 0)],
+            // NaN as on MATLAB for Linux and macOS.
+            ["archive", RTV.num(NaN)],
+            ["system", RTV.num(NaN)],
+            ["hidden", RTV.num(NaN)],
+            ["directory", RTV.logical(info.directory)],
+            ["UserRead", RTV.logical(info.UserRead)],
+            ["UserWrite", RTV.logical(info.UserWrite)],
+            ["UserExecute", RTV.logical(info.UserExecute)],
           ])
         )
       : RTV.char(`No such file or directory: ${p}`);
-    if (nargout <= 1) return RTV.num(info ? 1 : 0);
-    return [RTV.num(info ? 1 : 0), values, RTV.char("")];
+    if (nargout <= 1) return RTV.logical(!!info);
+    return [RTV.logical(!!info), values, RTV.char("")];
   },
 });
 

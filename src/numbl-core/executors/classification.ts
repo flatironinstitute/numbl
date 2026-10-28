@@ -13,8 +13,12 @@
 import type { Interpreter } from "../interpreter/interpreter.js";
 import type { FunctionDef } from "../interpreter/types.js";
 import type { Stmt, Expr } from "../parser/types.js";
-import { jitTypeKey, unifyJitTypes, type JitType } from "../jitTypes.js";
-import { inferJitType } from "../interpreter/builtins/types.js";
+import {
+  inferJitType,
+  jitTypeKey,
+  unifyJitTypes,
+  type JitType,
+} from "../jitTypes.js";
 import { inlinableHandleExpr } from "./handleInline.js";
 
 /** A capture-free function handle the JIT inlines into the spec body as

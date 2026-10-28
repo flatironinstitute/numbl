@@ -7,7 +7,7 @@ import type { RuntimeValue } from "../runtime/types.js";
 import { RTV } from "../runtime/constructors.js";
 import { ensureRuntimeValue } from "../runtime/runtimeHelpers.js";
 import { RuntimeError } from "../runtime/error.js";
-import { getIBuiltinNargin } from "./builtins/types.js";
+import { getIBuiltinNargin } from "../runtime/builtinRegistry.js";
 import {
   resolveName,
   resolveQualified,

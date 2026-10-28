@@ -253,6 +253,16 @@ function runFunctionBody(
   }
 }
 
+/** The first element of a finished call's `varargout`, if any. */
+function firstVarargout(
+  fnEnv: Environment,
+  hasVarargout: boolean
+): RuntimeValue | undefined {
+  if (!hasVarargout) return undefined;
+  const v = fnEnv.get("varargout");
+  return v && isRuntimeCell(v) && v.data.length > 0 ? v.data[0] : undefined;
+}
+
 /** Read a finished call's outputs from its environment. */
 function collectOutputs(
   fn: FunctionDef,
@@ -263,23 +273,27 @@ function collectOutputs(
     fn.outputs.length > 0 && fn.outputs[fn.outputs.length - 1] === "varargout";
   const regularOutputs = hasVarargout ? fn.outputs.slice(0, -1) : fn.outputs;
 
-  // When nargout==0 but the function defines outputs, still collect the
-  // first output so it can be used as `ans`.  The function body already
-  // saw $nargout==0, so guards like `if nargout > 0` behave correctly.
-  const collectCount =
-    nargout === 0 && regularOutputs.length > 0
-      ? 1
-      : Math.min(regularOutputs.length, nargout);
+  // A call requesting no outputs (a statement) still returns the first
+  // output, if the function assigned it, for `ans`. The body saw
+  // $nargout == 0, so guards like `if nargout > 0` behave as in MATLAB.
+  if (nargout === 0) {
+    const first =
+      regularOutputs.length > 0
+        ? fnEnv.get(regularOutputs[0])
+        : firstVarargout(fnEnv, hasVarargout);
+    return first === undefined ? [] : [ensureRuntimeValue(first)];
+  }
 
+  const collectCount = Math.min(regularOutputs.length, nargout);
   const outputs: RuntimeValue[] = [];
   for (let i = 0; i < collectCount; i++) {
     const val = fnEnv.get(regularOutputs[i]);
-    if (val === undefined && nargout >= i + 1) {
+    if (val === undefined) {
       throw new RuntimeError(
         `Output argument '${regularOutputs[i]}' (and maybe others) not assigned during call to '${fn.name}'`
       );
     }
-    outputs.push(val ?? RTV.num(0));
+    outputs.push(val);
   }
 
   if (hasVarargout && nargout > regularOutputs.length) {
