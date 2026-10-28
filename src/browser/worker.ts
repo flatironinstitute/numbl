@@ -14,7 +14,7 @@ import { BrowserFileIOAdapter } from "../vfs/BrowserFileIOAdapter.js";
 import { BrowserSystemAdapter } from "../vfs/BrowserSystemAdapter.js";
 import type { PlotInstruction } from "../numbl-core/plotting/types.js";
 import { formatExecuteError } from "../workerErrorFormat.js";
-import { workerOnInput } from "../syncInputChannel.js";
+import { channelInput } from "../inputChannel.js";
 import { fetchMipCoreFiles, MIP_MARKER_PATH, MIP_SEARCH_PATH } from "./mip.js";
 import { SystemStore } from "./system-store.js";
 import { startGpuHelper } from "../gpuHelper.js";
@@ -44,15 +44,11 @@ const pendingWrites: { path: string; content: string | Uint8Array }[] = [];
 // Boot options reused by `execute`.
 let optimization: "0" | "1" = "1";
 let maxIterations = 1e9;
-// Shared cancellation flag from the host (undefined without cross-origin
-// isolation). Passed to every executeCode call so the host's interrupt() can
-// stop a runaway run cooperatively; the interpreter polls it and throws
-// CancellationError.
+// Cancel buffer from the host (undefined without cross-origin isolation).
+// Passed to every executeCode call so the host's interrupt() can stop a run
+// cooperatively; input() blocks on the channel bound to it (inputChannel.ts),
+// and the host answers through provideInput().
 let cancelSAB: SharedArrayBuffer | undefined;
-// Shared channel for synchronous input() (undefined without cross-origin
-// isolation). workerOnInput blocks on it after posting a `request-input`
-// message, so the host can feed the reply back via provideInput().
-let inputSAB: SharedArrayBuffer | undefined;
 
 const enc = new TextEncoder();
 
@@ -103,7 +99,6 @@ async function boot(msg: BootMessage) {
   optimization = msg.optimization;
   maxIterations = msg.maxIterations;
   cancelSAB = msg.cancelSAB;
-  inputSAB = msg.inputSAB;
 
   if (msg.persistSystem) {
     store = new SystemStore();
@@ -169,7 +164,7 @@ async function boot(msg: BootMessage) {
         onHtmlSourceEvent: (compId, name, dataJson) =>
           post({ type: "htmlSourceEvent", compId, name, dataJson }),
         cancelSAB,
-        onInput: inputSAB ? workerOnInput(inputSAB) : undefined,
+        onInput: channelInput(cancelSAB),
       },
       mainAbs
     );
@@ -212,7 +207,7 @@ function execute(id: number, code: string) {
       onHtmlSourceEvent: (compId, name, dataJson) =>
         post({ type: "htmlSourceEvent", compId, name, dataJson }),
       cancelSAB,
-      onInput: inputSAB ? workerOnInput(inputSAB) : undefined,
+      onInput: channelInput(cancelSAB),
     });
     trackUihtml(result.plotInstructions);
     post({

@@ -3,8 +3,8 @@ import { zlibSync } from "fflate";
 
 // Drives the IDE on the /share route (files come from the URL hash, so no
 // IndexedDB project setup is needed): script output, errors, figures,
-// input(), uihtml events in both directions, stopping a runaway script, and
-// the REPL.
+// input(), uihtml events in both directions, stopping a runaway script or a
+// pause, and the REPL.
 
 function shareUrl(files: Record<string, string>, active: string): string {
   const data = {
@@ -139,6 +139,21 @@ test.describe("IDE", () => {
       await expect(runButton(page)).toBeVisible({ timeout: 5_000 });
     });
   }
+
+  test("Stop ends a pause in persistent mode", async ({ page }) => {
+    await openIde(page, {
+      "wait.m": "disp('waiting')\npause(60)\ndisp('not reached')\n",
+    });
+    await page.getByText("1x", { exact: true }).click();
+    await expect(page.getByText("persist", { exact: true })).toBeVisible();
+    await runButton(page).click();
+    await expect(output(page)).toContainText("waiting");
+    await page.waitForTimeout(300);
+    await stopButton(page).click();
+    // The blocked pause wakes at once; it does not run out its 60 s.
+    await expect(runButton(page)).toBeVisible({ timeout: 5_000 });
+    await expect(output(page)).not.toContainText("not reached");
+  });
 
   test("REPL keeps variables between commands", async ({ page }) => {
     await openIde(page, { "main.m": "disp(1)\n" });

@@ -84,7 +84,9 @@ export interface ExecOptions {
    * - null → opt out of the implicit-cwd behavior entirely.
    */
   implicitCwdPath?: string | null;
-  /** SharedArrayBuffer for cooperative cancellation. Int32[0] != 0 means cancelled. */
+  /** SharedArrayBuffer for cooperative cancellation. Int32[0] != 0 means
+   *  cancelled. Make it with `createCancelBuffer` (8 bytes) so Stop also wakes
+   *  a blocked input(), pause or gpu.call at once (see blockingChannel.ts). */
   cancelSAB?: SharedArrayBuffer;
   /** Hook for `sendEventToHTMLSource(src,name,data)` — pushes an event from a
    *  uihtml callback back to the component's page (MATLAB → JS). `dataJson` is
