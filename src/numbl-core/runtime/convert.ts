@@ -7,9 +7,9 @@ import {
   isRuntimeLogical,
   isRuntimeNumber,
   isRuntimeString,
-  kstr,
   type RuntimeValue,
 } from "./types.js";
+import { kstr } from "./kinds.js";
 import { RuntimeError } from "./error.js";
 
 /** Extract a JS number from an RuntimeValue (scalar num, logical, or 1x1 tensor) */

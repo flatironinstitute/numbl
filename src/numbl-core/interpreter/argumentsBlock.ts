@@ -15,7 +15,7 @@ import {
 import { RTV } from "../runtime/constructors.js";
 import { ensureRuntimeValue } from "../runtime/runtimeHelpers.js";
 import { RuntimeError } from "../runtime/error.js";
-import { valueShape } from "../runtime/utils.js";
+import { valueShape } from "../runtime/kinds.js";
 
 import type { Environment, FunctionDef } from "./types.js";
 import type { Interpreter } from "./interpreter.js";

@@ -38,7 +38,8 @@ import {
 import { builtin } from "./builtin.js";
 import { builtinError, numericArg, realScalarArg } from "./args.js";
 import { mkc } from "./types.js";
-import { undefinedForTypeError, valueClassName } from "./value-class.js";
+import { undefinedForTypeError } from "./value-class.js";
+import { valueClass } from "../../runtime/kinds.js";
 import { toNumArray } from "../../helpers/reduction-helpers.js";
 import { allocFloat64Array } from "../../runtime/alloc.js";
 import { stripZeroImagTensor } from "../../helpers/effectively-real.js";
@@ -280,7 +281,7 @@ function setInputClassError(
 ): RuntimeError {
   return builtinError(
     `MATLAB:${id}:InputClass`,
-    `Input A of class ${valueClassName(a)} and input B of class ${valueClassName(b)} must be cell arrays of character vectors, unless one is a character vector.`
+    `Input A of class ${valueClass(a)} and input B of class ${valueClass(b)} must be cell arrays of character vectors, unless one is a character vector.`
   );
 }
 

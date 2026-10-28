@@ -10,11 +10,10 @@ import {
   isRuntimeChar,
   isRuntimeTensor,
   isRuntimeCell,
-  isRuntimeDictionary,
-  kstr,
   type RuntimeValue,
   type RuntimeDictionary,
 } from "./types.js";
+import { kstr, valueClass } from "./kinds.js";
 import { RTV } from "./constructors.js";
 import { RuntimeError } from "./error.js";
 
@@ -34,16 +33,9 @@ export function hashKey(v: RuntimeValue): string {
 
 // ── Type label ───────────────────────────────────────────────────────────
 
-/** Return the MATLAB type name string for a runtime value. */
+/** The MATLAB class of a key or value; char auto-promotes to string. */
 function typeLabel(v: RuntimeValue): string {
-  if (isRuntimeNumber(v)) return "double";
-  if (isRuntimeLogical(v)) return "logical";
-  if (isRuntimeString(v)) return "string";
-  if (isRuntimeChar(v)) return "string"; // char keys auto-promote to string
-  if (isRuntimeTensor(v)) return v._isLogical ? "logical" : "double";
-  if (isRuntimeCell(v)) return "cell";
-  if (isRuntimeDictionary(v)) return "dictionary";
-  return kstr(v);
+  return isRuntimeChar(v) ? "string" : valueClass(v);
 }
 
 // ── Type enforcement / auto-conversion ───────────────────────────────────

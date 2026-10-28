@@ -118,28 +118,6 @@ export const isRuntimeStringArray = (
   value !== null &&
   (value as RuntimeStringArray).kind === "string_array";
 
-export const kstr = (value: RuntimeValue): string => {
-  if (isRuntimeNumber(value)) return "number";
-  if (isRuntimeLogical(value)) return "logical";
-  if (isRuntimeString(value)) return "string";
-  if (isRuntimeChar(value)) return "char";
-  if (isRuntimeTensor(value)) return "tensor";
-  if (isRuntimeCell(value)) return "cell";
-  if (isRuntimeStruct(value)) return "struct";
-  if (isRuntimeFunction(value)) return "function";
-  if (isRuntimeClassInstance(value)) return `instance of ${value.className}`;
-  if (isRuntimeClassInstanceArray(value))
-    return `array of ${value.className} instances`;
-  if (isRuntimeComplexNumber(value)) return "complex number";
-  if (isRuntimeDummyHandle(value)) return "dummy handle";
-  if (isRuntimeGraphicsHandle(value)) return "graphics handle";
-  if (isRuntimeStructArray(value)) return "struct array";
-  if (isRuntimeSparseMatrix(value)) return "sparse matrix";
-  if (isRuntimeDictionary(value)) return "dictionary";
-  if (isRuntimeStringArray(value)) return "string array";
-  return "unknown";
-};
-
 // ── Container classes ────────────────────────────────────────────────────
 //
 // Each class extends Refcounted. The `kind` field is preserved as an

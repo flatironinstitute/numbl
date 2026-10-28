@@ -16,6 +16,7 @@ import {
 } from "../../runtime/types.js";
 import type { RuntimeValue, RuntimeStruct } from "../../runtime/types.js";
 import { RTV, RuntimeError } from "../../runtime/index.js";
+import { isEmptyValue } from "../../runtime/kinds.js";
 
 import { toString } from "../../runtime/convert.js";
 import { builtin } from "./builtin.js";
@@ -182,14 +183,6 @@ builtin({
     return fallback ?? RTV.tensor(allocFloat64Array(0), [0, 0]);
   },
 });
-
-/** True for an empty array value ([] , '', {}). */
-function isEmptyValue(v: RuntimeValue): boolean {
-  if (isRuntimeTensor(v)) return v.data.length === 0;
-  if (isRuntimeChar(v)) return v.value.length === 0;
-  if (isRuntimeCell(v)) return v.data.length === 0;
-  return false;
-}
 
 // ── peaks ────────────────────────────────────────────────────────────────
 

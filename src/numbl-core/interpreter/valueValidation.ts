@@ -30,7 +30,7 @@ import { RTV } from "../runtime/constructors.js";
 import { ensureRuntimeValue } from "../runtime/runtimeHelpers.js";
 import { CancellationError, RuntimeError } from "../runtime/error.js";
 import { invokeBuiltin } from "../runtime/runtimeDispatch.js";
-import { valueShape } from "../runtime/utils.js";
+import { INTEGER_CLASSES, valueShape } from "../runtime/kinds.js";
 
 import type { Interpreter } from "./interpreter.js";
 import { callFunction, callResolved } from "./calls.js";
@@ -251,17 +251,6 @@ function sizeMessage(dims: readonly (number | null)[]): string {
 }
 
 // ── Class ───────────────────────────────────────────────────────────────
-
-const INTEGER_CLASSES = new Set([
-  "int8",
-  "int16",
-  "int32",
-  "int64",
-  "uint8",
-  "uint16",
-  "uint32",
-  "uint64",
-]);
 
 function isNumericOrLogical(v: RuntimeValue): boolean {
   return (

@@ -17,7 +17,8 @@ import {
   RuntimeStructArray,
   RuntimeStringArray,
 } from "./types.js";
-import { colMajorIndex, ind2sub, valueShape } from "./utils.js";
+import { colMajorIndex, ind2sub } from "./utils.js";
+import { valueClass, valueShape } from "./kinds.js";
 import { formatDatetimePattern } from "./datetime-format.js";
 import { MEXCEPTION_PROPERTIES } from "./mexception.js";
 import { getCurrentRuntime } from "./refcount.js";
@@ -395,7 +396,7 @@ function summarizeValue(v: RuntimeValue): string {
       const isRow = v.shape.length === 2 && v.shape[0] === 1;
       if (isRow && !v.imag && v.data.length <= 10)
         return `[${Array.from(v.data, formatNumber).join(" ")}]`;
-      return `[${dims(v.shape)} ${v._isLogical ? "logical" : "double"}]`;
+      return `[${dims(v.shape)} ${valueClass(v)}]`;
     }
     case "cell":
       return v.data.length === 0 && v.shape.every(d => d === 0)

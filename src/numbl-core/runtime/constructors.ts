@@ -3,7 +3,6 @@
  */
 
 import { allocFloat64Array } from "./alloc.js";
-import { ItemType } from "../itemTypes.js";
 import {
   type RuntimeNumber,
   RuntimeTensor,
@@ -23,9 +22,6 @@ import {
   RuntimeDictionary,
   RuntimeStringArray,
   type RuntimeValue,
-  isRuntimeNumber,
-  isRuntimeLogical,
-  isRuntimeString,
 } from "./types.js";
 
 export const RTV = {
@@ -191,74 +187,4 @@ export const RTV = {
   ): RuntimeDictionary {
     return new RuntimeDictionary(entries, keyType, valueType);
   },
-};
-
-export const getItemTypeFromRuntimeValue = (value: RuntimeValue): ItemType => {
-  if (isRuntimeNumber(value)) {
-    return { kind: "Number" }; // important to not include the value here or we end up jitting every numeric literal as a separate type!
-  }
-  if (isRuntimeLogical(value)) {
-    return { kind: "Boolean" };
-  }
-  if (isRuntimeString(value)) {
-    return { kind: "String" }; // same note as for RuntimeNumber
-  }
-  switch (value.kind) {
-    case "complex_number":
-      return { kind: "ComplexNumber" };
-    case "char":
-      return { kind: "Char" };
-    case "tensor":
-      return {
-        kind: "Tensor",
-        isComplex: value.imag !== undefined,
-        isLogical: value._isLogical || undefined,
-      };
-    case "cell":
-      return {
-        kind: "Cell",
-        elementType:
-          value.data.length > 0
-            ? getItemTypeFromRuntimeValue(value.data[0])
-            : { kind: "Unknown" },
-        // length: value.shape.reduce((a, b) => a * b, 1),
-        length: "unknown", // do not include length or we get too many jits
-      };
-    case "struct": {
-      const knownFields: Record<string, import("../itemTypes.js").ItemType> =
-        {};
-      for (const [k, v] of value.fields) {
-        knownFields[k] = getItemTypeFromRuntimeValue(v);
-      }
-      return { kind: "Struct", knownFields };
-    }
-    case "function":
-      return {
-        kind: "Function",
-        params: [],
-        returns: { kind: "Unknown" },
-      };
-    case "class_instance":
-      return {
-        kind: "ClassInstance",
-        className: value.className,
-      };
-    case "class_instance_array":
-      return {
-        kind: "ClassInstance",
-        className: value.className,
-      };
-    case "dummy_handle":
-      return { kind: "DummyHandle" };
-    case "graphics_handle":
-      return { kind: "DummyHandle" };
-    case "struct_array":
-      return { kind: "Unknown" };
-    case "sparse_matrix":
-      return { kind: "SparseMatrix", isComplex: value.pi !== undefined };
-    case "dictionary":
-      return { kind: "Dictionary" };
-    default:
-      return { kind: "Unknown" };
-  }
 };

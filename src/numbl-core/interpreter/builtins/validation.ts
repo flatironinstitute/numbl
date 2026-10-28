@@ -21,7 +21,7 @@ import type { Runtime } from "../../runtime/runtime.js";
 import { builtin } from "./builtin.js";
 import { builtinError } from "./args.js";
 import { MATLAB_KEYWORDS } from "./introspection.js";
-import { valueShape } from "../../runtime/utils.js";
+import { valueClass, valueShape } from "../../runtime/kinds.js";
 
 function numericElements(v: RuntimeValue): number[] {
   if (isRuntimeNumber(v)) return [v as number];
@@ -457,46 +457,6 @@ validator("mustBeUnderlyingType", 2, ([v, types], rt) => {
 
 // ── validateattributes ─────────────────────────────────────────────────
 
-function getValClassName(v: RuntimeValue): string {
-  if (typeof v === "number") return "double";
-  if (typeof v === "boolean") return "logical";
-  if (typeof v === "string") return "string";
-  const obj = v as { kind: string; _isLogical?: boolean; className?: string };
-  switch (obj.kind) {
-    case "tensor":
-      return obj._isLogical ? "logical" : "double";
-    case "complex_number":
-      return "double";
-    case "char":
-      return "char";
-    case "cell":
-      return "cell";
-    case "struct":
-    case "struct_array":
-      return "struct";
-    case "function":
-      return "function_handle";
-    case "class_instance":
-    case "class_instance_array":
-      return obj.className ?? "unknown";
-    case "sparse_matrix":
-      return "double";
-    case "dictionary":
-      return "dictionary";
-    case "string_array":
-      return "string";
-    default:
-      return "unknown";
-  }
-}
-
-function matchesOneClass(v: RuntimeValue, cls: string): boolean {
-  const vc = getValClassName(v);
-  if (vc === cls) return true;
-  if (cls === "numeric" && vc === "double") return true;
-  return false;
-}
-
 function extractStr(v: RuntimeValue): string {
   if (typeof v === "string") return v;
   if (isRuntimeChar(v)) return v.value;
@@ -531,7 +491,7 @@ builtin({
   name: "validateattributes",
   nargin: [3, 6],
   nargout: 0,
-  apply: args => {
+  apply: (args, _nargout, { rt }) => {
     const A = args[0];
     const classesArg = args[1];
     const attrsArg = args[2];
@@ -584,8 +544,12 @@ builtin({
     }
 
     if (classNames.length > 0) {
-      if (!classNames.some(cls => matchesOneClass(A, cls))) {
-        const vc = getValClassName(A);
+      // isa semantics (superclasses count), but of isa's categories only
+      // 'numeric' is a class name here.
+      const matches = (cls: string) =>
+        cls !== "float" && cls !== "integer" && rt.isa(A, cls);
+      if (!classNames.some(matches)) {
+        const vc = valueClass(A);
         errFn(
           `be one of these types:\n\n${classNames.join(", ")}\n\nInstead its type was ${vc}.`
         );

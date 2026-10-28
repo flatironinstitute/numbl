@@ -80,7 +80,6 @@ import {
   methodDispatch as _methodDispatch,
   callBuiltin as _callBuiltin,
   callClassMethod as _callClassMethod,
-  numblClass as _numblClass,
 } from "./runtimeDispatch.js";
 import {
   index as _index,
@@ -106,9 +105,9 @@ import {
   initialFiguresState,
 } from "../plotting/figuresReducer.js";
 import { computeAxisLimits } from "../plotting/axisLimits.js";
-import { isRuntimeChar, isRuntimeString, kstr } from "./types.js";
+import { isRuntimeChar, isRuntimeString } from "./types.js";
+import { kstr, valueClass, valueShape } from "./kinds.js";
 import { allocFloat64Array } from "./alloc.js";
-import { valueShape } from "./utils.js";
 
 /** One `beginOutputCapture()` frame: where its output goes, plus the plot
  *  state to restore if the attempt is discarded. */
@@ -916,7 +915,7 @@ export class Runtime {
       }
       this.output("\n\n");
     }
-    return 0;
+    return undefined;
   }
 
   /** Build info record for a single variable. */
@@ -936,7 +935,7 @@ export class Runtime {
       name,
       shape: valueShape(ensureRuntimeValue(v)),
       bytes: Runtime.varBytes(v),
-      cls: _numblClass(rv),
+      cls: valueClass(rv),
       complex: Runtime.varIsComplex(rv),
       sparse: Runtime.varIsSparse(rv),
     };
@@ -1004,7 +1003,7 @@ export class Runtime {
     }
 
     // Display mode
-    if (infos.length === 0) return 0;
+    if (infos.length === 0) return undefined;
 
     const rows = infos.map(info => {
       const attrs: string[] = [];
@@ -1034,7 +1033,7 @@ export class Runtime {
       );
     }
     this.output("\n");
-    return 0;
+    return undefined;
   }
 
   // ── Persistent variables ────────────────────────────────────────────

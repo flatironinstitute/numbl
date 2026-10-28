@@ -29,7 +29,8 @@ import { RTV, RuntimeError } from "../../runtime/index.js";
 import { toNumber, toString } from "../../runtime/convert.js";
 import { makeTensor, mkc } from "./types.js";
 import { builtin } from "./builtin.js";
-import { undefinedForTypeError, valueClassName } from "./value-class.js";
+import { undefinedForTypeError } from "./value-class.js";
+import { valueClass } from "../../runtime/kinds.js";
 import { builtinError } from "./args.js";
 import { allocFloat64Array } from "../../runtime/alloc.js";
 import { imagAllZero } from "../../helpers/effectively-real.js";
@@ -43,7 +44,7 @@ import { unparseExpr, type Expr } from "../../parser/index.js";
 function invalidConversion(to: string, v: RuntimeValue): RuntimeError {
   return builtinError(
     "MATLAB:invalidConversion",
-    `Conversion to ${to} from ${valueClassName(v)} is not possible.`
+    `Conversion to ${to} from ${valueClass(v)} is not possible.`
   );
 }
 
