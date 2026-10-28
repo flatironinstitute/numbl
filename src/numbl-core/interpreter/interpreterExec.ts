@@ -9,15 +9,12 @@ import type { RuntimeValue } from "../runtime/types.js";
 import {
   isRuntimeTensor,
   isRuntimeChar,
-  isRuntimeString,
   isRuntimeCell,
   isRuntimeClassInstance,
   isRuntimeClassInstanceArray,
   isRuntimeFunction,
   isRuntimeStruct,
   isRuntimeStructArray,
-  isRuntimeSparseMatrix,
-  isRuntimeStringArray,
 } from "../runtime/types.js";
 import { RTV } from "../runtime/constructors.js";
 import { ensureRuntimeValue } from "../runtime/runtimeHelpers.js";
@@ -31,6 +28,7 @@ import { getConstant } from "../helpers/constants.js";
 import { buildLineTable, offsetToLineFast } from "../runtime/error.js";
 import { COLON_SENTINEL, END_SENTINEL } from "../runtime/sentinels.js";
 import { numel } from "../runtime/utils.js";
+import { endOf } from "../runtime/runtimeIndexing.js";
 import {
   forIter,
   switchMatch as runtimeSwitchMatch,
@@ -514,50 +512,7 @@ export function evalExprNargout(
 
     case "EndKeyword": {
       const ctx = this.endContextStack[this.endContextStack.length - 1];
-      if (ctx) {
-        const rv = ensureRuntimeValue(ctx.base);
-        if (isRuntimeTensor(rv)) {
-          if (ctx.numIndices === 1) return numel(rv.shape);
-          return ctx.dimIndex < rv.shape.length ? rv.shape[ctx.dimIndex] : 1;
-        }
-        if (isRuntimeCell(rv)) {
-          if (ctx.numIndices === 1) return numel(rv.shape);
-          return ctx.dimIndex < rv.shape.length ? rv.shape[ctx.dimIndex] : 1;
-        }
-        if (isRuntimeChar(rv)) return rv.value.length;
-        // A string scalar is a 1x1 array: end is 1 (s(end) is s itself).
-        if (isRuntimeString(rv)) return 1;
-        // Class instances: call overloaded end(obj, k, n) if available;
-        // otherwise default to 1 (a scalar instance has extent 1 in every
-        // dimension, matching MATLAB's builtin end).
-        if (isRuntimeClassInstance(rv)) {
-          if (this.rt.resolveClassMethod?.(rv.className, "end")) {
-            return this.rt.dispatch("end", 1, [
-              rv,
-              ctx.dimIndex + 1,
-              ctx.numIndices,
-            ]);
-          }
-          return 1;
-        }
-        if (isRuntimeStructArray(rv)) {
-          return rv.elements.length;
-        }
-        if (isRuntimeClassInstanceArray(rv)) {
-          if (ctx.numIndices === 1) return rv.elements.length;
-          return ctx.dimIndex < rv.shape.length ? rv.shape[ctx.dimIndex] : 1;
-        }
-        if (isRuntimeStringArray(rv)) {
-          if (ctx.numIndices === 1) return rv.data.length;
-          return ctx.dimIndex < 2 ? rv.shape[ctx.dimIndex] : 1;
-        }
-        if (isRuntimeSparseMatrix(rv)) {
-          if (ctx.numIndices === 1) return rv.m * rv.n;
-          return ctx.dimIndex === 0 ? rv.m : ctx.dimIndex === 1 ? rv.n : 1;
-        }
-        // Scalars (number, boolean, complex) — default to 1
-        return 1;
-      }
+      if (ctx) return endOf(this.rt, ctx.base, ctx.dimIndex, ctx.numIndices);
       return END_SENTINEL;
     }
 

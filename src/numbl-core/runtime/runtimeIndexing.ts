@@ -39,7 +39,7 @@ import {
   type RuntimeStruct,
 } from "../runtime/types.js";
 import { stringArraySubscript } from "./indexing.js";
-import { matlabNumToString } from "./utils.js";
+import { matlabNumToString, numel, valueShape } from "./utils.js";
 import {
   dictLookup,
   dictInsertSingle,
@@ -96,34 +96,43 @@ function resolveIndices(
 }
 
 /**
- * Get an end resolver function for the given runtime value.
+ * The value of `end` in subscript `dimIndex` (0-based) of an index
+ * expression with `numSubscripts` subscripts. A class `end` overload is
+ * called when one exists. Otherwise, with a single subscript `end` is
+ * numel; in the last of several subscripts it is the product of the
+ * remaining (collapsed trailing) dimensions; elsewhere it is the size of
+ * that dimension.
  */
+export function endOf(
+  rt: Runtime,
+  base: unknown,
+  dimIndex: number,
+  numSubscripts: number
+): number {
+  const v = ensureRuntimeValue(base);
+  if (isRuntimeClassInstance(v) || isRuntimeClassInstanceArray(v)) {
+    const endFn = rt.cachedResolveClassMethod(v.className, "end");
+    if (endFn) {
+      const r = endFn(1, v, RTV.num(dimIndex + 1), RTV.num(numSubscripts));
+      return toNumber(ensureRuntimeValue(r));
+    }
+  }
+  const shape = valueShape(v);
+  if (numSubscripts === 1) return numel(shape);
+  if (dimIndex < numSubscripts - 1) {
+    return dimIndex < shape.length ? shape[dimIndex] : 1;
+  }
+  let n = 1;
+  for (let i = dimIndex; i < shape.length; i++) n *= shape[i];
+  return n;
+}
+
 function endResolver(
+  rt: Runtime,
   mv: RuntimeValue,
   numIndices: number
 ): (dim: number) => number {
-  return (dim: number): number => {
-    if (isRuntimeTensor(mv)) {
-      if (numIndices === 1) return mv.data.length;
-      return dim < mv.shape.length ? mv.shape[dim] : 1;
-    }
-    if (isRuntimeChar(mv)) return mv.value.length;
-    if (isRuntimeCell(mv)) {
-      if (numIndices === 1) return mv.data.length;
-      return dim < mv.shape.length ? mv.shape[dim] : 1;
-    }
-    if (isRuntimeStructArray(mv)) return mv.elements.length;
-    if (isRuntimeClassInstanceArray(mv)) return mv.elements.length;
-    if (isRuntimeStringArray(mv)) {
-      if (numIndices === 1) return mv.data.length;
-      return dim < 2 ? mv.shape[dim] : 1;
-    }
-    if (isRuntimeSparseMatrix(mv)) {
-      if (numIndices === 1) return mv.m * mv.n;
-      return dim === 0 ? mv.m : dim === 1 ? mv.n : 1;
-    }
-    return 1;
-  };
+  return (dim: number): number => endOf(rt, mv, dim, numIndices);
 }
 
 /**
@@ -253,7 +262,7 @@ export function index(
     const key = ensureRuntimeValue(indices[0]);
     return dictLookup(mv, key);
   }
-  const idxMvals = resolveIndices(indices, endResolver(mv, indices.length));
+  const idxMvals = resolveIndices(indices, endResolver(rt, mv, indices.length));
   return mIndex(mv, idxMvals);
 }
 
@@ -271,12 +280,7 @@ function classInstanceParenIndex(
   if (subsrefFn && !skipSubsref) {
     const guardKey = `${mv.className}.subsref`;
     if (!rt.activeAccessors.has(guardKey)) {
-      const resolvedIndices = resolveIndicesForClassInstance(
-        rt,
-        mv,
-        base,
-        indices
-      );
+      const resolvedIndices = resolveIndicesForClassInstance(rt, mv, indices);
       const subsCell = RTV.cell(resolvedIndices, [1, resolvedIndices.length]);
       const S = RTV.structArray(
         ["type", "subs"],
@@ -397,19 +401,12 @@ function classInstanceArrayParenIndex(
 function resolveIndicesForClassInstance(
   rt: Runtime,
   mv: import("../runtime/types.js").RuntimeClassInstance,
-  base: unknown,
   indices: unknown[]
 ): RuntimeValue[] {
   const numIndices = indices.length;
 
-  const resolveEndForDim = (dim: number): number => {
-    const endFn = rt.cachedResolveClassMethod(mv.className, "end");
-    if (endFn) {
-      const result = endFn(1, base, RTV.num(dim + 1), RTV.num(numIndices));
-      return toNumber(ensureRuntimeValue(result));
-    }
-    return 1;
-  };
+  const resolveEndForDim = (dim: number): number =>
+    endOf(rt, mv, dim, numIndices);
 
   return indices.map((idx, dim) => {
     if (idx === COLON_SENTINEL) return RTV.char(":");
@@ -462,12 +459,7 @@ export function indexCell(
     if (subsrefFn) {
       const guardKey = `${mv.className}.subsref`;
       if (!rt.activeAccessors.has(guardKey)) {
-        const resolvedIndices = resolveIndicesForClassInstance(
-          rt,
-          mv,
-          base,
-          indices
-        );
+        const resolvedIndices = resolveIndicesForClassInstance(rt, mv, indices);
         const subsCell = RTV.cell(resolvedIndices, [1, resolvedIndices.length]);
         const S = RTV.structArray(
           ["type", "subs"],
@@ -504,7 +496,10 @@ export function indexCell(
   // String brace indexing: str{i} extracts the element as a char vector
   // (MATLAB: ["one" "two"]{2} -> 'two'; "abc"{1} -> 'abc').
   if (isRuntimeString(mv) || isRuntimeStringArray(mv)) {
-    const idxMvals = resolveIndices(indices, endResolver(mv, indices.length));
+    const idxMvals = resolveIndices(
+      indices,
+      endResolver(rt, mv, indices.length)
+    );
     const elems = isRuntimeString(mv) ? [mv] : mv.data;
     const shape: [number, number] = isRuntimeString(mv) ? [1, 1] : mv.shape;
     let lin: number;
@@ -527,7 +522,7 @@ export function indexCell(
   }
 
   if (!isRuntimeCell(mv)) throw new RuntimeError("Cell indexing on non-cell");
-  const idxMvals = resolveIndices(indices, endResolver(mv, indices.length));
+  const idxMvals = resolveIndices(indices, endResolver(rt, mv, indices.length));
   // CSL for 1D cell indexing
   if (idxMvals.length === 1) {
     const idx = idxMvals[0];
@@ -719,7 +714,10 @@ export function indexStore(
   }
   // Cell paren-indexed assignment
   if (isRuntimeCell(mv)) {
-    const idxMvals = resolveIndices(indices, endResolver(mv, indices.length));
+    const idxMvals = resolveIndices(
+      indices,
+      endResolver(rt, mv, indices.length)
+    );
     const rhsMv = ensureRuntimeValue(rhs);
     return mIndexStore(mv, idxMvals, rhsMv, true, rt);
   }
@@ -816,7 +814,10 @@ export function indexStore(
   }
   // Sparse matrix indexed assignment — delegate to storeIntoRTValueIndex
   if (isRuntimeSparseMatrix(mv)) {
-    const idxMvals = resolveIndices(indices, endResolver(mv, indices.length));
+    const idxMvals = resolveIndices(
+      indices,
+      endResolver(rt, mv, indices.length)
+    );
     const rhsMv = ensureRuntimeValue(rhs);
     return mIndexStore(mv, idxMvals, rhsMv, false, rt);
   }
@@ -837,7 +838,7 @@ export function indexStore(
     const baseEmpty = isRuntimeTensor(mv) && mv.data.length === 0;
     const rhsIsStr = isRuntimeString(rhsMv0) || isRuntimeStringArray(rhsMv0);
     if (baseIsStr || (baseEmpty && rhsIsStr)) {
-      return stringArrayIndexStore(mv, indices, rhsMv0);
+      return stringArrayIndexStore(rt, mv, indices, rhsMv0);
     }
   }
   // Convert scalar number/logical/complex to 1x1 tensor for indexed assignment
@@ -868,7 +869,7 @@ export function indexStore(
       mv = RTV.tensor(allocFloat64Array(0), [0, 0]);
     }
   }
-  const idxMvals = resolveIndices(indices, endResolver(mv, indices.length));
+  const idxMvals = resolveIndices(indices, endResolver(rt, mv, indices.length));
   let rhsMv = ensureRuntimeValue(rhs);
   // A char RHS assigned into a numeric/char array becomes its code point(s)
   // (MATLAB: x=[1 2 3]; x(2)='A' -> [1 65 3]).
@@ -920,6 +921,7 @@ function rhsToStringElems(rhsMv: RuntimeValue): string[] | null {
  *  string / empty tensor becoming one). Supports growth (gaps fill with ""
  *  — numbl has no <missing>) and deletion via s(idx) = []. */
 function stringArrayIndexStore(
+  rt: Runtime,
   mv: RuntimeValue,
   indices: unknown[],
   rhsMv: RuntimeValue
@@ -940,7 +942,7 @@ function stringArrayIndexStore(
     cols = 0;
   }
 
-  const idxMvals = resolveIndices(indices, endResolver(mv, indices.length));
+  const idxMvals = resolveIndices(indices, endResolver(rt, mv, indices.length));
 
   // Deletion: s(idx) = []
   if (
@@ -1028,7 +1030,7 @@ export function indexCellStore(
   base: unknown,
   indices: unknown[],
   rhs: unknown,
-  rt?: import("./refcount.js").RefcountRuntime
+  rt: Runtime
 ): unknown {
   if (base === undefined || base === null) base = RTV.cell([], [0, 0]);
   let mv = ensureRuntimeValue(base);
@@ -1045,7 +1047,7 @@ export function indexCellStore(
     return dictInsertSingle(mv, key, cellVal);
   }
   if (!isRuntimeCell(mv)) mv = RTV.cell([], [0, 0]);
-  const idxMvals = resolveIndices(indices, endResolver(mv, indices.length));
+  const idxMvals = resolveIndices(indices, endResolver(rt, mv, indices.length));
   const rhsMv = ensureRuntimeValue(rhs);
   return mIndexStore(mv, idxMvals, rhsMv, false, rt);
 }
@@ -1058,7 +1060,7 @@ export function multiOutputCellAssign(
   base: unknown,
   indices: unknown,
   results: unknown[],
-  rt?: import("./refcount.js").RefcountRuntime
+  rt: Runtime
 ): unknown {
   if (base === undefined || base === null) base = RTV.cell([], [0, 0]);
   let mv = ensureRuntimeValue(base);
@@ -1086,7 +1088,7 @@ export function multiOutputCellAssign(
   for (let i = 0; i < idxArray.length && i < results.length; i++) {
     const idx = idxArray[i];
     const rhsMv = ensureRuntimeValue(results[i]);
-    const idxMvals = resolveIndices([idx], endResolver(mv, 1));
+    const idxMvals = resolveIndices([idx], endResolver(rt, mv, 1));
     mv = mIndexStore(mv, idxMvals, rhsMv, false, rt) as typeof mv;
   }
 
