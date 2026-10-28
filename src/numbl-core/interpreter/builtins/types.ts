@@ -77,17 +77,43 @@ export function registerBuiltinHelp(name: string, help: BuiltinHelp): void {
   helpRegistry.set(name, help);
 }
 
-/** Probe an IBuiltin to determine its nargin (number of input args).
- *  Tries resolve with 1, 2, 3 number-type args to find the accepted count. */
+const NARGIN_PROBE_MAX = 10;
+const narginCache = new Map<string, number>();
+
+/** Estimate an IBuiltin's nargin by probing `resolve` with 0..10 args of a
+ *  few kinds. MATLAB reports the maximum positional input count, or a
+ *  negative value for a variable-input function: when every probed count up
+ *  to the limit resolves (or none does), return -1; otherwise the largest
+ *  accepted count. This is a heuristic until builtins carry explicit nargin
+ *  metadata. */
 export function getIBuiltinNargin(name: string): number | undefined {
   const ib = registry.get(name);
   if (!ib) return undefined;
-  const num: JitType = { kind: "number" };
-  // Find the smallest arg count that resolves
-  for (let n = 1; n <= 10; n++) {
-    if (ib.resolve(Array(n).fill(num), 1)) return n;
+  const cached = narginCache.get(name);
+  if (cached !== undefined) return cached;
+  const kinds: JitType[] = [
+    { kind: "number" },
+    { kind: "char" },
+    { kind: "unknown" },
+  ];
+  let max = -1;
+  for (const t of kinds) {
+    for (let n = NARGIN_PROBE_MAX; n > max; n--) {
+      let ok = false;
+      try {
+        ok = !!ib.resolve(Array(n).fill(t), 1);
+      } catch {
+        ok = false;
+      }
+      if (ok) {
+        max = n;
+        break;
+      }
+    }
   }
-  return undefined;
+  const result = max < 0 || max === NARGIN_PROBE_MAX ? -1 : max;
+  narginCache.set(name, result);
+  return result;
 }
 
 // ── Infer JitType from a runtime value ──────────────────────────────────

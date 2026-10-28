@@ -1297,18 +1297,17 @@ export function makeFuncHandle(this: Interpreter, name: string): RuntimeValue {
     );
   };
   fn.jsFnExpectsNargout = true;
-  // Populate nargin for the handle: builtins (e.g. nargin(@sin) == 1), then
-  // the declared input count of a user/nested/local function (so
-  // `nargin(@f)` works for `@f` the same as it would for a call to `f`).
-  let narg = getIBuiltinNargin(name);
-  if (narg === undefined) {
-    // Never let an introspection lookup break handle creation.
-    try {
-      narg = this.declaredNargin(name);
-    } catch {
-      narg = undefined;
-    }
+  // Populate nargin for the handle: the declared input count of a
+  // user/nested/local function (so `nargin(@f)` works for `@f` the same as it
+  // would for a call to `f`), else a builtin's (e.g. nargin(@sin) == 1).
+  let narg: number | undefined;
+  // Never let an introspection lookup break handle creation.
+  try {
+    narg = this.declaredNargin(name);
+  } catch {
+    narg = undefined;
   }
+  if (narg === undefined) narg = getIBuiltinNargin(name);
   if (narg !== undefined) fn.nargin = narg;
   // For nested-function handles, the function-exit cleanup skipped
   // clearLocals (so the closure could keep its captured env alive).

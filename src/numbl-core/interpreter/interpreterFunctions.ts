@@ -435,15 +435,24 @@ export function interpretWorkspaceFunction(
       // No top-level function in the file → it's a script. MATLAB runs a
       // script invoked by name in the *caller's* workspace (variables are
       // shared), not in an isolated scope, so execute the body in `this.env`.
+      // A script takes no arguments and returns no value; it produces no
+      // `ans` of its own in the caller.
+      if (args.length > 0 || nargout > 0) {
+        const err = new RuntimeError(
+          `Execution of script ${target.name} as a function is not supported:\n${entry.fileName}`
+        );
+        err.identifier = "MATLAB:scriptNotAFunction";
+        throw err;
+      }
       const ast = this.ctx.getCachedAST(entry.fileName);
-      return this.withFileContext(entry.fileName, undefined, undefined, () => {
+      this.withFileContext(entry.fileName, undefined, undefined, () => {
         for (const stmt of ast.body) {
           if (stmt.type === "Function") continue;
           const signal = this.execStmt(stmt);
           if (signal instanceof ReturnSignal) break;
         }
-        return this.ans;
       });
+      return undefined;
     }
     throw new RuntimeError(`Workspace function '${target.name}' not found`);
   }

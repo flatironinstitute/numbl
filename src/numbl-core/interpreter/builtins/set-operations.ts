@@ -300,8 +300,8 @@ defineBuiltin({
         if (argTypes.length < 1) return null;
         const a = argTypes[0];
         if (a.kind === "number" || a.kind === "boolean") {
-          const out: JitType = { kind: "number" };
-          return nargout > 1 ? [out, out] : [out];
+          const out: JitType = { kind: a.kind };
+          return nargout > 1 ? [out, { kind: "number" }] : [out];
         }
         if (a.kind === "complex_or_number") {
           const out: JitType = { kind: "complex_or_number" };
@@ -311,6 +311,7 @@ defineBuiltin({
           const out: JitType = {
             kind: "tensor",
             isComplex: a.isComplex,
+            ...(a.isLogical ? { isLogical: true } : {}),
             shape: a.shape,
             ndim: a.ndim,
           };
@@ -389,7 +390,7 @@ defineBuiltin({
           return v;
         }
 
-        if (isRuntimeNumber(v)) {
+        if (isRuntimeNumber(v) || isRuntimeLogical(v)) {
           if (nargout > 1) return [v, RTV.num(1)];
           return v;
         }
@@ -401,7 +402,12 @@ defineBuiltin({
           // An all-zero imaginary lane (e.g. a JIT `sqrt` that lifted to
           // complex without leaving the real domain) sorts by value, not
           // magnitude, and returns a real result.
-          return sortTensor(stripZeroImagTensor(v), dim, descend, nargout);
+          const out = sortTensor(stripZeroImagTensor(v), dim, descend, nargout);
+          if (v._isLogical) {
+            const sorted = Array.isArray(out) ? out[0] : out;
+            (sorted as RuntimeTensor)._isLogical = true;
+          }
+          return out;
         }
         if (isRuntimeCell(v)) {
           return sortCell(v as RuntimeCell, descend, nargout);
@@ -1161,11 +1167,13 @@ defineBuiltin({
         const v = args[0];
         if (isRuntimeNumber(v)) return (v as number) !== 0 ? 1 : 0;
         if (isRuntimeLogical(v)) return v ? 1 : 0;
+        if (isRuntimeComplexNumber(v)) return v.re !== 0 || v.im !== 0 ? 1 : 0;
         if (isRuntimeSparseMatrix(v)) return v.jc[v.n];
         if (isRuntimeTensor(v)) {
+          const im = v.imag;
           let count = 0;
           for (let i = 0; i < v.data.length; i++) {
-            if (v.data[i] !== 0) count++;
+            if (v.data[i] !== 0 || (im && im[i] !== 0)) count++;
           }
           return count;
         }

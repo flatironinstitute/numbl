@@ -115,14 +115,6 @@ function tensorType(isComplex?: boolean, shape?: number[]): JitType {
   };
 }
 
-/** Return a tensor type that may be complex (based on input) */
-function tensorLikeInput(input: JitType): JitType {
-  if (input.kind === "tensor") {
-    return { kind: "tensor", isComplex: input.isComplex };
-  }
-  return { kind: "tensor", isComplex: false };
-}
-
 // ── norm ──────────────────────────────────────────────────────────────────
 
 defineBuiltin({
@@ -876,9 +868,10 @@ defineBuiltin({
         if (argTypes.length !== 2 && argTypes.length !== 3) return null;
         if (!isNumericJitType(argTypes[0]) || !isNumericJitType(argTypes[1]))
           return null;
-        if (argTypes[0].kind === "tensor")
-          return [tensorLikeInput(argTypes[0])];
-        return [tensorType(false)];
+        const isC = (t: JitType) =>
+          t.kind === "complex_or_number" ||
+          (t.kind === "tensor" && t.isComplex === true);
+        return [tensorType(isC(argTypes[0]) || isC(argTypes[1]))];
       },
       apply: args => {
         if (args.length < 2 || args.length > 3)
@@ -912,6 +905,9 @@ defineBuiltin({
           );
         const totalLen = a.data.length;
         const result = allocFloat64Array(totalLen);
+        const aIm = a.imag,
+          bIm = b.imag;
+        const resultIm = aIm || bIm ? allocFloat64Array(totalLen) : undefined;
         const strides = new Array(shape.length);
         strides[0] = 1;
         for (let d = 1; d < shape.length; d++)
@@ -934,12 +930,28 @@ defineBuiltin({
             const bx = b.data[i0],
               by = b.data[i1],
               bz = b.data[i2];
-            result[i0] = ay * bz - az * by;
-            result[i1] = az * bx - ax * bz;
-            result[i2] = ax * by - ay * bx;
+            if (!resultIm) {
+              result[i0] = ay * bz - az * by;
+              result[i1] = az * bx - ax * bz;
+              result[i2] = ax * by - ay * bx;
+              continue;
+            }
+            const axi = aIm ? aIm[i0] : 0,
+              ayi = aIm ? aIm[i1] : 0,
+              azi = aIm ? aIm[i2] : 0;
+            const bxi = bIm ? bIm[i0] : 0,
+              byi = bIm ? bIm[i1] : 0,
+              bzi = bIm ? bIm[i2] : 0;
+            // (p*q - r*s) for complex p, q, r, s (no conjugation, as MATLAB).
+            result[i0] = ay * bz - ayi * bzi - (az * by - azi * byi);
+            resultIm[i0] = ay * bzi + ayi * bz - (az * byi + azi * by);
+            result[i1] = az * bx - azi * bxi - (ax * bz - axi * bzi);
+            resultIm[i1] = az * bxi + azi * bx - (ax * bzi + axi * bz);
+            result[i2] = ax * by - axi * byi - (ay * bx - ayi * bxi);
+            resultIm[i2] = ax * byi + axi * by - (ay * bxi + ayi * bx);
           }
         }
-        return RTV.tensor(result, [...shape]);
+        return maybeComplexTensor(result, [...shape], resultIm);
       },
     },
   ],
@@ -2890,6 +2902,19 @@ function epsOf(x: number): number {
   return Math.pow(2, Math.floor(Math.log2(ax)) - 52);
 }
 
+/** Coerce a real/complex scalar or dense tensor to a tensor (else throw). */
+function toNumericTensor(v: RuntimeValue, name: string): RuntimeTensor {
+  if (isRuntimeNumber(v)) return RTV.tensor(allocFloat64Array([v]), [1, 1]);
+  if (isRuntimeComplexNumber(v))
+    return RTV.tensor(
+      allocFloat64Array([v.re]),
+      [1, 1],
+      allocFloat64Array([v.im])
+    );
+  if (isRuntimeTensor(v)) return v;
+  throw new RuntimeError(`${name}: arguments must be numeric`);
+}
+
 // ── pinv ────────────────────────────────────────────────────────────────
 
 defineBuiltin({
@@ -2902,7 +2927,8 @@ defineBuiltin({
         if (!isNumericJitType(argTypes[0])) return null;
         const a = argTypes[0];
         if (a.kind === "number" || a.kind === "boolean") return [NUM];
-        return [tensorType()];
+        if (a.kind === "complex_or_number") return [a];
+        return [tensorType(a.kind === "tensor" && a.isComplex)];
       },
       apply: args =>
         withScratch(() => {
@@ -2910,10 +2936,50 @@ defineBuiltin({
             throw new RuntimeError("pinv requires 1 or 2 arguments");
           const A = args[0];
           if (isRuntimeNumber(A)) return RTV.num(A === 0 ? 0 : 1 / A);
+          if (isRuntimeComplexNumber(A)) {
+            const d = A.re * A.re + A.im * A.im;
+            return d === 0 ? RTV.num(0) : RTV.complex(A.re / d, -A.im / d);
+          }
           if (!isRuntimeTensor(A))
             throw new RuntimeError("pinv: argument must be numeric");
           const [m, n] = tensorSize2D(A);
           const k = Math.min(m, n);
+          const tolArg =
+            args.length >= 2 && isRuntimeNumber(args[1]) ? args[1] : 0;
+          if (A.imag) {
+            // pinv(A) = V * diag(1./S) * U'  (U' is the conjugate transpose)
+            const { S, URe, UIm, VRe, VIm } = getLapackBridge().svdComplex(
+              toF64(A.data),
+              toF64(A.imag),
+              m,
+              n,
+              true,
+              true
+            );
+            const tol =
+              args.length >= 2
+                ? tolArg
+                : Math.max(m, n) * S[0] * 2.220446049250313e-16;
+            const re = allocFloat64Array(n * m);
+            const im = allocFloat64Array(n * m);
+            for (let i = 0; i < n; i++)
+              for (let j = 0; j < m; j++) {
+                let sr = 0,
+                  si = 0;
+                for (let l = 0; l < k; l++) {
+                  if (!(S[l] > tol)) continue;
+                  const vr = VRe![l * n + i] / S[l],
+                    vi = VIm![l * n + i] / S[l];
+                  const ur = URe![l * m + j],
+                    ui = -UIm![l * m + j];
+                  sr += vr * ur - vi * ui;
+                  si += vr * ui + vi * ur;
+                }
+                re[j * n + i] = sr;
+                im[j * n + i] = si;
+              }
+            return maybeComplexTensor(re, [n, m], im);
+          }
           const { U, S, V } = getLapackBridge().svd(
             toF64(A.data),
             m,
@@ -2923,9 +2989,7 @@ defineBuiltin({
           ) as { U: Float64Array; S: Float64Array; V: Float64Array };
           const tol =
             args.length >= 2
-              ? isRuntimeNumber(args[1])
-                ? args[1]
-                : 0
+              ? tolArg
               : Math.max(m, n) * S[0] * 2.220446049250313e-16;
           const result = allocFloat64Array(n * m);
           for (let i = 0; i < n; i++)
@@ -2960,7 +3024,15 @@ defineBuiltin({
               ),
             },
           ];
-        return [tensorType()];
+        return [
+          tensorType(
+            argTypes.some(
+              t =>
+                t.kind === "complex_or_number" ||
+                (t.kind === "tensor" && t.isComplex)
+            )
+          ),
+        ];
       },
       apply: args => {
         if (args.length !== 2)
@@ -2971,29 +3043,35 @@ defineBuiltin({
             toSparseOperand(args[0], "kron"),
             toSparseOperand(args[1], "kron")
           );
-        const coerce = (v: RuntimeValue): RuntimeTensor => {
-          if (isRuntimeNumber(v))
-            return RTV.tensor(allocFloat64Array([v]), [1, 1]);
-          if (isRuntimeTensor(v)) return v;
-          throw new RuntimeError("kron: arguments must be numeric");
-        };
-        const A = coerce(args[0]);
-        const B = coerce(args[1]);
+        const A = toNumericTensor(args[0], "kron");
+        const B = toNumericTensor(args[1], "kron");
         const [m, n] = tensorSize2D(A);
         const [p, q] = tensorSize2D(B);
         const rows = m * p,
           cols = n * q;
+        const aIm = A.imag,
+          bIm = B.imag;
         const result = allocFloat64Array(rows * cols);
+        const resultIm =
+          aIm || bIm ? allocFloat64Array(rows * cols) : undefined;
         for (let ja = 0; ja < n; ja++)
           for (let ia = 0; ia < m; ia++) {
             const aVal = A.data[ia + ja * m];
+            const aIv = aIm ? aIm[ia + ja * m] : 0;
             for (let jb = 0; jb < q; jb++)
               for (let ib = 0; ib < p; ib++) {
                 const bVal = B.data[ib + jb * p];
-                result[ia * p + ib + (ja * q + jb) * rows] = aVal * bVal;
+                const dst = ia * p + ib + (ja * q + jb) * rows;
+                if (!resultIm) {
+                  result[dst] = aVal * bVal;
+                  continue;
+                }
+                const bIv = bIm ? bIm[ib + jb * p] : 0;
+                result[dst] = aVal * bVal - aIv * bIv;
+                resultIm[dst] = aVal * bIv + aIv * bVal;
               }
           }
-        return RTV.tensor(result, [rows, cols]);
+        return maybeComplexTensor(result, [rows, cols], resultIm);
       },
     },
   ],
@@ -3008,19 +3086,25 @@ defineBuiltin({
       match: (argTypes, nargout) => {
         if (nargout > 1 || argTypes.length === 0) return null;
         if (!argTypes.every(isNumericJitType)) return null;
-        return [tensorType()];
+        return [
+          tensorType(
+            argTypes.some(
+              t =>
+                t.kind === "complex_or_number" ||
+                (t.kind === "tensor" && t.isComplex)
+            )
+          ),
+        ];
       },
       apply: args => {
         if (args.length === 0)
           throw new RuntimeError("blkdiag requires at least 1 argument");
-        const blocks = args.map(a => {
-          if (isRuntimeNumber(a))
-            return RTV.tensor(allocFloat64Array([a]), [1, 1]);
-          if (isRuntimeSparseMatrix(a)) return sparseToDense(a);
-          if (!isRuntimeTensor(a))
-            throw new RuntimeError("blkdiag: arguments must be numeric");
-          return a;
-        });
+        const blocks = args.map(a =>
+          isRuntimeSparseMatrix(a)
+            ? sparseToDense(a)
+            : toNumericTensor(a, "blkdiag")
+        );
+        const anyComplex = blocks.some(b => b.imag);
         let totalRows = 0,
           totalCols = 0;
         const dims: [number, number][] = [];
@@ -3031,19 +3115,25 @@ defineBuiltin({
           totalCols += n;
         }
         const result = allocFloat64Array(totalRows * totalCols);
+        const resultIm = anyComplex
+          ? allocFloat64Array(totalRows * totalCols)
+          : undefined;
         let rowOffset = 0,
           colOffset = 0;
         for (let k = 0; k < blocks.length; k++) {
           const [m, n] = dims[k];
           const data = blocks[k].data;
+          const imag = blocks[k].imag;
           for (let j = 0; j < n; j++)
-            for (let i = 0; i < m; i++)
-              result[rowOffset + i + (colOffset + j) * totalRows] =
-                data[i + j * m];
+            for (let i = 0; i < m; i++) {
+              const dst = rowOffset + i + (colOffset + j) * totalRows;
+              result[dst] = data[i + j * m];
+              if (resultIm && imag) resultIm[dst] = imag[i + j * m];
+            }
           rowOffset += m;
           colOffset += n;
         }
-        return RTV.tensor(result, [totalRows, totalCols]);
+        return maybeComplexTensor(result, [totalRows, totalCols], resultIm);
       },
     },
   ],
@@ -3065,7 +3155,10 @@ defineBuiltin({
           !isNumericJitType(argTypes[yIdx])
         )
           return null;
-        return [tensorType()];
+        const isC = (t: JitType) =>
+          t.kind === "complex_or_number" ||
+          (t.kind === "tensor" && t.isComplex === true);
+        return [tensorType(isC(argTypes[xIdx]) || isC(argTypes[yIdx]))];
       },
       apply: args => {
         // Delegate to legacy apply — the full implementation is complex
@@ -3097,20 +3190,8 @@ defineBuiltin({
           );
         } else throw new RuntimeError("pagemtimes requires 2 or 4 arguments");
 
-        const xT: RuntimeTensor = isRuntimeNumber(X)
-          ? (RTV.tensor(
-              allocFloat64Array([X as number]),
-              [1, 1]
-            ) as RuntimeTensor)
-          : (X as RuntimeTensor);
-        const yT: RuntimeTensor = isRuntimeNumber(Y)
-          ? (RTV.tensor(
-              allocFloat64Array([Y as number]),
-              [1, 1]
-            ) as RuntimeTensor)
-          : (Y as RuntimeTensor);
-        if (!isRuntimeTensor(xT) || !isRuntimeTensor(yT))
-          throw new RuntimeError("pagemtimes: arguments must be numeric");
+        const xT = toNumericTensor(X, "pagemtimes");
+        const yT = toNumericTensor(Y, "pagemtimes");
 
         const xShape = xT.shape.length < 2 ? [1, xT.shape[0] || 1] : xT.shape;
         const yShape = yT.shape.length < 2 ? [1, yT.shape[0] || 1] : yT.shape;
@@ -3145,11 +3226,11 @@ defineBuiltin({
         const xPageSize = xShape[0] * xShape[1],
           yPageSize = yShape[0] * yShape[1];
         const totalPages = outExtra.reduce((a, b) => a * b, 1);
+        const isComplex = !!(xT.imag || yT.imag);
         const result = allocFloat64Array(pageSize * totalPages);
-        const needTranspX = transpX === "transpose" || transpX === "ctranspose";
-        const needTranspY = transpY === "transpose" || transpY === "ctranspose";
-        const xTransBuf = needTranspX ? allocFloat64Array(xPageSize) : null;
-        const yTransBuf = needTranspY ? allocFloat64Array(yPageSize) : null;
+        const resultIm = isComplex
+          ? allocFloat64Array(pageSize * totalPages)
+          : undefined;
         const xExtraStrides: number[] = [],
           yExtraStrides: number[] = [];
         let xStride = 1,
@@ -3160,6 +3241,32 @@ defineBuiltin({
           xStride *= d < xExtra.length ? xExtra[d] : 1;
           yStride *= d < yExtra.length ? yExtra[d] : 1;
         }
+        // Copy one page into (re, im) buffers in op(X) layout, applying the
+        // requested transpose / conjugate transpose.
+        const loadPage = (
+          T: RuntimeTensor,
+          shp: number[],
+          off: number,
+          mode: string,
+          re: Float64Array,
+          im: Float64Array | undefined
+        ) => {
+          const r = shp[0],
+            c = shp[1];
+          const tr = mode === "transpose" || mode === "ctranspose";
+          const sgn = mode === "ctranspose" ? -1 : 1;
+          for (let j = 0; j < c; j++)
+            for (let i = 0; i < r; i++) {
+              const src = off + i + j * r;
+              const dst = tr ? j + i * c : i + j * r;
+              re[dst] = T.data[src];
+              if (im) im[dst] = T.imag ? sgn * T.imag[src] : 0;
+            }
+        };
+        const aRe = allocFloat64Array(xPageSize),
+          bRe = allocFloat64Array(yPageSize);
+        const aIm = isComplex ? allocFloat64Array(xPageSize) : undefined,
+          bIm = isComplex ? allocFloat64Array(yPageSize) : undefined;
         for (let p = 0; p < totalPages; p++) {
           let xPageIdx = 0,
             yPageIdx = 0,
@@ -3173,48 +3280,35 @@ defineBuiltin({
             xPageIdx += (xd === 1 ? 0 : idx) * xExtraStrides[d];
             yPageIdx += (yd === 1 ? 0 : idx) * yExtraStrides[d];
           }
-          const xOff = xPageIdx * xPageSize,
-            yOff = yPageIdx * yPageSize,
-            outOff = p * pageSize;
-          let aData = xT.data,
-            aOff = xOff,
-            aR = xShape[0],
-            aC = xShape[1];
-          let bData = yT.data,
-            bOff = yOff,
-            bR = yShape[0],
-            bC = yShape[1];
-          if (needTranspX && xTransBuf) {
-            for (let j = 0; j < xShape[1]; j++)
-              for (let i = 0; i < xShape[0]; i++)
-                xTransBuf[j + i * xShape[1]] =
-                  xT.data[xOff + i + j * xShape[0]];
-            aData = xTransBuf;
-            aOff = 0;
-            aR = xRows;
-            aC = xCols;
-          }
-          if (needTranspY && yTransBuf) {
-            for (let j = 0; j < yShape[1]; j++)
-              for (let i = 0; i < yShape[0]; i++)
-                yTransBuf[j + i * yShape[1]] =
-                  yT.data[yOff + i + j * yShape[0]];
-            bData = yTransBuf;
-            bOff = 0;
+          loadPage(xT, xShape, xPageIdx * xPageSize, transpX, aRe, aIm);
+          loadPage(yT, yShape, yPageIdx * yPageSize, transpY, bRe, bIm);
+          const outOff = p * pageSize;
+          const aR = xRows,
+            aC = xCols,
             bR = yRows;
-            bC = yCols;
-          }
-          for (let j = 0; j < bC; j++)
+          for (let j = 0; j < yCols; j++)
             for (let i = 0; i < aR; i++) {
-              let sum = 0;
-              for (let kk = 0; kk < aC; kk++)
-                sum += aData[aOff + i + kk * aR] * bData[bOff + kk + j * bR];
-              result[outOff + i + j * aR] = sum;
+              let sr = 0,
+                si = 0;
+              for (let kk = 0; kk < aC; kk++) {
+                const ar = aRe[i + kk * aR],
+                  br = bRe[kk + j * bR];
+                if (aIm && bIm) {
+                  const ai = aIm[i + kk * aR],
+                    bi = bIm[kk + j * bR];
+                  sr += ar * br - ai * bi;
+                  si += ar * bi + ai * br;
+                } else {
+                  sr += ar * br;
+                }
+              }
+              result[outOff + i + j * aR] = sr;
+              if (resultIm) resultIm[outOff + i + j * aR] = si;
             }
         }
         while (outShape.length > 2 && outShape[outShape.length - 1] === 1)
           outShape.pop();
-        return RTV.tensor(result, outShape);
+        return maybeComplexTensor(result, outShape, resultIm);
       },
     },
   ],
@@ -3246,17 +3340,22 @@ defineBuiltin({
         const totalPages = extraDims.reduce((a: number, b: number) => a * b, 1);
         const pageSize = rows * cols;
         const outData = allocFloat64Array(X.data.length);
+        const xIm = X.imag;
+        const outIm = xIm ? allocFloat64Array(X.data.length) : undefined;
         const outShape = [cols, rows, ...extraDims];
         for (let p = 0; p < totalPages; p++) {
           const inOff = p * pageSize,
             outOff = p * pageSize;
           for (let j = 0; j < cols; j++)
-            for (let i = 0; i < rows; i++)
+            for (let i = 0; i < rows; i++) {
               outData[outOff + j + i * cols] = X.data[inOff + i + j * rows];
+              if (outIm)
+                outIm[outOff + j + i * cols] = xIm![inOff + i + j * rows];
+            }
         }
         while (outShape.length > 2 && outShape[outShape.length - 1] === 1)
           outShape.pop();
-        return RTV.tensor(outData, outShape);
+        return RTV.tensor(outData, outShape, outIm);
       },
     },
   ],
