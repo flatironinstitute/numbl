@@ -1,27 +1,15 @@
-/* JIT runtime helper: scalar `assert(cond, msg)`. Tests `cond` for
- * MATLAB truthiness (non-zero and not NaN); fires `abort()` after
- * printing the message to stderr if the test fails.
+/* JIT runtime helper: scalar `assert(cond)` / `assert(cond, msg)` with a
+ * literal message. Tests `cond` for MATLAB truthiness (non-zero and not
+ * NaN) and raises a MATLAB error (`raise.h`) on failure.
  *
- * Numbl's `assert` (`interpreter/builtins/utility.ts:151`) accepts
- * tensor conds too — every element must be non-zero and not NaN. We
- * only support scalar conds in v1 (chunkie_simple's `assert(n >= 0,
- * ...)` is scalar-comparison-result anyway). Tensor-cond support is
- * a small followup.
- *
- * `msg` may be NULL or empty; the printer falls back to a generic
- * "assertion failed" line in that case.
+ * The codegen passes the interpreter's wording: "Assertion failed." with
+ * identifier `MATLAB:assertion:failed` for the 1-arg form, the message
+ * taken literally (identifier "") for the 2-arg form. Tensor conds are
+ * declined at lowering.
  */
-#include <stdio.h>
-#include <stdlib.h>
 
-static void jit_assert_scalar(double cond, const char *msg) {
+static void jit_assert_scalar(double cond, const char *id, const char *msg) {
   /* `cond != cond` filters NaN — numbl's `isNaN(v)` check. */
   if (cond != 0.0 && cond == cond) return;
-  fputs("C-JIT: assertion failed", stderr);
-  if (msg != NULL && msg[0] != '\0') {
-    fputs(": ", stderr);
-    fputs(msg, stderr);
-  }
-  fputc('\n', stderr);
-  abort();
+  jit_raise_error(id, msg);
 }

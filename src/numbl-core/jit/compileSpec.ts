@@ -40,6 +40,7 @@ import type { Workspace } from "./workspace/workspace.js";
 import { specializeUserFunction } from "./lowering/specialize.js";
 import { withoutExact, type Type } from "./lowering/types.js";
 import { emitJsProgram } from "./codegen/emitJs.js";
+import { isRecursive } from "./lowering/callGraph.js";
 import type { IRFunc, IRProgram, IRStmt } from "./lowering/ir.js";
 import { UnsupportedConstruct } from "./lowering/errors.js";
 
@@ -86,6 +87,11 @@ export interface CompileSpecResult {
    *  returned values back: a struct and a class instance are both plain
    *  JS objects in the emitted code, so only the type says which is which. */
   outputTypes: ReadonlyArray<Type>;
+  /** Files named by the statement locations a raise reports, by index
+   *  (decode with `decodeLoc`). */
+  locFiles: ReadonlyArray<string>;
+  /** The entry spec can call itself (directly or through its callees). */
+  recursive: boolean;
 }
 
 export function compileSpec(args: CompileSpecArgs): CompileSpecResult {
@@ -115,7 +121,7 @@ export function compileSpec(args: CompileSpecArgs): CompileSpecResult {
     const prog: IRProgram = {
       functions: new Map(lowerer.specializations),
     };
-    const { source, activatedSnippets } = emitJsProgram(prog, {
+    const { source, activatedSnippets, locFiles } = emitJsProgram(prog, {
       exposeSpec: spec.cName,
     });
     return {
@@ -123,6 +129,8 @@ export function compileSpec(args: CompileSpecArgs): CompileSpecResult {
       source,
       activatedSnippets,
       outputTypes: spec.outputTypes,
+      locFiles,
+      recursive: isRecursive(prog, spec),
     };
   } catch (err) {
     for (const key of lowerer.specializations.keys()) {

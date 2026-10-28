@@ -82,8 +82,7 @@ static jit_tensor_t jit_sort_real(jit_tensor_t a, int descending) {
   jit_sort_pair_t *buf =
     (jit_sort_pair_t *)malloc((size_t)n * sizeof(jit_sort_pair_t));
   if (!buf) {
-    fprintf(stderr, "C-JIT: out of memory (sort buffer)\n");
-    abort();
+    jit_raise_bailf("out of memory (sort buffer)");
   }
   for (long i = 0; i < n; i++) {
     buf[i].v = a.real[i];
@@ -114,8 +113,7 @@ static void jit_sort_real_2(jit_tensor_t a, int descending,
     jit_sort_pair_t *buf =
       (jit_sort_pair_t *)malloc((size_t)n * sizeof(jit_sort_pair_t));
     if (!buf) {
-      fprintf(stderr, "C-JIT: out of memory (sort buffer)\n");
-      abort();
+      jit_raise_bailf("out of memory (sort buffer)");
     }
     for (long i = 0; i < n; i++) {
       buf[i].v = a.real[i];
@@ -223,8 +221,7 @@ static jit_tensor_t jit_sort_complex(jit_tensor_t a, int descending) {
     (jit_sort_complex_pair_t *)malloc(
       (size_t)n * sizeof(jit_sort_complex_pair_t));
   if (!buf) {
-    fprintf(stderr, "C-JIT: out of memory (sort complex buffer)\n");
-    abort();
+    jit_raise_bailf("out of memory (sort complex buffer)");
   }
   for (long i = 0; i < n; i++) {
     double re = a.real[i];
@@ -264,8 +261,7 @@ static void jit_sort_complex_2(jit_tensor_t a, int descending,
       (jit_sort_complex_pair_t *)malloc(
         (size_t)n * sizeof(jit_sort_complex_pair_t));
     if (!buf) {
-      fprintf(stderr, "C-JIT: out of memory (sort complex buffer)\n");
-      abort();
+      jit_raise_bailf("out of memory (sort complex buffer)");
     }
     for (long i = 0; i < n; i++) {
       double re = a.real[i];

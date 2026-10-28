@@ -53,8 +53,7 @@ static void jit__squeeze_trailing_c(int *ndim, long *dims) {
   static jit_tensor_t jit_##name##_complex_dim(                               \
       jit_tensor_t a, int dim) {                                              \
     if (dim < 1) {                                                            \
-      fprintf(stderr, "C-JIT: " #name "_complex_dim: dim must be >= 1 (got %d)\n", dim); \
-      abort();                                                                \
+      jit_raise_bailf(#name "_complex_dim: dim must be >= 1 (got %d)", dim);                                                                \
     }                                                                         \
     if (dim > a.ndim) {                                                       \
       long total = 1;                                                         \
@@ -149,8 +148,7 @@ static int jit__creduce_all_imag_zero(jit_tensor_t a) {
   static jit_tensor_t jit_##name##_complex_dim(                               \
       jit_tensor_t a, int dim) {                                              \
     if (dim < 1) {                                                            \
-      fprintf(stderr, "C-JIT: " #name "_complex_dim: dim must be >= 1 (got %d)\n", dim); \
-      abort();                                                                \
+      jit_raise_bailf(#name "_complex_dim: dim must be >= 1 (got %d)", dim);                                                                \
     }                                                                         \
     if (dim > a.ndim) {                                                       \
       long total = 1;                                                         \
@@ -224,8 +222,7 @@ static int jit__creduce_all_imag_zero(jit_tensor_t a) {
   static jit_tensor_t jit_##name##_complex_dim(                               \
       jit_tensor_t a, int dim) {                                              \
     if (dim < 1) {                                                            \
-      fprintf(stderr, "C-JIT: " #name "_complex_dim: dim must be >= 1 (got %d)\n", dim); \
-      abort();                                                                \
+      jit_raise_bailf(#name "_complex_dim: dim must be >= 1 (got %d)", dim);                                                                \
     }                                                                         \
     if (dim > a.ndim) {                                                       \
       long total = 1;                                                         \

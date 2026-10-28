@@ -14,8 +14,7 @@ static jit_char_tensor_t jit_char_tensor_copy(jit_char_tensor_t src) {
   jit_char_tensor_t out;
   out.data = (char *)malloc((size_t)(n > 0 ? n : 1));
   if (!out.data) {
-    fprintf(stderr, "C-JIT: out of memory in jit_char_tensor_copy\n");
-    abort();
+    jit_raise_bailf("out of memory in jit_char_tensor_copy");
   }
   out.rows = src.rows;
   out.cols = src.cols;

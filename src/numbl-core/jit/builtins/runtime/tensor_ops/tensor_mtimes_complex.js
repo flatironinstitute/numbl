@@ -4,16 +4,20 @@
 // undefined imag lane as implicit zeros.
 
 import { jit_tensor_alloc_complex } from "../tensor/tensor_alloc_complex.js";
+import { jit_raise_bail, jit_raise_error } from "../system/raise.js";
 
 export function jit_tensor_mtimes_complex_scalar(a, b) {
   if (a.shape.length !== 2 || b.shape.length !== 2) {
-    throw new Error("jit_tensor_mtimes_complex_scalar: inputs must be 2-D");
+    jit_raise_bail("jit_tensor_mtimes_complex_scalar: inputs must be 2-D");
   }
   if (a.shape[0] !== 1 || b.shape[1] !== 1) {
-    throw new Error("jit_tensor_mtimes_complex_scalar: requires 1×k * k×1");
+    jit_raise_bail("jit_tensor_mtimes_complex_scalar: requires 1×k * k×1");
   }
   if (a.shape[1] !== b.shape[0]) {
-    throw new Error("jit_tensor_mtimes_complex_scalar: inner-dim mismatch");
+    jit_raise_error(
+      "",
+      `Inner matrix dimensions must agree: ${a.shape[1]} vs ${b.shape[0]}`
+    );
   }
   const k = a.shape[1];
   const aim = a.imag;
@@ -33,16 +37,14 @@ export function jit_tensor_mtimes_complex_scalar(a, b) {
 
 export function jit_tensor_mtimes_complex(a, b) {
   if (a.shape.length !== 2 || b.shape.length !== 2) {
-    throw new Error("jit_tensor_mtimes_complex: inputs must be 2-D");
+    jit_raise_bail("jit_tensor_mtimes_complex: inputs must be 2-D");
   }
   const m = a.shape[0];
   const k = a.shape[1];
   const k2 = b.shape[0];
   const n = b.shape[1];
   if (k !== k2) {
-    throw new Error(
-      `jit_tensor_mtimes_complex: inner-dim mismatch (${m}×${k} * ${k2}×${n})`
-    );
+    jit_raise_error("", `Inner matrix dimensions must agree: ${k} vs ${k2}`);
   }
   const out = jit_tensor_alloc_complex(m, n);
   const aim = a.imag;

@@ -58,9 +58,8 @@ static double jit__variance_fiber(const double *data, long base, long n,
   static jit_tensor_t jit_##name##_dim(jit_tensor_t a, int dim,                \
                                            int w) {                            \
     if (dim < 1) {                                                             \
-      fprintf(stderr, "C-JIT: " #name "_dim: dim must be >= 1 (got %d)\n",     \
-              dim);                                                            \
-      abort();                                                                 \
+      jit_raise_bailf(#name "_dim: dim must be >= 1 (got %d)",     \
+              dim);                                                                 \
     }                                                                          \
     if (dim > a.ndim) {                                                        \
       /* No-op axis: numbl's reduceDim copies the input verbatim when     \

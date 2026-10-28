@@ -7,7 +7,7 @@
  *
  * `dims` is consumed read-only — the caller may pass a stack
  * `(long[]){…}` compound literal. The returned tensor owns its
- * `real` buffer; `imag` is NULL (the static-real marker). Aborts
+ * `real` buffer; `imag` is NULL (the static-real marker). Raises
  * on `ndim` exceeding `JIT_MAX_NDIM` or on size-math overflow.
  */
 
@@ -20,16 +20,14 @@ static jit_tensor_t jit_tensor_alloc_nd(int ndim, const long *dims) {
     /* The rest of the runtime assumes `ndim >= 1` (and codegen enforces
      * `ndim >= 2`). A zero or negative ndim would skip the dim loop and
      * leave the tensor in a malformed state with a 1-element default
-     * buffer; better to abort with a clear message. */
-    fprintf(stderr,
-      "C-JIT: tensor ndim %d out of range [1, %d]\n", ndim, JIT_MAX_NDIM);
-    abort();
+     * buffer; better to raise. */
+    jit_raise_bailf("tensor ndim %d out of range [1, %d]", ndim, JIT_MAX_NDIM);
   }
   jit_tensor_t out;
   size_t n = 1;
   for (int i = 0; i < ndim; i++) {
     /* MATLAB / numbl clamp negative dim values to 0 (yielding an
-     * empty tensor) rather than aborting. Without this the
+     * empty tensor) rather than raising. Without this the
      * `(size_t)dims[i]` cast below wraps a negative `long` to
      * SIZE_MAX and the very next mul-overflow check fires with a
      * misleading message. Trigger:
@@ -39,15 +37,11 @@ static jit_tensor_t jit_tensor_alloc_nd(int ndim, const long *dims) {
     size_t new_n;
 #if defined(__has_builtin) && __has_builtin(__builtin_mul_overflow)
     if (__builtin_mul_overflow(n, (size_t)d, &new_n)) {
-      fprintf(stderr,
-        "C-JIT: tensor allocation overflow at dim %d (size %ld)\n", i, d);
-      abort();
+      jit_raise_bailf("tensor allocation overflow at dim %d (size %ld)", i, d);
     }
 #else
     if ((size_t)d != 0 && n > (SIZE_MAX / sizeof(double)) / (size_t)d) {
-      fprintf(stderr,
-        "C-JIT: tensor allocation overflow at dim %d (size %ld)\n", i, d);
-      abort();
+      jit_raise_bailf("tensor allocation overflow at dim %d (size %ld)", i, d);
     }
     new_n = n * (size_t)d;
 #endif
@@ -57,9 +51,7 @@ static jit_tensor_t jit_tensor_alloc_nd(int ndim, const long *dims) {
   size_t bytes;
 #if defined(__has_builtin) && __has_builtin(__builtin_mul_overflow)
   if (__builtin_mul_overflow(n, sizeof(double), &bytes)) {
-    fprintf(stderr,
-      "C-JIT: tensor allocation overflow at byte-count (%zu elements)\n", n);
-    abort();
+    jit_raise_bailf("tensor allocation overflow at byte-count (%zu elements)", n);
   }
 #else
   bytes = n * sizeof(double);

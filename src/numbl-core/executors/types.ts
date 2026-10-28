@@ -16,11 +16,19 @@ import type { LoweredStmt } from "./lowering.js";
 export type ShapeKind = LoweredStmt["kind"];
 export type LoweredOf<K extends ShapeKind> = Extract<LoweredStmt, { kind: K }>;
 
+/** `run` outcome for a runtime error the interpreter must reproduce (see
+ *  `executors/jit/raise.ts`): the registry discards the run's side effects
+ *  and hands the unit straight to the interpreter, without caching a bail
+ *  (the next call may well succeed). */
+export const RERUN: unique symbol = Symbol("EXECUTOR_RERUN");
+
 /** Outcome of `run`. `{ result }` on success (the call's return value
  *  for the `call` shape; `undefined` otherwise). `null` is a bail: the
  *  registry discards any captured output, caches the bail, and tries
- *  the next executor (or the interpreter). */
-export type RunResult = { result: unknown } | null;
+ *  the next executor (or the interpreter). `RERUN`: see above. A throw
+ *  propagates as the unit's error, after the registry commits the output
+ *  produced before it. */
+export type RunResult = { result: unknown } | null | typeof RERUN;
 
 export interface Executor<
   K extends ShapeKind = ShapeKind,

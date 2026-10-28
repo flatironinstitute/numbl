@@ -33,9 +33,11 @@ key and requires all three keys equal:
 
 - stdout, compared verbatim, except: lines starting with `warning:` (JIT bail
   notices) are dropped, and trailing whitespace is trimmed.
-- a non-zero exit collapses to the token `<ERROR>` — the interpreter and C-JIT
-  word their error messages differently, so we test the *outcome* ("it correctly
-  refused"), not the message text.
+- a non-zero exit must agree on the error too: its key is the stdout printed
+  before the error, the token `<ERROR>`, and stderr (the message with its
+  location and call stack), with `warning:` lines dropped. The JITs raise the
+  interpreter's exact error through the raise channel
+  (`src/numbl-core/executors/jit/raise.ts`), so the text must match.
 - a timeout collapses to `<TIMEOUT>`.
 
 ## The corpus
@@ -79,6 +81,14 @@ the diagnosis and the divergence observed at discovery time.
   `printf`/`fputs(stdout)` instead of the host-write callback (reordering at
   opt2); alphabetical field order instead of insertion order; and nested
   struct/cell members (now **declined** to the interpreter's recursive render).
+- **R**: runtime errors raised inside JIT'd code, uncaught (message,
+  location and call stack on stderr) and inside `try` (`ME.message`,
+  `ME.identifier`, `ME.stack`): out-of-bounds reads, shape mismatches,
+  `error`/`assert` forms, errors in callees and recursive functions, while
+  conditions, and a unit that errors for some calls and succeeds for others.
+  These found two concatenation bugs (a cell height inferred from its row
+  skipped the runtime check), a JS-JIT `%g` of `-0`, and use-before-assign /
+  recursive-output shapes the JS-JIT only survived through its old catch-all.
 - **FG** — *golden vectors*, not a bug. Unlike every other script here (each a
   known divergence), `FG_*` pins the format-engine surface that all three
   modes already **agree** on, so a future edit that re-desyncs

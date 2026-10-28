@@ -30,9 +30,7 @@
 static jit_tensor_t jit_tensor_repmat(jit_tensor_t in, int nreps,
                                           const long *reps_in) {
   if (nreps < 1 || nreps > JIT_MAX_NDIM) {
-    fprintf(stderr,
-      "C-JIT: repmat nreps %d out of range [1, %d]\n", nreps, JIT_MAX_NDIM);
-    abort();
+    jit_raise_bailf("repmat nreps %d out of range [1, %d]", nreps, JIT_MAX_NDIM);
   }
   long reps[JIT_MAX_NDIM];
   for (int i = 0; i < nreps; i++) reps[i] = reps_in[i] < 0 ? 0 : reps_in[i];
@@ -40,9 +38,7 @@ static jit_tensor_t jit_tensor_repmat(jit_tensor_t in, int nreps,
   int in_ndim = in.ndim;
   int out_ndim = nreps > in_ndim ? nreps : in_ndim;
   if (out_ndim > JIT_MAX_NDIM) {
-    fprintf(stderr,
-      "C-JIT: repmat output ndim %d exceeds %d\n", out_ndim, JIT_MAX_NDIM);
-    abort();
+    jit_raise_bailf("repmat output ndim %d exceeds %d", out_ndim, JIT_MAX_NDIM);
   }
 
   long padShape[JIT_MAX_NDIM];
@@ -122,10 +118,8 @@ static jit_tensor_t jit_tensor_repmat_complex(jit_tensor_t in,
                                                   int nreps,
                                                   const long *reps_in) {
   if (nreps < 1 || nreps > JIT_MAX_NDIM) {
-    fprintf(stderr,
-      "C-JIT: repmat_complex nreps %d out of range [1, %d]\n",
+    jit_raise_bailf("repmat_complex nreps %d out of range [1, %d]",
       nreps, JIT_MAX_NDIM);
-    abort();
   }
   long reps[JIT_MAX_NDIM];
   for (int i = 0; i < nreps; i++) reps[i] = reps_in[i] < 0 ? 0 : reps_in[i];
@@ -133,10 +127,8 @@ static jit_tensor_t jit_tensor_repmat_complex(jit_tensor_t in,
   int in_ndim = in.ndim;
   int out_ndim = nreps > in_ndim ? nreps : in_ndim;
   if (out_ndim > JIT_MAX_NDIM) {
-    fprintf(stderr,
-      "C-JIT: repmat_complex output ndim %d exceeds %d\n",
+    jit_raise_bailf("repmat_complex output ndim %d exceeds %d",
       out_ndim, JIT_MAX_NDIM);
-    abort();
   }
 
   long padShape[JIT_MAX_NDIM];

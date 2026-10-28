@@ -34,6 +34,7 @@ import { inlinePass } from "./codegen/inlinePass.js";
 import type { IRFunc, IRProgram, IRStmt } from "./lowering/ir.js";
 import { UnsupportedConstruct } from "./lowering/errors.js";
 import { assertDefiniteAssignment } from "./lowering/definiteAssign.js";
+import { isRecursive, reachableCallees } from "./lowering/callGraph.js";
 import {
   addAssignedFlags,
   type AssignedFlag,
@@ -62,8 +63,8 @@ export interface SpecCOutput {
 }
 
 export interface SpecCSignature {
-  /** JIT-mangled C name of the entry function (the symbol koffi
-   *  resolves after `dlopen`). */
+  /** The exported host-entry wrapper around the entry spec (the symbol
+   *  koffi resolves after `dlopen`; see `emitHostEntry`). */
   readonly cName: string;
   /** Param shape, in the order the C function expects. */
   readonly params: ReadonlyArray<SpecCParam>;
@@ -114,6 +115,11 @@ export interface CompileSpecCResult {
    *  paired with a trailing flag output that is 0 when it was. The host
    *  skips writing such an output back. */
   assignedFlags: ReadonlyArray<AssignedFlag>;
+  /** Files named by the statement locations a raise reports, by index
+   *  (decode with `decodeLoc`). */
+  locFiles: ReadonlyArray<string>;
+  /** The entry spec can call itself (directly or through its callees). */
+  recursive: boolean;
 }
 
 export function compileSpecC(args: CompileSpecCArgs): CompileSpecCResult {
@@ -180,7 +186,7 @@ export function compileSpecC(args: CompileSpecCArgs): CompileSpecCResult {
     // Fold single-use element-wise temps into their consumers so chains
     // fuse into one C loop. Returns a copy; the cached specs (shared
     // with the JS backend) are untouched.
-    const source = emitProgram(inlinePass(prog), {
+    const { source, hostEntry, locFiles } = emitProgram(inlinePass(prog), {
       exposeSpec: spec.cName,
     });
     return {
@@ -190,8 +196,10 @@ export function compileSpecC(args: CompileSpecCArgs): CompileSpecCResult {
       // through emitProgram's return; the .so build doesn't need it.
       // Diagnostic field kept for symmetry with `compileSpec` (JS).
       activatedSnippets: [],
-      signature: buildSignature(entry),
+      signature: { ...buildSignature(entry), cName: hostEntry },
       assignedFlags,
+      locFiles,
+      recursive: isRecursive(prog, spec),
     };
   } catch (err) {
     for (const key of lowerer.specializations.keys()) {
@@ -209,36 +217,6 @@ function containsReturn(stmts: IRStmt[]): boolean {
         (containsReturn(s.thenBody) || containsReturn(s.elseBody))) ||
       ((s.kind === "While" || s.kind === "For") && containsReturn(s.body))
   );
-}
-
-/** Specs transitively called from `entry` (excluding it). Any `cName`
- *  in the IR that names a spec in `prog` counts as a call edge. */
-function reachableCallees(prog: IRProgram, entry: IRFunc): IRFunc[] {
-  const seen = new Set<string>([entry.cName]);
-  const out: IRFunc[] = [];
-  const visit = (node: unknown): void => {
-    if (node === null || typeof node !== "object") return;
-    if (Array.isArray(node)) {
-      for (const el of node) visit(el);
-      return;
-    }
-    const rec = node as Record<string, unknown>;
-    const cName = rec.cName;
-    if (typeof cName === "string" && !seen.has(cName)) {
-      const fn = prog.functions.get(cName);
-      if (fn !== undefined) {
-        seen.add(cName);
-        out.push(fn);
-        visit(fn.body);
-      }
-    }
-    for (const key of Object.keys(rec)) {
-      if (key === "ty" || key === "span") continue;
-      visit(rec[key]);
-    }
-  };
-  visit(entry.body);
-  return out;
 }
 
 function buildSignature(spec: IRFunc): SpecCSignature {

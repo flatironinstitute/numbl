@@ -34,12 +34,10 @@ typedef struct {
 static jit_tensor_t jit_tensor_cat(long dim, int nin,
                                        const jit_cat_arg_t *xs) {
   if (dim < 1) {
-    fprintf(stderr, "C-JIT: cat dim %ld must be >= 1\n", dim);
-    abort();
+    jit_raise_bailf("cat dim %ld must be >= 1", dim);
   }
   if (nin < 0 || nin > 256) {
-    fprintf(stderr, "C-JIT: cat nin %d out of range\n", nin);
-    abort();
+    jit_raise_bailf("cat nin %d out of range", nin);
   }
   long dimIdx = dim - 1;
 
@@ -55,9 +53,7 @@ static jit_tensor_t jit_tensor_cat(long dim, int nin,
   }
   int ndim = maxIn;
   if (ndim > JIT_MAX_NDIM) {
-    fprintf(stderr,
-      "C-JIT: cat output ndim %d exceeds %d\n", ndim, JIT_MAX_NDIM);
-    abort();
+    jit_raise_bailf("cat output ndim %d exceeds %d", ndim, JIT_MAX_NDIM);
   }
 
   long padDims[256][JIT_MAX_NDIM];
@@ -107,9 +103,7 @@ static jit_tensor_t jit_tensor_cat(long dim, int nin,
       for (int d = 0; d < ndim; d++) {
         if (d == dimIdx) continue;
         if (padDims[i][d] != padDims[refIdx][d]) {
-          fprintf(stderr,
-            "C-JIT: cat dimension mismatch on dimension %d\n", d + 1);
-          abort();
+          jit_raise_error("", "Dimensions of arrays being concatenated are not consistent");
         }
       }
     } else {
@@ -177,12 +171,10 @@ typedef struct {
 static jit_tensor_t jit_tensor_cat_complex(
     long dim, int nin, const jit_cat_complex_arg_t *xs) {
   if (dim < 1) {
-    fprintf(stderr, "C-JIT: cat_complex dim %ld must be >= 1\n", dim);
-    abort();
+    jit_raise_bailf("cat_complex dim %ld must be >= 1", dim);
   }
   if (nin < 0 || nin > 256) {
-    fprintf(stderr, "C-JIT: cat_complex nin %d out of range\n", nin);
-    abort();
+    jit_raise_bailf("cat_complex nin %d out of range", nin);
   }
   long dimIdx = dim - 1;
 
@@ -195,9 +187,7 @@ static jit_tensor_t jit_tensor_cat_complex(
   }
   int ndim = maxIn;
   if (ndim > JIT_MAX_NDIM) {
-    fprintf(stderr,
-      "C-JIT: cat_complex output ndim %d exceeds %d\n", ndim, JIT_MAX_NDIM);
-    abort();
+    jit_raise_bailf("cat_complex output ndim %d exceeds %d", ndim, JIT_MAX_NDIM);
   }
 
   long padDims[256][JIT_MAX_NDIM];
@@ -242,9 +232,7 @@ static jit_tensor_t jit_tensor_cat_complex(
       for (int d = 0; d < ndim; d++) {
         if (d == dimIdx) continue;
         if (padDims[i][d] != padDims[refIdx][d]) {
-          fprintf(stderr,
-            "C-JIT: cat_complex dimension mismatch on dimension %d\n", d + 1);
-          abort();
+          jit_raise_error("", "Dimensions of arrays being concatenated are not consistent");
         }
       }
     } else {

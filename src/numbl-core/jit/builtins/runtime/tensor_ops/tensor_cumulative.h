@@ -26,9 +26,8 @@
 #define JIT_DEFINE_CUMULATIVE(name, INIT, ACCUM)                              \
   static jit_tensor_t jit_tensor_##name##_dim(jit_tensor_t a, int dim) {\
     if (dim < 1) {                                                            \
-      fprintf(stderr, "C-JIT: " #name "_dim: dim must be >= 1 (got %d)\n",    \
-              dim);                                                           \
-      abort();                                                                \
+      jit_raise_bailf(#name "_dim: dim must be >= 1 (got %d)",    \
+              dim);                                                                \
     }                                                                         \
     long total = 1;                                                           \
     for (int i = 0; i < a.ndim; i++) total *= a.dims[i];                      \
@@ -96,9 +95,8 @@ JIT_DEFINE_CUMULATIVE(cummin,  INFINITY, JIT_CUM_ACC_MIN)
   static jit_tensor_t                                                         \
   jit_tensor_##name##_complex_dim(jit_tensor_t a, int dim) {                  \
     if (dim < 1) {                                                            \
-      fprintf(stderr, "C-JIT: " #name "_complex_dim: dim must be >= 1 (got %d)\n", \
-              dim);                                                           \
-      abort();                                                                \
+      jit_raise_bailf(#name "_complex_dim: dim must be >= 1 (got %d)", \
+              dim);                                                                \
     }                                                                         \
     long total = 1;                                                           \
     for (int i = 0; i < a.ndim; i++) total *= a.dims[i];                      \

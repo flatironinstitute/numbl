@@ -12,10 +12,11 @@
 
 import { jit_tensor_alloc_nd } from "../tensor/tensor_alloc_nd.js";
 import { jit_tensor_alloc_nd_complex } from "../tensor/tensor_alloc_nd_complex.js";
+import { jit_raise_bail, jit_raise_error } from "../system/raise.js";
 
 export function jit_tensor_cat(dim, nin, xs) {
   if (dim < 1) {
-    throw new Error(`JIT: cat dim ${dim} must be >= 1`);
+    jit_raise_bail(`JIT: cat dim ${dim} must be >= 1`);
   }
   const dimIdx = dim - 1;
 
@@ -69,7 +70,10 @@ export function jit_tensor_cat(dim, nin, xs) {
       for (let d = 0; d < ndim; d++) {
         if (d === dimIdx) continue;
         if (p.shape[d] !== refShape[d]) {
-          throw new Error(`JIT: cat dimension mismatch on dimension ${d + 1}`);
+          jit_raise_error(
+            "",
+            "Dimensions of arrays being concatenated are not consistent"
+          );
         }
       }
       return true;
@@ -136,7 +140,7 @@ function inputLanesComplex(x) {
 
 export function jit_tensor_cat_complex(dim, nin, xs) {
   if (dim < 1) {
-    throw new Error(`JIT: cat_complex dim ${dim} must be >= 1`);
+    jit_raise_bail(`JIT: cat_complex dim ${dim} must be >= 1`);
   }
   const dimIdx = dim - 1;
 
@@ -176,8 +180,9 @@ export function jit_tensor_cat_complex(dim, nin, xs) {
       for (let d = 0; d < ndim; d++) {
         if (d === dimIdx) continue;
         if (p.shape[d] !== refShape[d]) {
-          throw new Error(
-            `JIT: cat_complex dimension mismatch on dimension ${d + 1}`
+          jit_raise_error(
+            "",
+            "Dimensions of arrays being concatenated are not consistent"
           );
         }
       }

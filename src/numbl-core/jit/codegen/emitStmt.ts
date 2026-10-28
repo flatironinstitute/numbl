@@ -9,6 +9,7 @@
  */
 
 import type { IRExpr, IRFunc, IRStmt } from "../lowering/ir.js";
+import { UnsupportedConstruct } from "../lowering/errors.js";
 import {
   isNumeric,
   isOwned,
@@ -18,6 +19,7 @@ import {
 } from "../lowering/types.js";
 import { cTypeFor, formatDouble, requireOwnedHelpers } from "./cHelpers.js";
 import {
+  locCode,
   makeEmitUseRuntime,
   useRuntimeByName,
   type RuntimeState,
@@ -156,11 +158,10 @@ type EmitReturnTail = (indent: string) => string;
 export function emitFunction(
   fn: IRFunc,
   state: RuntimeState,
-  /** Storage-class qualifier on the function definition. Default is
-   *  `static` (file-scope). Pass `""` to omit the qualifier — the function then gets external
-   *  linkage so a JIT host can resolve it via `dlsym` / koffi after
-   *  `dlopen`'ing the compiled `.so`. */
-  storageClass: "static" | "" = "static"
+  /** Storage-class (and attribute) prefix on the function definition.
+   *  The host calls the exported wrapper from `emit.ts`, so every spec is
+   *  `static`. */
+  storageClass: string = "static"
 ): string {
   const lines: string[] = [];
   const retType = fnRetType(fn);
@@ -299,42 +300,6 @@ export function emitFunction(
     fnOwnedTypes,
     fnReturnTail
   );
-  // Grow-bail guard (host-entry function only). A runtime indexed-store
-  // grow `longjmp`s here from `jit_idx_*_grow` (see `grow_bail.h`);
-  // we free owned buffers and return a zero value. The flag stays set,
-  // so the host re-runs the whole scope on the interpreter (full grow
-  // semantics). Only the entry (`storageClass === ""`) arms a setjmp —
-  // inner static callees let their grow-longjmp propagate up to it.
-  // Placed after local declarations so the handler can free them, and
-  // before the body so it's armed for the body's first store.
-  if (storageClass === "" && state.usedGrowBail) {
-    const bail: string[] = [];
-    bail.push(`  if (setjmp(jit_grow_bail_buf)) {`);
-    for (const o of [...owned, ...ownedParams]) {
-      const h = requireOwnedHelpers(o.ty);
-      bail.push(`    ${h.free}(&${o.cName});`);
-    }
-    for (let i = 0; i < nOutputs; i++) {
-      const outTy = fn.outputTypes[i];
-      if (outTy && isOwned(outTy)) {
-        const h = requireOwnedHelpers(outTy);
-        bail.push(`    ${h.free}(&${fn.cOutputs[i]});`);
-      }
-    }
-    if (isVoidFn || isMulti) {
-      bail.push(`    return;`);
-    } else {
-      const outTy = fn.outputTypes[0];
-      if (outTy && isOwned(outTy)) {
-        const h = requireOwnedHelpers(outTy);
-        bail.push(`    return ${h.empty}();`);
-      } else {
-        bail.push(`    return 0;`);
-      }
-    }
-    bail.push(`  }`);
-    lines.push(bail.join("\n"));
-  }
   if (bodyText.length > 0) lines.push(bodyText);
   lines.push(fnReturnTail("  "));
   lines.push(`}`);
@@ -356,11 +321,19 @@ export function emitBody(
   emitReturnTail: EmitReturnTail
 ): string {
   const out: string[] = [];
+  let prevSrc: IRStmt["src"];
   for (const s of stmts) {
     const header = irStmtHeader(s);
     if (header !== null) {
       out.push(`${indent}/* ${header} */`);
     }
+    // Record the source statement, as the interpreter sets `rt.$line` per
+    // statement. Consecutive IR stmts of one source statement (ANF
+    // hoists) share a store.
+    if (s.src !== undefined && s.src !== prevSrc) {
+      out.push(`${indent}jit__loc = ${locCode(state, s.src)}LL;`);
+    }
+    prevSrc = s.src ?? prevSrc;
     const line = emitStmt(
       s,
       indent,
@@ -461,6 +434,29 @@ function emitStmt(
         return `${indent}${h.assign}(&${s.cName}, ${rhs});`;
       }
       const rhs = emitExpr(s.expr, state);
+      const slotTy = ownedTypes.get(s.cName);
+      if (slotTy !== undefined) {
+        // A scalar stored to a variable whose (merged) C type is a tensor,
+        // e.g. a recursive function's scalar base case when the recursive
+        // result widened the output to a tensor: store a 1x1 tensor.
+        if (
+          !isNumeric(slotTy) ||
+          !isNumeric(s.ty) ||
+          slotTy.isComplex ||
+          s.ty.isComplex
+        ) {
+          throw new UnsupportedConstruct(
+            `scalar assigned to the ${typeToString(slotTy)} variable '${s.name}'`,
+            s.span
+          );
+        }
+        useRuntimeByName(state, "jit_tensor_alloc");
+        const h = activatedOwnedHelpers(slotTy, state);
+        return (
+          `${indent}{ jit_tensor_t _jit_s1 = jit_tensor_alloc(1, 1); ` +
+          `_jit_s1.real[0] = ${rhs}; ${h.assign}(&${s.cName}, _jit_s1); }`
+        );
+      }
       return `${indent}${s.cName} = ${rhs};`;
     }
     case "MemberStore": {
@@ -486,7 +482,7 @@ function emitStmt(
       const slotTy = s.leafTy ?? s.base.ty;
       // grow=true: a store whose index exceeds the runtime extent bails
       // (the array would grow — unsupported in the JIT) rather than
-      // aborting. See `emitNdScalarOffset` / `grow_bail.h`.
+      // raising. See `emitNdScalarOffset` / `grow_bail.h`.
       const offset = emitNdScalarOffset(state, s.indices, slotCName, true);
       const rhs = emitExpr(s.rhs, state);
       const baseIsComplex = isNumeric(slotTy) && slotTy.isComplex;
@@ -755,10 +751,9 @@ function emitCellIndexStore(
     lines.push(`${indent}{`);
     lines.push(`${indent}  size_t _jit_off = ${offsetExpr};`);
     lines.push(`${indent}  if (_jit_off >= ${baseCName}.nslots) {`);
-    lines.push(
-      `${indent}    fprintf(stderr, "C-JIT: cell index out of bounds\\n");`
-    );
-    lines.push(`${indent}    exit(1);`);
+    // Past the end the interpreter grows the cell (and a sub-1 index
+    // wraps to a huge offset); either way, re-run on the interpreter.
+    lines.push(`${indent}    jit_raise_bail("cell store outside the cell");`);
     lines.push(`${indent}  }`);
     if (isOwned(elem)) {
       const h = activatedOwnedHelpers(elem, state);
@@ -812,7 +807,7 @@ function emitCellIndexStore(
     lines.push(`${indent}    }`);
   }
   lines.push(
-    `${indent}    default: fprintf(stderr, "C-JIT: cell index out of bounds\\n"); exit(1);`
+    `${indent}    default: jit_raise_bail("cell store outside the cell");`
   );
   lines.push(`${indent}  }`);
   lines.push(`${indent}}`);

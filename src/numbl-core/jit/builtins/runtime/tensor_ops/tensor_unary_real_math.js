@@ -6,6 +6,7 @@
 // the host's kernels when installed; see `tensor_elemwise_real.js`.
 
 import { jit_tensor_alloc_nd } from "../tensor/tensor_alloc_nd.js";
+import { jit_raise_error } from "../system/raise.js";
 
 const EW_UNARY_HOST_MIN = 1024;
 
@@ -25,7 +26,7 @@ function matlabRound(x) {
 // realsqrt(x): MATLAB raises an error rather than returning a complex
 // result for x < 0. NaN passes through as NaN.
 export function jit_realsqrt(x) {
-  if (x < 0) throw new Error("Realsqrt produced complex result.");
+  if (x < 0) jit_raise_error("", "Realsqrt produced complex result.");
   return Math.sqrt(x);
 }
 

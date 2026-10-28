@@ -22,6 +22,7 @@ import {
   synthesizeFuncStmt,
   type JitBackend,
 } from "./backend.js";
+import { scopeOfStmts } from "./raise.js";
 
 interface LoopData {
   readonly c: LoopClassification;
@@ -85,7 +86,16 @@ export function makeLoopExecutor<A>(
 
     run(art, d, interp) {
       if (art === null) return null;
-      return runInEnv(backend, art, d.c.inputs, d.c.outputs, interp, name);
+      const scope = scopeOfStmts([d.c.stmt], d.c.currentFile);
+      return runInEnv(
+        backend,
+        art,
+        d.c.inputs,
+        d.c.outputs,
+        scope,
+        interp,
+        name
+      );
     },
   };
 }

@@ -13,6 +13,7 @@
 // overhead outweighs the JS loop.
 
 import { jit_tensor_alloc_nd } from "../tensor/tensor_alloc_nd.js";
+import { jit_fmt_shape, jit_raise_error } from "../system/raise.js";
 
 const EW_HOST_MIN = 1024;
 
@@ -53,7 +54,10 @@ function bcast_kernel(a, b, fn) {
   for (let i = 0; i < ndim; i++) {
     // MATLAB broadcast rule: axis sizes must be equal or one must be 1.
     if (ashape[i] !== bshape[i] && ashape[i] !== 1 && bshape[i] !== 1) {
-      throw new Error("Matrix dimensions must agree");
+      jit_raise_error(
+        "",
+        `Matrix dimensions must agree: ${jit_fmt_shape(a.shape)} vs ${jit_fmt_shape(b.shape)}`
+      );
     }
     // A singleton axis expands to the other; otherwise they're equal. Must
     // NOT use Math.max: a 0-size axis vs a 1-size axis broadcasts to 0, not 1

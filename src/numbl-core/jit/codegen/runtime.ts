@@ -15,6 +15,7 @@
  */
 
 import { JS_SNIPPETS, JS_IMPORTS } from "../builtins/runtime/snippets.gen.js";
+import type { Type } from "../lowering/types.js";
 
 /**
  * C runtime-snippet table, registered at bootstrap (Node only) rather than
@@ -146,6 +147,10 @@ const REGISTRY: ReadonlyMap<string, RuntimeSnippet> = new Map<
   string,
   RuntimeSnippet
 >([
+  // The raise channel (`jit_raise_*`), statement locations (`jit__loc`) and
+  // the tracked allocator. Activated first by both emitters, so its
+  // allocator macros cover every later snippet. See `raise.h`.
+  ["jit_raise", loadSnippet("raise.h")],
   // JIT host output hook — defines `jit_stdout` (routes through a
   // host-bound writer when present, else libc stdout) and the exported
   // `jit_set_host_write`. A dep of every snippet that emits program
@@ -274,17 +279,14 @@ const REGISTRY: ReadonlyMap<string, RuntimeSnippet> = new Map<
     "jit_fprintf",
     loadSnippet("fprintf.h", ["jit_format_engine", "jit_host_output"]),
   ],
+  // `error(...)`: `jit_error_fmt` (formatted) and `jit_error_text`
+  // (literal), both raising through `raise.h` with an identifier.
   ["jit_error_fmt", loadSnippet("error_fmt.h", ["jit_format_engine"])],
-  // JS identifier-bearing variant. The C side reuses
-  // `jit_error_fmt` (no identifier on the C path) and ignores this
-  // entry; the JS sibling threads the identifier through to the
-  // interpreter's TryCatch handler.
-  ["jit_error_fmt_id", loadSnippet("error_fmt.h", ["jit_format_engine"])],
   // Warning. Same shape as error but the C path is real (no
   // throw); both runtimes prefix `Warning: ` and append `\n`.
   ["jit_warning_fmt", loadSnippet("warning_fmt.h", ["jit_format_engine"])],
   ["jit_warning_fmt_id", loadSnippet("warning_fmt.h", ["jit_format_engine"])],
-  ["jit_assert_scalar_fmt", loadSnippet("assert_fmt.h", ["jit_format_engine"])],
+  ["jit_assert_scalar_fmt", loadSnippet("assert_fmt.h", ["jit_error_fmt"])],
   [
     "jit_sprintf_str",
     loadSnippet("sprintf.h", [
@@ -498,9 +500,8 @@ const REGISTRY: ReadonlyMap<string, RuntimeSnippet> = new Map<
       "jit_tensor_assign",
     ]),
   ],
-  // `assert(cond, msg)` runtime check (scalar cond). The truthy fast
-  // path returns immediately; failure writes the message to stderr
-  // and aborts.
+  // `assert(cond[, msg])` runtime check (scalar cond, literal message).
+  // The truthy fast path returns immediately; failure raises.
   ["jit_assert_scalar", loadSnippet("assert_fail.h")],
   // `norm(v)` vector 2-norm. One snippet defines both `_real` and
   // `_complex` variants; the type-system decides which one to call.
@@ -777,14 +778,12 @@ const REGISTRY: ReadonlyMap<string, RuntimeSnippet> = new Map<
   // one snippet so any IndexLoad/IndexStore/IndexSlice site that
   // pulls in one bounds-check fn pulls in the others' definitions
   // for free.
-  ["jit_oob_abort", loadSnippet("oob.h", ["jit_tensor_t"])],
+  ["jit_oob_abort", loadSnippet("oob.h", ["jit_raise", "jit_tensor_t"])],
   // Grow-aware indexed-STORE bounds checks (`jit_idx_lin_grow`,
-  // `jit_idx_axis_grow`) plus the setjmp-based bail infra
-  // (`jit_grow_bail_reset` / `_check`). A store past the runtime
-  // extent longjmp's to the host-entry function's guard for a clean
-  // host-side bail to the interpreter (which grows the array). See
-  // `grow_bail.h`. C-only (no `.js` sibling): the JS path's grow
-  // helpers live in `scalar_index.js` and bail via a tagged throw.
+  // `jit_idx_axis_grow`). A store past the runtime extent raises a
+  // bail (`raise.h`), so the host re-runs the unit on the interpreter
+  // (which grows the array). See `grow_bail.h`. C-only (no `.js`
+  // sibling): the JS path's grow helpers live in `scalar_index.js`.
   [
     "jit_grow_bail",
     loadSnippet("grow_bail.h", ["jit_tensor_t", "jit_oob_abort"]),
@@ -813,7 +812,7 @@ const REGISTRY: ReadonlyMap<string, RuntimeSnippet> = new Map<
   // `M(:, mask)` reads. The helper scans the mask column-major and
   // writes 0-based source indices into a caller-allocated buffer;
   // codegen-emitted setup blocks invoke it, then iterate the buffer
-  // just like an IndexVec slot. Aborts on out-of-range truthy entries.
+  // just like an IndexVec slot. Raises on out-of-range truthy entries.
   [
     "jit_logical_mask_indices",
     loadSnippet("tensor_logical_mask.h", ["jit_tensor_t", "jit_oob_abort"]),
@@ -890,14 +889,14 @@ export interface RuntimeState {
    *  return matching the function's shape (bare value / array /
    *  nothing). Undefined at top level. */
   currentFnOutputs?: ReadonlyArray<string>;
-  /** Set when the program contains a scalar indexed STORE, which
-   *  emits the grow-aware `jit_idx_*_grow` bounds checks. The
-   *  host-entry function (storage class `""`) then arms a `setjmp`
-   *  guard so a runtime grow (`v(k) = x`, k past the runtime extent)
-   *  `longjmp`s back and returns cleanly for a host-side bail to the
-   *  interpreter, instead of `exit(1)`. Computed by a pre-pass in
-   *  `emit.ts` so it's set regardless of function emission order. */
-  usedGrowBail?: boolean;
+  /** JS-side: the current function's output types by cName. */
+  currentFnOutputTypes?: ReadonlyMap<string, Type>;
+  /** Source files named by emitted statement locations, in index order
+   *  (see `locCode`). */
+  locFiles: string[];
+  /** JS only: `Var` reads of a local that may not be assigned yet, which
+   *  the emitter guards (see `maybeUnassignedReads`). */
+  maybeUnbound?: Set<object>;
 }
 
 export function newRuntimeState(): RuntimeState {
@@ -905,7 +904,40 @@ export function newRuntimeState(): RuntimeState {
     active: new Set(),
     multiAssignCallCounter: 0,
     extraSnippets: new Map(),
+    locFiles: [],
   };
+}
+
+/** Statement locations: emitted code records the source statement it is
+ *  executing (`jit__loc` in C, `$loc` in JS) so a raise can be attributed
+ *  to a line. The value packs a file index (into `state.locFiles`) and a
+ *  character offset as `fileIdx * 2^32 + offset`; `decodeLoc` inverts it. */
+export const LOC_FILE_STRIDE = 2 ** 32;
+
+/** The location code for a source span, registering its file. */
+export function locCode(
+  state: RuntimeState,
+  span: { file: string; start: number }
+): number {
+  let idx = state.locFiles.indexOf(span.file);
+  if (idx < 0) {
+    idx = state.locFiles.length;
+    state.locFiles.push(span.file);
+  }
+  return idx * LOC_FILE_STRIDE + span.start;
+}
+
+/** Decode a location code against the files it was emitted with; null
+ *  for "no location" (negative) or an unknown file index. */
+export function decodeLoc(
+  code: number,
+  locFiles: ReadonlyArray<string>
+): { file: string; offset: number } | null {
+  if (!(code >= 0)) return null;
+  const idx = Math.floor(code / LOC_FILE_STRIDE);
+  const file = locFiles[idx];
+  if (file === undefined) return null;
+  return { file, offset: code - idx * LOC_FILE_STRIDE };
 }
 
 /** Reverse map: `.h` basename → registered snippet name. Built lazily

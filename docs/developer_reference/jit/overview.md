@@ -22,20 +22,20 @@ All three share the same lowering pipeline and IR. Specializations are cached ke
 
 ## Static decline (vs. runtime bailout)
 
-The compiler decides feasibility at **compile time**: it either lowers a specialization cleanly or throws `UnsupportedConstruct` / `JitTypeError`, which the executor catches and declines — dispatch then falls through to the interpreter. There is no per-operation runtime type-guard bailout. A runtime error raised by the emitted code does bail, and the interpreter re-runs the unit to reproduce numbl's canonical error.
+The compiler decides feasibility at **compile time**: it either lowers a specialization cleanly or throws `UnsupportedConstruct` / `JitTypeError`, which the executor catches and declines — dispatch then falls through to the interpreter. There is no per-operation runtime type-guard bailout. A runtime error raised by the emitted code goes through the raise channel: it becomes numbl's `RuntimeError` with the interpreter's message and identifier, or, when the JIT cannot reproduce the result exactly, the interpreter re-runs the unit to raise it (see [executors.md](../executors.md#runtime-errors-and-bails)).
 
 A separate safety pass classifies constructs with observable side effects the JIT cannot faithfully reproduce (interactive input, certain display statements at the top level, etc.) and suppresses JIT for scripts that contain them unsuppressed.
 
-Indexed **stores** are the exception to "no runtime bailout": an index past a tensor's current extent would grow it in MATLAB, which a spec compiled against a fixed shape cannot model, so the emitted store routes through a grow-aware bounds check (`jit_idx_*_grow`) that bails to the interpreter at that point. Both scalar stores (`v(k) = x`) and the scalar slots of slice stores (`A(k, :) = row`) use it, which is what lets a store with a loop-variable index compile at all — the index is never statically known inside a loop.
+Indexed **stores** are the exception to "no runtime bailout": an index past a tensor's current extent would grow it in MATLAB, which a spec compiled against a fixed shape cannot model, so the emitted store routes through a grow-aware bounds check (`jit_idx_*_grow`) that raises a bail to the interpreter at that point. Both scalar stores (`v(k) = x`) and the scalar slots of slice stores (`A(k, :) = row`) use it, which is what lets a store with a loop-variable index compile at all — the index is never statically known inside a loop.
 
 ### Decline diagnostics
 
 A failed `compileSpec` rolls back whatever it added to `Lowerer.specializations`. The emitted module contains **every** spec in that map, so a spec that lowers cleanly but throws during emit would otherwise be re-emitted — and rethrow — on every later compile in the session, silently stopping unrelated functions from being JIT'd.
 
-Set `NUMBL_JIT_LOG=1` to print every decline (executor, source position, message) to stderr. `%!numbl:assert_jit` reports only the most recent one; the env var shows them all, which is what you want when a chain of calls declines for several different reasons.
+Set `NUMBL_JIT_LOG=1` to print every decline (executor, source position, message) to stderr, and every runtime error that re-runs on the interpreter (`[jit-rerun]`). `%!numbl:assert_jit` reports only the most recent one; the env var shows them all, which is what you want when a chain of calls declines for several different reasons.
 
 ## Debugging JIT output
 
 `--dump-js <file>` writes the generated JavaScript source to disk for inspection; `--dump-c <file>` writes the generated C source. Each flag captures only its backend's output, so at `--opt 2` (where C-JIT and JS-JIT both run) you can pass both: C kernels go to the `--dump-c` file and the JS-JIT fallbacks go to the `--dump-js` file. `--verbose` adds compilation events to stderr.
 
-Each section is written the moment it compiles, so the dump reflects everything generated up to a failure — including the case where compiled C aborts the process via `exit(1)` (e.g. an out-of-bounds index or `error(...)`), which terminates Node from inside the FFI call before any end-of-run cleanup could run.
+Each section is written the moment it compiles, so the dump reflects everything generated up to a failure.

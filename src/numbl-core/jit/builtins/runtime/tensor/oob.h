@@ -16,14 +16,10 @@
  *     time and call this before iterating.
  *
  * Each helper returns the 0-based offset (or 0-based index) on
- * success and aborts via `jit_oob_abort` on failure. The `loc`
- * string is "<file>:<offset>" from the index's source span — formatted
- * by the emitter so the user sees the violating access site.
+ * success and raises via `jit_oob_abort` on failure.
  */
 
 #include <math.h>
-#include <stdio.h>
-#include <stdlib.h>
 
 /* Convert a double-valued index expression to the long the bounds
  * checkers below expect. Mirrors numbl's `Math.round(idx)` convention
@@ -34,21 +30,19 @@ static long jit_to_idx(double v) {
   return lround(v);
 }
 
+/* Every out-of-range index raises the interpreter's "Index exceeds array
+ * bounds" (its wording for reads, sub-1 stores, slices and masks alike),
+ * so the site details are unused; the error's line comes from the
+ * statement location (`raise.h`). */
 static void jit_oob_abort(
   const char *loc, int axis, long got, long lo, long hi
 ) {
-  if (axis < 0) {
-    fprintf(stderr,
-      "%s: Index exceeds array bounds (got %ld, valid %ld..%ld)\n",
-      loc, got, lo, hi);
-  } else {
-    fprintf(stderr,
-      "%s: Index in position %d exceeds array bounds (got %ld, valid %ld..%ld)\n",
-      loc, axis + 1, got, lo, hi);
-  }
-  /* exit(1) rather than abort(): a clean non-zero exit status
-   * rather than SIGABRT. */
-  exit(1);
+  (void)loc;
+  (void)axis;
+  (void)got;
+  (void)lo;
+  (void)hi;
+  jit_raise_error("", "Index exceeds array bounds");
 }
 
 static long jit_idx_axis(

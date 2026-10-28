@@ -16,7 +16,13 @@
 import type { Stmt } from "../parser/types.js";
 import type { ControlSignal, FunctionDef } from "../interpreter/types.js";
 import type { Interpreter } from "../interpreter/interpreter.js";
-import type { Executor, LoweredOf, RunResult, ShapeKind } from "./types.js";
+import {
+  RERUN,
+  type Executor,
+  type LoweredOf,
+  type RunResult,
+  type ShapeKind,
+} from "./types.js";
 import { ExecutorCache } from "./cache.js";
 import { restoreRng, snapshotRng } from "../helpers/prng.js";
 import {
@@ -92,7 +98,7 @@ export class Registry {
     args: unknown[],
     nargout: number,
     interp: Interpreter
-  ): RunResult {
+  ): { result: unknown } | null {
     const lowered = tryLowerCall(fn, args, nargout, this.widening);
     if (!lowered) return null;
     return this.runFirst(this.executors.call, lowered, fn, interp);
@@ -121,19 +127,21 @@ export class Registry {
   }
 
   /** Try `executors` in order; return the first success, or null when
-   *  all declined or bailed. `owner` scopes the compile cache (head Stmt
-   *  or FunctionDef). */
+   *  all declined or bailed, or one asked for a re-run on the interpreter
+   *  (which then skips the remaining executors: they would raise the same
+   *  error). `owner` scopes the compile cache (head Stmt or FunctionDef). */
   private runFirst<K extends ShapeKind>(
     executors: readonly Executor<K>[],
     lowered: LoweredOf<K>,
     owner: object,
     interp: Interpreter
-  ): RunResult {
+  ): { result: unknown } | null {
     for (let k = 0; k < executors.length; k++) {
       const executor = executors[k];
       const data = executor.propose(lowered, interp);
       if (data === null) continue;
       const r = this.execute(executor, owner, data, interp);
+      if (r === RERUN) return null;
       if (r) return r;
     }
     return null;
@@ -141,7 +149,8 @@ export class Registry {
 
   /** Cache lookup + compile-on-miss + run. A bail (including a compile
    *  that declined, which the executor reports as a bail from `run`) is
-   *  cached so the same (executor, owner, key) is not retried. */
+   *  cached so the same (executor, owner, key) is not retried; a runtime
+   *  error (`RERUN` or a throw) is not, since the next run may succeed. */
   private execute<K extends ShapeKind>(
     executor: Executor<K>,
     owner: object,
@@ -157,28 +166,28 @@ export class Registry {
     }
 
     // Capture the attempt's side effects so a bail leaves none behind: on
-    // bail we discard its output and plots and rewind the PRNG, and the
-    // caller falls through to the next executor or the interpreter, which
-    // re-runs the same code — committing here would duplicate them.
+    // bail or re-run we discard its output and plots and rewind the PRNG,
+    // and the caller falls through to the next executor or the interpreter,
+    // which re-runs the same code; committing here would duplicate them.
+    // A throw is the unit's error: what it produced before the error stays,
+    // as it would on the interpreter.
     const rt = interp.rt;
     rt.beginOutputCapture();
     const rng = snapshotRng();
-    let committed = false;
+    let result: RunResult;
     try {
-      const result = executor.run(compiled, data, interp);
-      if (result === null) {
-        this.cache.markBailed(executor.name, owner, key);
-        return null;
-      }
+      result = executor.run(compiled, data, interp);
+    } catch (e) {
       rt.commitOutputCapture();
-      committed = true;
-      return result;
-    } finally {
-      // A bail, or a throw from run(), lands here with committed=false.
-      if (!committed) {
-        rt.discardOutputCapture();
-        restoreRng(rng);
-      }
+      throw e;
     }
+    if (result === null || result === RERUN) {
+      if (result === null) this.cache.markBailed(executor.name, owner, key);
+      rt.discardOutputCapture();
+      restoreRng(rng);
+      return result;
+    }
+    rt.commitOutputCapture();
+    return result;
   }
 }

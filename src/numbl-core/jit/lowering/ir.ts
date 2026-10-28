@@ -584,7 +584,17 @@ export interface IndexSliceStore {
   span: Span;
 }
 
-export type IRStmt =
+/** The source statement an IR statement was lowered from. Set by
+ *  `Lowerer.lowerStmt` on every top-level IR statement it produces
+ *  (ANF hoists included), so codegen can record the statement location
+ *  the interpreter would report for an error (its per-statement
+ *  `rt.$line`). Absent on synthesized statements, which inherit the
+ *  preceding location. */
+interface StmtSource {
+  src?: Span;
+}
+
+export type IRStmt = (
   | ExprStmt
   | Assign
   | If
@@ -598,7 +608,9 @@ export type IRStmt =
   | MultiAssignCall
   | IndexStore
   | IndexSliceStore
-  | CellIndexStore;
+  | CellIndexStore
+) &
+  StmtSource;
 
 // ── Functions ───────────────────────────────────────────────────────────
 

@@ -11,6 +11,8 @@
 // format string cycles through args until consumed (with a "no arg
 // consumed this pass" guard against infinite output).
 
+import { jit_raise_error } from "../system/raise.js";
+
 function isTensor(v) {
   return typeof v === "object" && v !== null && v.jitTag === "tensor";
 }
@@ -27,7 +29,7 @@ function toNumber(v) {
     // char yields its code point; a multi-char value has no scalar
     // numeric form. `Number("A")` would wrongly give NaN.
     if (v.value.length === 1) return v.value.charCodeAt(0);
-    throw new Error("Cannot convert multi-char to number");
+    jit_raise_error("", "Cannot convert multi-char to number");
   }
   if (isTensor(v) && v.data.length === 1) return v.data[0];
   return Number(v);
@@ -208,7 +210,8 @@ export function jit_sprintf_format(fmt, args) {
               const gPrec = precMatch ? parseInt(precMatch[1]) : 6;
               let gStr;
               if (gVal === 0) {
-                gStr = "0";
+                // Keep the sign of -0, like the interpreter (and C).
+                gStr = Object.is(gVal, -0) ? "-0" : "0";
               } else {
                 const exp = Math.floor(Math.log10(Math.abs(gVal)));
                 if (exp < -4 || exp >= gPrec) {

@@ -48,6 +48,7 @@ import {
 import { getBuiltin } from "../builtins/index.js";
 import { requireEmitJs } from "../builtins/registry.js";
 import {
+  locCode,
   newRuntimeState,
   renderJsRuntimeBodies,
   useRuntimeByName,
@@ -55,6 +56,7 @@ import {
   type InlineSnippet,
 } from "./runtime.js";
 import { emitTensorConcatJs } from "./emitTensorConcatJs.js";
+import { maybeUnassignedReads } from "../lowering/definiteAssign.js";
 
 export interface EmitJsOptions {
   /** cName of the entry spec the module's factory returns.
@@ -70,6 +72,8 @@ export interface EmitJsResult {
   /** Names of every runtime snippet activated during emit (debug aid;
    *  also useful to gate dependency wiring in tests). */
   activatedSnippets: ReadonlyArray<string>;
+  /** Files named by statement locations, by index (see `locCode`). */
+  locFiles: string[];
 }
 
 // ── Entry ────────────────────────────────────────────────────────────────
@@ -85,6 +89,12 @@ export function emitJsProgram(
       `emitJsProgram: 'exposeSpec' references unknown spec '${opts.exposeSpec}'`
     );
   }
+  // The raise channel (`JitRaise`), shared by every runtime error site.
+  useRuntimeByName(state, "jit_raise");
+  state.maybeUnbound = new Set();
+  for (const fn of prog.functions.values()) {
+    for (const read of maybeUnassignedReads(fn)) state.maybeUnbound.add(read);
+  }
 
   const userParts: string[] = [];
   for (const fn of prog.functions.values()) {
@@ -99,19 +109,22 @@ export function emitJsProgram(
   // globals) so two runtimes in one process never share a host. Helper-side
   // `typeof === "function"` checks gate behavior when a host omits a hook.
   const out: string[] = [];
-  out.push("let $write, $plotDispatch, $rand, $elemwise;");
+  // `$loc` is the statement location (see `locCode`), read by the host
+  // through `$h.loc` when a raise escapes.
+  out.push("let $write, $plotDispatch, $rand, $elemwise, $loc = -1;");
   if (state.active.size > 0) {
     out.push(renderJsRuntimeBodies(state));
     out.push("");
   }
   out.push(...userParts);
   out.push(
-    `return function ($h) { $write = $h.write; $plotDispatch = $h.plotDispatch; $rand = $h.rand; $elemwise = $h.elemwise; return ${opts.exposeSpec}; };`
+    `return function ($h) { $write = $h.write; $plotDispatch = $h.plotDispatch; $rand = $h.rand; $elemwise = $h.elemwise; $h.loc = () => $loc; return ${opts.exposeSpec}; };`
   );
 
   return {
     source: out.join("\n"),
     activatedSnippets: Array.from(state.active),
+    locFiles: state.locFiles,
   };
 }
 
@@ -139,9 +152,14 @@ function emitFunction(fn: IRFunc, state: RuntimeState): string {
   // in-body `ReturnFromFunction` can emit `return <fn outputs>` with
   // the matching shape (bare value / array / nothing). Cleared after.
   const prevOutputs = state.currentFnOutputs;
+  const prevOutputTypes = state.currentFnOutputTypes;
   state.currentFnOutputs = fn.cOutputs;
+  state.currentFnOutputTypes = new Map(
+    fn.cOutputs.map((c, i) => [c, fn.outputTypes[i]] as const)
+  );
   const bodyLines = emitBody(fn.body, "  ", state);
   state.currentFnOutputs = prevOutputs;
+  state.currentFnOutputTypes = prevOutputTypes;
   if (bodyLines.length > 0) lines.push(bodyLines);
 
   // Implicit return at function end based on declared outputs.
@@ -175,7 +193,14 @@ function emitBody(
   state: RuntimeState
 ): string {
   const out: string[] = [];
+  let prevSrc: IRStmt["src"];
   for (const s of stmts) {
+    // Statement location, as the interpreter sets `rt.$line` per
+    // statement (mirrors the C `emitBody`).
+    if (s.src !== undefined && s.src !== prevSrc) {
+      out.push(`${indent}$loc = ${locCode(state, s.src)};`);
+    }
+    prevSrc = s.src ?? prevSrc;
     const line = emitStmt(s, indent, state);
     if (line.length > 0) out.push(line);
   }
@@ -211,6 +236,25 @@ function emitStmt(s: IRStmt, indent: string, state: RuntimeState): string {
       const rhs = isOwned(s.ty)
         ? emitOwnedRhsJs(s.expr, state)
         : emitExpr(s.expr, state);
+      const outTy = state.currentFnOutputTypes?.get(s.cName);
+      if (outTy !== undefined && isOwned(outTy) && !isOwned(s.ty)) {
+        // A scalar stored to an output whose (merged) type is a tensor,
+        // e.g. a recursive function's scalar base case when the recursive
+        // result widened the output: store a 1x1 tensor (as the C emitter).
+        if (
+          outTy.kind !== "Numeric" ||
+          s.ty.kind !== "Numeric" ||
+          outTy.isComplex ||
+          s.ty.isComplex
+        ) {
+          throw new UnsupportedConstruct(
+            `scalar assigned to the tensor output '${s.name}'`,
+            s.span
+          );
+        }
+        useRuntimeByName(state, "jit_tensor_alloc_nd");
+        return `${indent}${s.cName} = jit_tensor_alloc_nd(2, [1, 1]); ${s.cName}.data[0] = ${rhs};`;
+      }
       return `${indent}${s.cName} = ${rhs};`;
     }
 
@@ -312,9 +356,8 @@ function emitStmt(s: IRStmt, indent: string, state: RuntimeState): string {
       const slotTy = s.leafTy ?? s.base.ty;
       const idxs = s.indices.map(ix => emitExpr(ix, state));
       // Grow-aware store subscripts: a store past the runtime extent
-      // throws a tagged `jitGrowBail` sentinel (the array would grow —
-      // unsupported in the JIT) so the executor bails to the
-      // interpreter. See `scalar_index.js`.
+      // raises a bail (the array would grow, which the JIT does not
+      // support) so the executor bails to the interpreter. See `scalar_index.js`.
       let offset: string;
       if (idxs.length === 1) {
         offset = `jit_idx_lin_grow_js(${baseName}, ${idxs[0]})`;
@@ -401,6 +444,8 @@ function emitIndexSliceStoreJs(
   indent: string,
   state: RuntimeState
 ): string {
+  // Bounds and size-mismatch helpers (`jit_slice_store_mismatch`).
+  useRuntimeByName(state, "jit_scalar_index");
   // Same member-rooted slot-path treatment as the scalar IndexStore.
   const baseName =
     s.fieldPath !== undefined
@@ -455,6 +500,9 @@ function emitIndexSliceStoreJs(
         `${indent}{ ` +
         `const _jit_rhs = ${rhsExpr}; ` +
         `const _jit_n = ${baseName}.data.length; ` +
+        (rhsIsScalar
+          ? ``
+          : `if (_jit_rhs.data.length !== _jit_n) jit_slice_store_mismatch(${baseName}); `) +
         `for (let _jit_k = 0; _jit_k < _jit_n; _jit_k++) { ` +
         `${writeAt("_jit_k", "_jit_k")} ` +
         `} ` +
@@ -473,7 +521,7 @@ function emitIndexSliceStoreJs(
       // instead of silently truncating.
       const lenCheck = rhsIsScalar
         ? ``
-        : `if (_jit_rhs.data.length !== _jit_n) throw new Error("Unable to perform assignment because the size of the left side is " + _jit_n + " and the size of the right side is " + _jit_rhs.data.length + "."); `;
+        : `if (_jit_rhs.data.length !== _jit_n) jit_slice_store_mismatch(${baseName}); `;
       // Each target offset goes through the grow-aware checker: a sub-1
       // index errors, and an index past the end grow-bails to the
       // interpreter (which has full grow semantics) — matching the
@@ -502,7 +550,7 @@ function emitIndexSliceStoreJs(
       // the RHS end → silent NaN/truncation.
       const lenCheck = rhsIsScalar
         ? ``
-        : `if (_jit_rhs.data.length !== _jit_n) throw new Error("Subscripted assignment dimension mismatch"); `;
+        : `if (_jit_rhs.data.length !== _jit_n) jit_slice_store_mismatch(${baseName}); `;
       return (
         `${indent}{ ` +
         `const _jit_rhs = ${rhsExpr}; ` +
@@ -529,7 +577,7 @@ function emitIndexSliceStoreJs(
       // ignores trailing RHS elements (long RHS → silent truncation).
       const lenCheck = rhsIsScalar
         ? ``
-        : `if (_jit_rhs.data.length !== _jit_n) throw new Error("Subscripted assignment dimension mismatch"); `;
+        : `if (_jit_rhs.data.length !== _jit_n) jit_slice_store_mismatch(${baseName}); `;
       return (
         `${indent}{ ` +
         `const _jit_rhs = ${rhsExpr}; ` +
@@ -629,7 +677,7 @@ function emitIndexSliceStoreJs(
   if (!rhsIsScalar) {
     const slotProduct = dims.join(" * ");
     lines.push(
-      `${indent}  { const _jit_total = ${slotProduct}; if (_jit_rhs.data.length !== _jit_total) throw new Error("Unable to perform assignment because the size of the left side is " + _jit_total + " and the size of the right side is " + _jit_rhs.data.length + "."); }`
+      `${indent}  { const _jit_total = ${slotProduct}; if (_jit_rhs.data.length !== _jit_total) jit_slice_store_mismatch(${baseName}); }`
     );
   }
   for (let i = ndim - 1; i >= 0; i--) {
@@ -742,6 +790,9 @@ function emitExpr(e: IRExpr, state: RuntimeState): string {
     }
 
     case "Var":
+      // A read of a local that may still be unassigned (`undefined` in
+      // JS): raise rather than compute with `undefined`.
+      if (state.maybeUnbound?.has(e)) return `jit_bound(${e.cName})`;
       return e.cName;
 
     case "Binary": {
@@ -1029,14 +1080,15 @@ function emitIndexSliceJs(
           `const _jit_n = jit_loop_count(_jit_s, _jit_e, _jit_st); ` +
           `const _jit_idx = Math.round(jit_range_value(_jit_s, _jit_st, _jit_e, _jit_n, 0)); ` +
           `const _jit_len = ${baseName}.data.length; ` +
-          `if (_jit_idx < 1 || _jit_idx > _jit_len) throw new Error("Index in position 1 exceeds array bounds. Index must not exceed " + _jit_len + "."); ` +
+          `if (_jit_idx < 1 || _jit_idx > _jit_len) jit_raise_error("", "Index exceeds array bounds"); ` +
           `return _jit_idx - 1; })()`;
       } else if (slot.kind === "IndexVec") {
+        useRuntimeByName(state, "jit_scalar_index");
         const idx = emitExpr(slot.expr, state);
         off =
           `(() => { const _jit_ix = ${idx}; ` +
           `const _jit_ixd = _jit_ix.jitTag === "tensor" ? _jit_ix.data : [_jit_ix]; ` +
-          `return Math.round(_jit_ixd[0]) - 1; })()`;
+          `return jit_idx_lin_js(${baseName}, _jit_ixd[0]); })()`;
       } else {
         throw new UnsupportedConstruct(
           `emitJs internal: scalar IndexSlice slot kind ${slot.kind}`,
@@ -1081,7 +1133,7 @@ function emitIndexSliceJs(
         `for (let _jit_k = 0; _jit_k < _jit_n; _jit_k++) { ` +
         `const _jit_v = jit_range_value(_jit_s, _jit_st, _jit_e, _jit_n, _jit_k); ` +
         `const _jit_idx = Math.round(_jit_v); ` +
-        `if (_jit_idx < 1 || _jit_idx > _jit_len) throw new Error("Index in position 1 exceeds array bounds. Index must not exceed " + _jit_len + "."); ` +
+        `if (_jit_idx < 1 || _jit_idx > _jit_len) jit_raise_error("", "Index exceeds array bounds"); ` +
         `${copy("_jit_k", "_jit_idx - 1")} ` +
         `} ` +
         `return _jit_t; ` +
@@ -1097,6 +1149,7 @@ function emitIndexSliceJs(
       );
     }
     if (slot.kind === "IndexVec") {
+      useRuntimeByName(state, "jit_scalar_index");
       const idx = emitExpr(slot.expr, state);
       const rows = isRowVec ? "1" : "_jit_n";
       const cols = isRowVec ? "_jit_n" : "1";
@@ -1107,7 +1160,7 @@ function emitIndexSliceJs(
         `const _jit_n = _jit_ixd.length; ` +
         `const _jit_t = ${allocFn}(2, [${rows}, ${cols}]); ` +
         `for (let _jit_k = 0; _jit_k < _jit_n; _jit_k++) { ` +
-        `${copy("_jit_k", "Math.round(_jit_ixd[_jit_k]) - 1")} ` +
+        `${copy("_jit_k", `jit_idx_lin_js(${baseName}, _jit_ixd[_jit_k])`)} ` +
         `} ` +
         `return _jit_t; ` +
         `})()`
@@ -1129,8 +1182,8 @@ function emitIndexSliceJs(
         `for (let _jit_mi = 0; _jit_mi < _jit_md.length; _jit_mi++) ` +
         `if (_jit_md[_jit_mi] !== 0) { ` +
         // A truthy mask bit past the base end is an error in MATLAB (the C
-        // path aborts too); without this the gather reads OOB -> NaN.
-        `if (_jit_mi >= _jit_blen) throw new Error("Index exceeds array bounds"); ` +
+        // path raises too); without this the gather reads OOB -> NaN.
+        `if (_jit_mi >= _jit_blen) jit_raise_error("", "Index exceeds array bounds"); ` +
         `_jit_ix.push(_jit_mi); } ` +
         `const _jit_n = _jit_ix.length; ` +
         `const _jit_t = ${allocFn}(2, [${rows}, ${cols}]); ` +
@@ -1234,7 +1287,7 @@ function emitIndexSliceJs(
       slines.push(`const _jit_idx_${i} = Math.round(${idxFns[i]});`);
       slines.push(
         `if (_jit_idx_${i} < 1 || _jit_idx_${i} > (${baseName}.shape[${i}] ?? 1)) ` +
-          `throw new Error("Index in position ${i + 1} exceeds array bounds.");`
+          `jit_raise_error("", "Index exceeds array bounds");`
       );
     }
     const srcTerms: string[] = [];
@@ -1287,7 +1340,7 @@ function emitIndexSliceJs(
     lines.push(`const _jit_idx_${i} = Math.round(${idxFns[i]});`);
     lines.push(
       `if (_jit_idx_${i} < 1 || _jit_idx_${i} > (${baseName}.shape[${i}] ?? 1)) ` +
-        `throw new Error("Index in position ${i + 1} exceeds array bounds.");`
+        `jit_raise_error("", "Index exceeds array bounds");`
     );
   }
   // Column-major source offset: sum_i (idx[i] - 1) * stride[i] where

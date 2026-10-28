@@ -137,6 +137,10 @@ builtin({
 
 // ── assert ───────────────────────────────────────────────────────────────
 
+/** A MATLAB message identifier: component:mnemonic, word chars and colons
+ *  (e.g. 'MATLAB:badInput'). */
+const MATLAB_ID_RE = /^[A-Za-z]\w*(:[A-Za-z]\w*)+$/;
+
 builtin({
   name: "assert",
   nargin: [1, Infinity],
@@ -156,13 +160,23 @@ builtin({
         }
       }
     }
-    if (!pass) {
-      const msg =
-        args.length > 1
-          ? (textValue(args[1]) ?? String(args[1]))
-          : "Assertion failed";
-      throw new Error(msg);
+    if (pass) return;
+    // MATLAB's forms: assert(c) -> "Assertion failed."; assert(c, msg) takes
+    // msg literally; assert(c, [id,] fmt, A1, ...) formats.
+    if (args.length === 1) {
+      throw new RuntimeError("Assertion failed.", null, {
+        identifier: "MATLAB:assertion:failed",
+      });
     }
+    const first = textValue(args[1]) ?? String(args[1]);
+    if (args.length === 2) throw new RuntimeError(first);
+    if (MATLAB_ID_RE.test(first)) {
+      const fmt = textValue(args[2]) ?? String(args[2]);
+      throw new RuntimeError(sprintfFormat(fmt, args.slice(3)), null, {
+        identifier: first,
+      });
+    }
+    throw new RuntimeError(sprintfFormat(first, args.slice(2)));
   },
 });
 
@@ -174,13 +188,14 @@ builtin({
   nargout: 0,
   apply: args => {
     const first = textValue(args[0]) ?? String(args[0]);
-    // error(id, fmt, ...) form: first arg is a valid MATLAB error identifier
-    // Identifiers are component:mnemonic with only word chars and colons (e.g. 'MATLAB:badInput')
-    if (args.length >= 2 && /^[A-Za-z]\w*(:[A-Za-z]\w*)+$/.test(first)) {
-      const msg =
-        args.length === 2
-          ? (textValue(args[1]) ?? String(args[1]))
-          : sprintfFormat(textValue(args[1]) ?? String(args[1]), args.slice(2));
+    // error(id, fmt, ...): the first arg is a MATLAB identifier. As in
+    // MATLAB, the id form always formats its message (escapes too), while
+    // a lone error(msg) is taken literally.
+    if (args.length >= 2 && MATLAB_ID_RE.test(first)) {
+      const msg = sprintfFormat(
+        textValue(args[1]) ?? String(args[1]),
+        args.slice(2)
+      );
       const err = new RuntimeError(msg);
       err.identifier = first;
       throw err;

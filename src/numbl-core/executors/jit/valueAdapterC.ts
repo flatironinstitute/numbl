@@ -121,30 +121,37 @@ export function bindHostWrite(
   };
 }
 
-/** Bind the emitted `.so`'s grow-bail flag accessors. A runtime
- *  indexed-store grow (`v(k) = x`, k past the runtime extent) sets a
- *  flag in the `.so` and `longjmp`s back to the host-entry function's
- *  guard (see `grow_bail.h`), which returns normally. The host calls
- *  `reset()` before each invocation and `bailed()` after; when
- *  `bailed()` is true it discards the outputs and bails to the
- *  interpreter (which has full MATLAB grow semantics).
- *
- *  When the spec emitted no scalar indexed store, `jit_grow_bail_*`
- *  are absent from the `.so`; binding then no-ops (`bailed()` is always
- *  false — the code can't grow). */
-export function bindGrowBail(lib: KoffiLib): {
-  reset(): void;
-  bailed(): boolean;
-} {
-  let reset: () => void;
-  let check: () => number;
-  try {
-    reset = lib.func("void jit_grow_bail_reset(void)") as () => void;
-    check = lib.func("int jit_grow_bail_check(void)") as () => number;
-  } catch {
-    return { reset() {}, bailed: () => false };
-  }
-  return { reset, bailed: () => check() !== 0 };
+/** The raise status a call left behind (see `runtime/system/raise.h`). */
+export interface CRaiseStatus {
+  /** 1 = bail, 2 = error. */
+  readonly kind: number;
+  readonly id: string;
+  /** null: the JIT leaves the error's wording to the interpreter. */
+  readonly msg: string | null;
+  /** Statement location code (`locCode`), negative when unknown. */
+  readonly loc: number;
+}
+
+/** Bind the emitted `.so`'s raise-status accessors. Every `.so` exports
+ *  them: the host-entry wrapper clears the status before each call, and a
+ *  `jit_raise` sets it before `longjmp`ing back to the wrapper's guard.
+ *  `status()` is null after a call that returned normally. */
+export function bindRaise(lib: KoffiLib): { status(): CRaiseStatus | null } {
+  const kind = lib.func("int jit_raise_kind(void)") as () => number;
+  const id = lib.func("const char *jit_raise_id(void)") as () => string;
+  const msg = lib.func("const char *jit_raise_msg(void)") as () =>
+    | string
+    | null;
+  const loc = lib.func("long long jit_raise_loc(void)") as () =>
+    | number
+    | bigint;
+  return {
+    status() {
+      const k = kind();
+      if (k === 0) return null;
+      return { kind: k, id: id() ?? "", msg: msg(), loc: Number(loc()) };
+    },
+  };
 }
 
 /** Build a marshaling context from a koffi lib handle. `jit_malloc`

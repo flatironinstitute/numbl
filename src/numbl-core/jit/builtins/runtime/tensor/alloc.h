@@ -1,10 +1,10 @@
-/* mtoc runtime helper: malloc wrapper that aborts on allocation
+/* JIT runtime helper: malloc wrapper that bails on allocation
  * failure with a clear diagnostic. Used for every tensor backing
  * buffer (mtoc allocates tensor storage uniformly on the heap so the
  * codegen path is exercised by every test, not just large ones).
  *
  * `n_bytes` is the size in bytes; the call site computes
- * `numel * sizeof(double)`. Returns a non-NULL pointer or aborts.
+ * `numel * sizeof(double)`. Returns a non-NULL pointer or raises.
  */
 
 #include <stdio.h>
@@ -13,15 +13,14 @@
 static double *jit_alloc(size_t n_bytes) {
   /* `malloc(0)` is implementation-defined: glibc returns a non-NULL
    * sentinel, but some C libraries return NULL — which would trip
-   * the OOM abort below on a perfectly valid empty-tensor request.
+   * the OOM raise below on a perfectly valid empty-tensor request.
    * Clamp to a 1-byte allocation so the contract "return non-NULL or
-   * abort on OOM" holds uniformly. The caller never reads from a
+   * raise on OOM" holds uniformly. The caller never reads from a
    * zero-element buffer, so the wasted byte is irrelevant. */
   double *p = (double *)malloc(n_bytes == 0 ? 1 : n_bytes);
   if (!p) {
-    fprintf(stderr, "C-JIT: out of memory (jit_alloc requested %zu bytes)\n",
+    jit_raise_bailf("out of memory (jit_alloc requested %zu bytes)",
             n_bytes);
-    abort();
   }
   return p;
 }

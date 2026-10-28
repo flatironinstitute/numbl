@@ -29,11 +29,12 @@ interface Executor<K extends ShapeKind, D, C> {
   compile(data: D, interp: Interpreter): C;
 
   // { result } on success (the return value for a call; undefined
-  // otherwise), or null to bail.
+  // otherwise), null to bail, or RERUN for a runtime error the
+  // interpreter must reproduce. A throw is the unit's error.
   run(compiled: C, data: D, interp: Interpreter): RunResult;
 }
 
-type RunResult = { result: unknown } | null;
+type RunResult = { result: unknown } | null | typeof RERUN;
 ```
 
 ## Dispatch
@@ -50,10 +51,14 @@ runFirst(executors, lowered, owner):
     if compiled is BAILED: continue
     if compiled is missing: compiled = cache.set(..., executor.compile(data))
     result = executor.run(compiled, data)   // output captured
+                                            // (a throw commits it, then propagates)
     if result is null:                      // bail
       discard captured output, plots, PRNG draws
       cache.markBailed(executor, owner, key)
       continue
+    if result is RERUN:                     // runtime error, see Runtime errors
+      discard captured output, plots, PRNG draws
+      return null                           // no bail cached
     commit captured output; return result
   return null                               // caller falls back to the interpreter
 ```
@@ -64,7 +69,7 @@ runFirst(executors, lowered, owner):
 
 There is no cost model: the order is fixed by registration (`executors/plugins.ts`), C-JIT before JS-JIT. A C executor declines what it cannot marshal across the koffi ABI, so JS-JIT picks that up, and the interpreter takes whatever both decline.
 
-A compiler rejection (`UnsupportedConstruct` / `JitTypeError`) makes `compile` return null; `run` then bails, and the bail is cached, so the unit is not recompiled on every later dispatch. Runtime bails are cached the same way. Side effects of a run that bails are rolled back so the interpreter's re-run does not duplicate them: captured output is discarded, plot instructions and plot state are restored (`Runtime.discardOutputCapture`), and the PRNG is rewound (`snapshotRng` / `restoreRng`).
+A compiler rejection (`UnsupportedConstruct` / `JitTypeError`) makes `compile` return null; `run` then bails, and the bail is cached, so the unit is not recompiled on every later dispatch. Runtime bails are cached the same way; runtime errors are not (see [Runtime errors](#runtime-errors-and-bails)). Side effects of a run that bails or re-runs are rolled back so the interpreter's re-run does not duplicate them: captured output is discarded, plot instructions and plot state are restored (`Runtime.discardOutputCapture`), and the PRNG is rewound (`snapshotRng` / `restoreRng`). A run that throws keeps the output it produced before the error, as the interpreter would.
 
 ## Lowering
 
@@ -84,13 +89,13 @@ The shape executors (`executors/jit/topLevelExecutor.ts`, `loopExecutor.ts`, `ca
 
 A `JitBackend` supplies:
 
-| Member           | JS (`jsBackend.ts`)                            | C (`cBackend.ts`)                                                        |
-| ---------------- | ---------------------------------------------- | ------------------------------------------------------------------------ |
-| `available`      | always                                         | `interp.nativeBridge.koffi` present                                      |
-| `mapType`        | `jitTypeToCompilerType`                        | same, and the type must have a C declaration (`compilerTypeToCDecl`)     |
-| `compile`        | `compileSpec` → `new Function` → spec function | `compileSpecC` → `cc -shared` → koffi `dlopen`                           |
-| `invoke`         | `numblToJit` / `jitToNumbl` around the JS call | `marshalInputs` / out-pointer buffers / `unmarshal*` around the FFI call |
-| grow-bail signal | sentinel exception from the store helper       | flag set in the `.so` (`bindGrowBail`)                                   |
+| Member        | JS (`jsBackend.ts`)                            | C (`cBackend.ts`)                                                        |
+| ------------- | ---------------------------------------------- | ------------------------------------------------------------------------ |
+| `available`   | always                                         | `interp.nativeBridge.koffi` present                                      |
+| `mapType`     | `jitTypeToCompilerType`                        | same, and the type must have a C declaration (`compilerTypeToCDecl`)     |
+| `compile`     | `compileSpec` → `new Function` → spec function | `compileSpecC` → `cc -shared` → koffi `dlopen`                           |
+| `invoke`      | `numblToJit` / `jitToNumbl` around the JS call | `marshalInputs` / out-pointer buffers / `unmarshal*` around the FFI call |
+| raise channel | tagged `JitRaise` thrown by the emitted code   | `longjmp` to the host-entry guard; status read with `bindRaise`          |
 
 Shared policy lives in `backend.ts`: `compileUnit` (the single place compiler rejections are caught and recorded for `NUMBL_JIT_LOG` and `%!numbl:assert_jit`), `declinedByAssertC` (at `--opt 2` the JS backend declines units marked `%!numbl:assert_jit c`, so they either C-JIT or reach the interpreter, which raises), and `insideCompiledLoop` (the loop-depth gate below).
 
@@ -100,9 +105,14 @@ The loop and call executors decline while `interp.loopDepth > 0`: an enclosing l
 
 That reasoning holds only while the enclosing loop is going to be compiled. When it is _declined_, the interpreter walks its body statement by statement and nothing above will capture what is nested inside, so the gate lifts. `Registry.interpretFallback` bumps `Interpreter.jitDeclinedLoopDepth` around the interpreter's execution of a declined loop stmt, and the executors gate on `loopDepth > 0 && jitDeclinedLoopDepth === 0`. A nested loop or an expensive callee under a declined loop then gets its own chance; declines are cached, so a nested unit that also declines costs one cache lookup per iteration rather than a repeated compile.
 
-## Bailouts
+## Runtime errors and bails
 
-The JIT rejects statically: the compiler either lowers a spec cleanly or throws at `compile()` time. A compiled spec bails at runtime in two cases. The first is an indexed store past a tensor's current extent, which would grow it (the grow-bail); this also warns through `interp.onJitBail`. The second is any other runtime error raised by the emitted code, which bails silently so the interpreter reproduces numbl's canonical error. In both cases the interpreter re-runs the whole unit.
+The JIT rejects statically: the compiler either lowers a spec cleanly or throws at `compile()` time. At run time, compiled code reports everything through one _raise channel_, `jit_raise(kind, identifier, message)`: emitted JS throws a tagged `JitRaise` (`runtime/system/raise.js`), and compiled C `longjmp`s to its host-entry guard and leaves a status (`runtime/system/raise.h`, see [cjit.md](jit/cjit.md)). Both backends normalize it to `executors/jit/raise.ts`'s `JitRaise`, carrying the source statement that raised it (emitted code records the current statement as the interpreter sets `rt.$line`), and the shape executors map it with `handleRaise`:
+
+- **bail** (a JIT limitation, e.g. an indexed store past a tensor's extent, which would grow it): warn through `interp.onJitBail`, return null. The bail is cached and the interpreter re-runs the unit.
+- **error** (a MATLAB runtime error): when the JIT reproduces the interpreter's result exactly, throw numbl's `RuntimeError` with the interpreter's message and identifier, at the raising statement's line (and, for the call shape, with the function's call frame). That requires the wording (the message is not null), a raising statement in the unit's own code (not a callee, whose frames the JIT does not track, and not a recursive function), and unobservable intermediate state: the call shape discards the function's workspace, while a loop or script body inside a `try` would leave variables the catch block can read but the compiled unit never wrote back. Otherwise return `RERUN`: the interpreter re-runs the unit to raise the error itself. Neither path caches a bail, so one error does not de-JIT the unit.
+
+Anything else thrown by emitted JS is a JIT bug and propagates as an internal error (a V8 stack overflow excepted: it re-runs, so the interpreter reports its own recursion limit).
 
 ## Mode-driven registration
 

@@ -23,8 +23,8 @@ import {
   registerTensorStruct,
 } from "./typeAdapterC.js";
 import {
-  bindGrowBail,
   bindHostWrite,
+  bindRaise,
   makeCMarshalCtx,
   marshalInputs,
   unmarshalScalarOutput,
@@ -33,6 +33,8 @@ import {
 } from "./valueAdapterC.js";
 import type { JitBackend } from "./backend.js";
 import { cOutputSink } from "./hostHelpers.js";
+import { JitRaise } from "./raise.js";
+import { decodeLoc } from "../../jit/codegen/runtime.js";
 
 // koffi ships no TS types for its declaration-string API.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -46,16 +48,16 @@ interface CArtifact {
   // Bound once per loaded `.so`; `lib.func` lookups are too slow per call.
   readonly ctx: ReturnType<typeof makeCMarshalCtx>;
   readonly hostWrite: HostWriteBinding;
-  readonly growBail: ReturnType<typeof bindGrowBail>;
+  readonly raise: ReturnType<typeof bindRaise>;
+  readonly locFiles: ReadonlyArray<string>;
+  readonly recursive: boolean;
 }
 
 export const cBackend: JitBackend<CArtifact> = {
   lang: "c",
   prefix: "cjit",
 
-  // A runtime error in compiled C exits the process (see `oob.h`), so
-  // nothing under a `try` may run as C.
-  available: interp => !!interp.nativeBridge?.koffi && interp.tryDepth === 0,
+  available: interp => !!interp.nativeBridge?.koffi,
 
   // Every type also needs a C-FFI representation.
   mapType(jt) {
@@ -67,14 +69,15 @@ export const cBackend: JitBackend<CArtifact> = {
     const bridge = interp.nativeBridge;
     if (!bridge?.koffi) return null;
     const { workspace, lowerer } = getOrCreateSession(interp);
-    const { source, signature, cName, assignedFlags } = compileSpecC({
-      workspace,
-      lowerer,
-      funcDecl: req.funcDecl,
-      argTypes: req.argTypes,
-      nargout: req.nargout,
-      entrySynthetic: req.synthetic,
-    });
+    const { source, signature, cName, assignedFlags, locFiles, recursive } =
+      compileSpecC({
+        workspace,
+        lowerer,
+        funcDecl: req.funcDecl,
+        argTypes: req.argTypes,
+        nargout: req.nargout,
+        entrySynthetic: req.synthetic,
+      });
     registerTensorStruct(bridge.koffi as Koffi);
     const declaration = buildCDeclaration(signature);
     if (declaration === null) return null;
@@ -88,14 +91,18 @@ export const cBackend: JitBackend<CArtifact> = {
       paramTypes: signature.params.map(p => p.ty),
       ctx: makeCMarshalCtx(koffi, compiled.lib),
       hostWrite: bindHostWrite(koffi, compiled.lib),
-      growBail: bindGrowBail(compiled.lib),
+      raise: bindRaise(compiled.lib),
+      locFiles,
+      recursive,
     };
   },
 
-  invoke(art, args, interp, where) {
+  recursive: art => art.recursive,
+
+  invoke(art, args, interp) {
     const koffi = interp.nativeBridge?.koffi as Koffi;
     if (!koffi) return null;
-    const { ctx, growBail, signature: sig } = art;
+    const { ctx, signature: sig } = art;
     const inputs = marshalInputs(ctx, art.paramTypes, args);
     if (inputs === null) return null;
     // Multi-output specs take one `T *_jit_o<i>` out-pointer per
@@ -109,7 +116,6 @@ export const cBackend: JitBackend<CArtifact> = {
           inputs.args.push(buf);
         }
       }
-      growBail.reset();
       let ret: unknown;
       const sink = cOutputSink(interp.rt);
       try {
@@ -123,11 +129,17 @@ export const cBackend: JitBackend<CArtifact> = {
         inputs.release();
         throw e;
       }
-      if (growBail.bailed()) {
-        interp.onJitBail?.(
-          `${where}: indexed-store array growth; falling back to interpreter`
+      // A raise `longjmp`ed back to the host-entry guard, which freed the
+      // call's allocations (the input buffers included) and returned a
+      // zeroed value; report it instead of reading outputs.
+      const st = art.raise.status();
+      if (st !== null) {
+        throw new JitRaise(
+          st.kind === 1 ? "bail" : "error",
+          st.id,
+          st.msg,
+          decodeLoc(st.loc, art.locFiles)
         );
-        return null;
       }
       const outs = readOutputs(koffi, ctx, ret, outAllocs, sig);
       // An output whose flag stayed 0 was never assigned: return it as
