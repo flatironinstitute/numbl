@@ -11,10 +11,7 @@ import {
   Typography,
 } from "@mui/material";
 import { useCallback, useMemo, useReducer, useState } from "react";
-import {
-  numblLanguageConfig,
-  createNumblTokensProvider,
-} from "../numblLanguage.js";
+import { registerNumblLanguage } from "../components/monacoNumbl.js";
 import { formatDiagnostic } from "../numbl-core/diagnostics";
 import { useSystemFiles } from "../hooks/useSystemFiles.js";
 import {
@@ -220,20 +217,8 @@ export function EmbedPage() {
     setOutput(prev => prev + "\n--- Execution stopped ---\n");
   }, [worker]);
 
-  const handleEditorMount: OnMount = (_, monaco) => {
-    if (
-      !monaco.languages
-        .getLanguages()
-        .some((l: { id: string }) => l.id === "matlab")
-    ) {
-      monaco.languages.register({ id: "matlab" });
-      monaco.languages.setLanguageConfiguration("matlab", numblLanguageConfig);
-      monaco.languages.setMonarchTokensProvider(
-        "matlab",
-        createNumblTokensProvider()
-      );
-    }
-  };
+  const handleEditorMount: OnMount = (_, monaco) =>
+    registerNumblLanguage(monaco, "matlab");
 
   return (
     <Box sx={{ display: "flex", flexDirection: "column", height: "100vh" }}>

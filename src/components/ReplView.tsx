@@ -37,7 +37,7 @@ function saveHistory(history: string[]): void {
   }
 }
 
-interface TerminalMethods {
+export interface TerminalMethods {
   writeOutput: (text: string, isError?: boolean) => void;
   writePrompt: () => void;
   clearTerminal: () => void;

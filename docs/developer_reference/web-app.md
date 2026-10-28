@@ -4,7 +4,7 @@ A React + Vite single-page app that lets users write and run `.m` scripts in the
 
 ## Three-layer structure
 
-- **Main thread (UI)** — React components for the editor, console, plot view, workspace, file tree. Owns the virtual file system visible to the user and orchestrates the worker.
+- **Main thread (UI)** — React components for the editor, console, plot view, workspace, file tree. Owns the virtual file system visible to the user and orchestrates the worker. The IDE is `IDEWorkspace`, which holds run state and layout and composes the panels in `src/components/ide/` (editor and run controls, output, figures, compact-layout output, file browser, execution settings).
 - **Worker (runtime)** — imports numbl-core and calls `executeCode`. Holds persistent REPL state (variables, hold state, opt level, worker-side VFS mirror).
 - **Numbl-core** — the same TypeScript that runs under the CLI. The browser-specific adapters plug it in.
 
