@@ -1,3 +1,4 @@
+/* @snippet name=jit_tensor_alloc_complex deps=jit_tensor_t,jit_alloc */
 /* JIT runtime helper: allocate an uninitialized complex tensor of
  * the given 2-D shape. Sibling of `jit_tensor_alloc`; this one
  * allocates BOTH lanes (`real` and `imag` of equal length). The

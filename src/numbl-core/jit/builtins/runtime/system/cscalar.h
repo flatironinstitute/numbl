@@ -1,3 +1,4 @@
+/* @snippet name=jit_cscalar */
 /* JIT runtime helpers: scalar complex operations as explicit
  * function calls.
  *

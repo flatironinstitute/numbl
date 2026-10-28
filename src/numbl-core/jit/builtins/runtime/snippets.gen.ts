@@ -238,112 +238,500 @@ export const JS_SNIPPETS: Record<string, string> = {
     '/* JS sibling of strcmp.h. The input is either a raw JS string (numbl-style\n * scalar handle) or a `{jitTag:"char", value:string}` char wrapper.\n * The helper normalizes either form to its raw bytes before comparing.\n */\n\nfunction _jit_strcmp_text(v) {\n  if (typeof v === "string") return v;\n  if (v && v.jitTag === "char" && typeof v.value === "string") return v.value;\n  return null;\n}\n\nfunction jit_strcmp(a, b) {\n  const sa = _jit_strcmp_text(a);\n  const sb = _jit_strcmp_text(b);\n  if (sa === null || sb === null) return 0;\n  return sa === sb ? 1 : 0;\n}\n\nfunction jit_strcmpi(a, b) {\n  const sa = _jit_strcmp_text(a);\n  const sb = _jit_strcmp_text(b);\n  if (sa === null || sb === null) return 0;\n  return sa.toLowerCase() === sb.toLowerCase() ? 1 : 0;\n}\n',
 };
 
-/** Per-JS-snippet list of basenames it imports from sibling JS
- *  snippets (e.g. `tensor_elemwise_real.js` →
- *  `['tensor_alloc_nd.js']`). The codegen path converts each entry
- *  to a registered snippet name (`jit_<basename without .js>`) so
- *  cross-snippet JS deps activate alongside the explicit C deps. */
-export const JS_IMPORTS: Record<string, string[]> = {
-  "cell.js": ["format_double.js"],
-  "loop_count.js": [],
-  "range_value.js": [],
-  "scalar_index.js": [],
-  "tensor_make_range.js": [
-    "loop_count.js",
-    "range_value.js",
-    "tensor_alloc_nd.js",
-  ],
-  "assert_fmt.js": ["error_fmt.js"],
-  "disp_complex.js": ["format_complex.js"],
-  "disp_double.js": ["format_double.js"],
-  "disp_struct.js": ["disp_double.js", "disp_tensor.js"],
-  "disp_tensor.js": ["format_double.js"],
-  "disp_tensor_complex.js": ["format_complex.js"],
-  "error_fmt.js": ["format_engine.js", "raise.js"],
-  "format_complex.js": ["format_double.js"],
-  "format_double.js": [],
-  "format_engine.js": ["raise.js"],
-  "fprintf.js": ["format_engine.js"],
-  "sprintf.js": ["format_engine.js"],
-  "warning_fmt.js": ["format_engine.js"],
-  "plot_dispatch.js": [],
-  "cdiv.js": [],
-  "cscalar.js": [],
-  "deep_clone.js": [],
-  "isequal.js": [],
-  "raise.js": [],
-  "tictoc.js": [],
-  "tensor.js": [],
-  "tensor_alloc.js": ["tensor.js"],
-  "tensor_alloc_complex.js": [],
-  "tensor_alloc_nd.js": ["tensor.js"],
-  "tensor_alloc_nd_complex.js": [],
-  "tensor_copy_complex.js": [],
-  "tensor_from_matrix.js": ["tensor_alloc.js"],
-  "tensor_from_matrix_complex.js": ["tensor_alloc_complex.js"],
-  "tensor_from_row.js": ["tensor_alloc.js"],
-  "tensor_from_row_complex.js": ["tensor_alloc_complex.js"],
-  "tensor_cat.js": [
-    "raise.js",
-    "tensor_alloc_nd.js",
-    "tensor_alloc_nd_complex.js",
-  ],
-  "tensor_cumulative.js": [
-    "raise.js",
-    "tensor_alloc_nd.js",
-    "tensor_alloc_nd_complex.js",
-  ],
-  "tensor_diag.js": ["tensor_alloc.js", "tensor_alloc_nd_complex.js"],
-  "tensor_diff.js": ["tensor_alloc_nd.js"],
-  "tensor_dot.js": [
-    "raise.js",
-    "tensor_alloc_nd.js",
-    "tensor_alloc_nd_complex.js",
-  ],
-  "tensor_elemwise_complex.js": [
-    "cdiv.js",
-    "cscalar.js",
-    "tensor_alloc_nd_complex.js",
-  ],
-  "tensor_elemwise_real.js": ["raise.js", "tensor_alloc_nd.js"],
-  "tensor_elemwise_real_fn.js": ["tensor_alloc_nd.js"],
-  "tensor_eye.js": ["tensor_alloc.js"],
-  "tensor_fill_nd.js": ["tensor_alloc_nd.js", "tensor_alloc_nd_complex.js"],
-  "tensor_fill_square.js": ["tensor_fill_nd.js"],
-  "tensor_flip.js": ["tensor_alloc_nd.js", "tensor_alloc_nd_complex.js"],
-  "tensor_imag_all_zero.js": [],
-  "tensor_linspace.js": ["tensor_alloc.js"],
-  "tensor_logical_real.js": ["tensor_alloc_nd.js"],
-  "tensor_logspace.js": ["tensor_alloc.js"],
-  "tensor_meshgrid.js": ["tensor_alloc.js"],
-  "tensor_mtimes_complex.js": ["raise.js", "tensor_alloc_complex.js"],
-  "tensor_mtimes_real.js": ["raise.js", "tensor_alloc.js"],
-  "tensor_norm.js": [],
-  "tensor_ones_nd.js": ["tensor_alloc_nd.js"],
-  "tensor_ones_square.js": ["tensor_ones_nd.js"],
-  "tensor_predicate.js": [],
-  "tensor_reduce_complex.js": [
-    "raise.js",
-    "tensor_alloc_nd.js",
-    "tensor_alloc_nd_complex.js",
-  ],
-  "tensor_reduce_real.js": ["raise.js", "tensor_alloc_nd.js"],
-  "tensor_repmat.js": ["tensor_alloc_nd.js", "tensor_alloc_nd_complex.js"],
-  "tensor_reshape_nd.js": ["tensor_alloc_nd.js"],
-  "tensor_reshape_nd_complex.js": ["tensor_alloc_nd_complex.js"],
-  "tensor_size.js": ["tensor_alloc.js"],
-  "tensor_sort_real.js": ["tensor_alloc_nd.js", "tensor_alloc_nd_complex.js"],
-  "tensor_transpose.js": ["tensor_alloc.js"],
-  "tensor_transpose_complex.js": ["tensor_alloc_complex.js"],
-  "tensor_triangular.js": ["tensor_alloc.js", "tensor_alloc_nd_complex.js"],
-  "tensor_unary_complex_math.js": [
-    "tensor_alloc_nd.js",
-    "tensor_alloc_nd_complex.js",
-  ],
-  "tensor_unary_real_math.js": ["raise.js", "tensor_alloc_nd.js"],
-  "tensor_uniquetol.js": ["tensor_alloc_nd.js"],
-  "tensor_var.js": ["raise.js", "tensor_alloc_nd.js"],
-  "tensor_zeros_nd.js": ["tensor_alloc_nd.js"],
-  "tensor_zeros_square.js": ["tensor_zeros_nd.js"],
-  "strcmp.js": [],
+/** One runtime snippet: the name emitted code activates, the `.h`
+ *  file it is loaded from (a `.js` twin shares its stem), and the
+ *  snippets activated before it: the header's `deps`, then the `.h`
+ *  twins of the `.js` imports. */
+export interface SnippetDef {
+  name: string;
+  file: string;
+  deps: string[];
+}
+
+/** Every runtime snippet, from the `@snippet` header of each `.h`. */
+export const SNIPPET_DEFS: SnippetDef[] = [
+  { name: "jit_cell_make", file: "cell.h", deps: ["jit_format_double"] },
+  { name: "jit_loop_count", file: "loop_count.h", deps: [] },
+  { name: "jit_range_value", file: "range_value.h", deps: [] },
+  { name: "jit_scalar_index", file: "scalar_index.h", deps: [] },
+  {
+    name: "jit_tensor_make_range",
+    file: "tensor_make_range.h",
+    deps: [
+      "jit_tensor_t",
+      "jit_tensor_alloc_nd",
+      "jit_loop_count",
+      "jit_range_value",
+    ],
+  },
+  { name: "jit_assert_scalar", file: "assert_fail.h", deps: [] },
+  {
+    name: "jit_assert_scalar_fmt",
+    file: "assert_fmt.h",
+    deps: ["jit_error_fmt"],
+  },
+  {
+    name: "jit_disp_complex",
+    file: "disp_complex.h",
+    deps: ["jit_format_complex", "jit_host_output"],
+  },
+  {
+    name: "jit_disp_double",
+    file: "disp_double.h",
+    deps: ["jit_format_double", "jit_host_output"],
+  },
+  {
+    name: "jit_disp_struct",
+    file: "disp_struct.h",
+    deps: ["jit_disp_double", "jit_disp_tensor"],
+  },
+  {
+    name: "jit_disp_tensor",
+    file: "disp_tensor.h",
+    deps: ["jit_tensor_t", "jit_format_double", "jit_host_output"],
+  },
+  {
+    name: "jit_disp_tensor_complex",
+    file: "disp_tensor_complex.h",
+    deps: [
+      "jit_tensor_t",
+      "jit_format_complex",
+      "jit_cscalar",
+      "jit_host_output",
+    ],
+  },
+  {
+    name: "jit_disp_tensor_inline",
+    file: "disp_tensor_inline.h",
+    deps: ["jit_tensor_t", "jit_format_double", "jit_host_output"],
+  },
+  {
+    name: "jit_disp_text",
+    file: "disp_text.h",
+    deps: ["jit_text_view_t", "jit_host_output"],
+  },
+  {
+    name: "jit_error_fmt",
+    file: "error_fmt.h",
+    deps: ["jit_format_engine", "jit_raise"],
+  },
+  {
+    name: "jit_format_complex",
+    file: "format_complex.h",
+    deps: ["jit_format_double"],
+  },
+  { name: "jit_format_double", file: "format_double.h", deps: [] },
+  {
+    name: "jit_format_engine",
+    file: "format_engine.h",
+    deps: ["jit_text_view_t", "jit_tensor_t", "jit_raise"],
+  },
+  {
+    name: "jit_fprintf",
+    file: "fprintf.h",
+    deps: ["jit_format_engine", "jit_host_output"],
+  },
+  { name: "jit_host_output", file: "host_output.h", deps: [] },
+  {
+    name: "jit_sprintf_str",
+    file: "sprintf.h",
+    deps: ["jit_format_engine", "jit_string_t", "jit_char_tensor_t"],
+  },
+  {
+    name: "jit_warning_fmt",
+    file: "warning_fmt.h",
+    deps: ["jit_format_engine"],
+  },
+  {
+    name: "jit_plot_dispatch",
+    file: "plot_dispatch.h",
+    deps: ["jit_format_engine", "jit_host_output"],
+  },
+  { name: "jit_cdiv", file: "cdiv.h", deps: ["jit_cscalar"] },
+  { name: "jit_cscalar", file: "cscalar.h", deps: [] },
+  { name: "jit_deep_clone", file: "deep_clone.h", deps: [] },
+  { name: "jit_isequal", file: "isequal.h", deps: ["jit_tensor_t"] },
+  { name: "jit_length", file: "length.h", deps: ["jit_tensor_t"] },
+  { name: "jit_numel", file: "numel.h", deps: ["jit_tensor_t"] },
+  { name: "jit_raise", file: "raise.h", deps: [] },
+  { name: "jit_tic_toc", file: "tictoc.h", deps: [] },
+  { name: "jit_alloc", file: "alloc.h", deps: [] },
+  {
+    name: "jit_grow_bail",
+    file: "grow_bail.h",
+    deps: ["jit_tensor_t", "jit_oob_abort"],
+  },
+  { name: "jit_oob_abort", file: "oob.h", deps: ["jit_raise", "jit_tensor_t"] },
+  { name: "jit_tensor_t", file: "tensor.h", deps: [] },
+  {
+    name: "jit_tensor_alloc",
+    file: "tensor_alloc.h",
+    deps: ["jit_tensor_t", "jit_alloc"],
+  },
+  {
+    name: "jit_tensor_alloc_complex",
+    file: "tensor_alloc_complex.h",
+    deps: ["jit_tensor_t", "jit_alloc"],
+  },
+  {
+    name: "jit_tensor_alloc_nd",
+    file: "tensor_alloc_nd.h",
+    deps: ["jit_tensor_t", "jit_alloc"],
+  },
+  {
+    name: "jit_tensor_alloc_nd_complex",
+    file: "tensor_alloc_nd_complex.h",
+    deps: ["jit_tensor_t", "jit_alloc"],
+  },
+  {
+    name: "jit_tensor_assign",
+    file: "tensor_assign.h",
+    deps: ["jit_tensor_t"],
+  },
+  {
+    name: "jit_tensor_copy",
+    file: "tensor_copy.h",
+    deps: ["jit_tensor_t", "jit_alloc", "jit_tensor_empty"],
+  },
+  {
+    name: "jit_tensor_copy_complex",
+    file: "tensor_copy_complex.h",
+    deps: ["jit_tensor_t", "jit_alloc", "jit_tensor_empty"],
+  },
+  { name: "jit_tensor_empty", file: "tensor_empty.h", deps: ["jit_tensor_t"] },
+  { name: "jit_tensor_free", file: "tensor_free.h", deps: ["jit_tensor_t"] },
+  {
+    name: "jit_tensor_from_matrix",
+    file: "tensor_from_matrix.h",
+    deps: ["jit_tensor_alloc"],
+  },
+  {
+    name: "jit_tensor_from_matrix_complex",
+    file: "tensor_from_matrix_complex.h",
+    deps: ["jit_tensor_alloc_complex"],
+  },
+  {
+    name: "jit_tensor_from_row",
+    file: "tensor_from_row.h",
+    deps: ["jit_tensor_alloc"],
+  },
+  {
+    name: "jit_tensor_from_row_complex",
+    file: "tensor_from_row_complex.h",
+    deps: ["jit_tensor_alloc_complex"],
+  },
+  {
+    name: "jit_tensor_besselh",
+    file: "tensor_besselh.h",
+    deps: ["jit_tensor_t", "jit_alloc"],
+  },
+  {
+    name: "jit_tensor_cat",
+    file: "tensor_cat.h",
+    deps: [
+      "jit_tensor_t",
+      "jit_tensor_alloc_nd",
+      "jit_tensor_alloc_nd_complex",
+      "jit_raise",
+    ],
+  },
+  {
+    name: "jit_tensor_cumulative",
+    file: "tensor_cumulative.h",
+    deps: [
+      "jit_tensor_t",
+      "jit_alloc",
+      "jit_tensor_alloc_nd",
+      "jit_tensor_alloc_nd_complex",
+      "jit_raise",
+    ],
+  },
+  {
+    name: "jit_tensor_diag",
+    file: "tensor_diag.h",
+    deps: ["jit_tensor_t", "jit_tensor_alloc", "jit_tensor_alloc_nd_complex"],
+  },
+  {
+    name: "jit_tensor_diff",
+    file: "tensor_diff.h",
+    deps: ["jit_tensor_t", "jit_alloc", "jit_tensor_alloc_nd"],
+  },
+  {
+    name: "jit_dot_real",
+    file: "tensor_dot.h",
+    deps: [
+      "jit_tensor_t",
+      "jit_alloc",
+      "jit_cscalar",
+      "jit_tensor_alloc_nd_complex",
+      "jit_raise",
+      "jit_tensor_alloc_nd",
+    ],
+  },
+  {
+    name: "jit_tensor_elemwise_complex",
+    file: "tensor_elemwise_complex.h",
+    deps: [
+      "jit_tensor_t",
+      "jit_alloc",
+      "jit_tensor_alloc_nd_complex",
+      "jit_cscalar",
+      "jit_cdiv",
+    ],
+  },
+  {
+    name: "jit_tensor_elemwise_real",
+    file: "tensor_elemwise_real.h",
+    deps: ["jit_tensor_t", "jit_alloc", "jit_raise", "jit_tensor_alloc_nd"],
+  },
+  {
+    name: "jit_tensor_elemwise_real_fn",
+    file: "tensor_elemwise_real_fn.h",
+    deps: ["jit_tensor_t", "jit_alloc", "jit_tensor_alloc_nd"],
+  },
+  { name: "jit_tensor_eye", file: "tensor_eye.h", deps: ["jit_tensor_alloc"] },
+  {
+    name: "jit_tensor_fill_nd",
+    file: "tensor_fill_nd.h",
+    deps: ["jit_tensor_alloc_nd", "jit_tensor_alloc_nd_complex"],
+  },
+  {
+    name: "jit_tensor_fill_square",
+    file: "tensor_fill_square.h",
+    deps: ["jit_tensor_fill_nd"],
+  },
+  {
+    name: "jit_tensor_flip",
+    file: "tensor_flip.h",
+    deps: [
+      "jit_tensor_t",
+      "jit_alloc",
+      "jit_tensor_alloc_nd",
+      "jit_tensor_alloc_nd_complex",
+    ],
+  },
+  {
+    name: "jit_tensor_imag_all_zero",
+    file: "tensor_imag_all_zero.h",
+    deps: ["jit_tensor_t"],
+  },
+  {
+    name: "jit_tensor_linspace",
+    file: "tensor_linspace.h",
+    deps: ["jit_tensor_t", "jit_tensor_alloc"],
+  },
+  {
+    name: "jit_logical_mask_indices",
+    file: "tensor_logical_mask.h",
+    deps: ["jit_tensor_t", "jit_oob_abort"],
+  },
+  {
+    name: "jit_tensor_logical_real",
+    file: "tensor_logical_real.h",
+    deps: ["jit_tensor_t", "jit_alloc", "jit_tensor_alloc_nd"],
+  },
+  {
+    name: "jit_tensor_logspace",
+    file: "tensor_logspace.h",
+    deps: ["jit_tensor_t", "jit_tensor_alloc"],
+  },
+  {
+    name: "jit_meshgrid",
+    file: "tensor_meshgrid.h",
+    deps: ["jit_tensor_t", "jit_tensor_alloc", "jit_tensor_assign"],
+  },
+  {
+    name: "jit_tensor_mtimes_complex",
+    file: "tensor_mtimes_complex.h",
+    deps: [
+      "jit_tensor_t",
+      "jit_alloc",
+      "jit_raise",
+      "jit_tensor_alloc_complex",
+    ],
+  },
+  {
+    name: "jit_tensor_mtimes_real",
+    file: "tensor_mtimes_real.h",
+    deps: ["jit_tensor_t", "jit_alloc", "jit_tensor_alloc", "jit_raise"],
+  },
+  { name: "jit_tensor_norm", file: "tensor_norm.h", deps: ["jit_tensor_t"] },
+  {
+    name: "jit_tensor_ones_nd",
+    file: "tensor_ones_nd.h",
+    deps: ["jit_tensor_alloc_nd"],
+  },
+  {
+    name: "jit_tensor_ones_square",
+    file: "tensor_ones_square.h",
+    deps: ["jit_tensor_ones_nd"],
+  },
+  {
+    name: "jit_tensor_predicate",
+    file: "tensor_predicate.h",
+    deps: ["jit_tensor_t", "jit_alloc"],
+  },
+  {
+    name: "jit_tensor_reduce_complex",
+    file: "tensor_reduce_complex.h",
+    deps: [
+      "jit_tensor_t",
+      "jit_alloc",
+      "jit_tensor_alloc_nd",
+      "jit_tensor_alloc_nd_complex",
+      "jit_cscalar",
+      "jit_cdiv",
+      "jit_raise",
+    ],
+  },
+  {
+    name: "jit_tensor_reduce_real",
+    file: "tensor_reduce_real.h",
+    deps: ["jit_tensor_t", "jit_alloc", "jit_tensor_alloc_nd", "jit_raise"],
+  },
+  {
+    name: "jit_tensor_repmat",
+    file: "tensor_repmat.h",
+    deps: [
+      "jit_tensor_t",
+      "jit_tensor_alloc_nd",
+      "jit_tensor_alloc_nd_complex",
+    ],
+  },
+  {
+    name: "jit_reshape_nd",
+    file: "tensor_reshape_nd.h",
+    deps: ["jit_tensor_t", "jit_tensor_alloc_nd"],
+  },
+  {
+    name: "jit_reshape_nd_complex",
+    file: "tensor_reshape_nd_complex.h",
+    deps: ["jit_tensor_t", "jit_tensor_alloc_nd_complex"],
+  },
+  {
+    name: "jit_tensor_size_row",
+    file: "tensor_size.h",
+    deps: ["jit_tensor_t", "jit_alloc", "jit_tensor_alloc"],
+  },
+  {
+    name: "jit_sort_real",
+    file: "tensor_sort_real.h",
+    deps: [
+      "jit_tensor_t",
+      "jit_alloc",
+      "jit_tensor_assign",
+      "jit_tensor_alloc_nd",
+      "jit_tensor_alloc_nd_complex",
+    ],
+  },
+  {
+    name: "jit_tensor_transpose",
+    file: "tensor_transpose.h",
+    deps: ["jit_tensor_t", "jit_alloc", "jit_tensor_alloc"],
+  },
+  {
+    name: "jit_tensor_transpose_complex",
+    file: "tensor_transpose_complex.h",
+    deps: [
+      "jit_tensor_t",
+      "jit_tensor_alloc_nd_complex",
+      "jit_tensor_alloc_complex",
+    ],
+  },
+  {
+    name: "jit_tensor_triangular",
+    file: "tensor_triangular.h",
+    deps: ["jit_tensor_t", "jit_tensor_alloc", "jit_tensor_alloc_nd_complex"],
+  },
+  {
+    name: "jit_tensor_unary_complex_math",
+    file: "tensor_unary_complex_math.h",
+    deps: [
+      "jit_tensor_t",
+      "jit_alloc",
+      "jit_tensor_alloc_nd",
+      "jit_tensor_alloc_nd_complex",
+      "jit_cscalar",
+    ],
+  },
+  {
+    name: "jit_tensor_unary_real_math",
+    file: "tensor_unary_real_math.h",
+    deps: ["jit_tensor_t", "jit_alloc", "jit_raise", "jit_tensor_alloc_nd"],
+  },
+  {
+    name: "jit_uniquetol_real",
+    file: "tensor_uniquetol.h",
+    deps: ["jit_tensor_t", "jit_alloc", "jit_tensor_alloc_nd"],
+  },
+  {
+    name: "jit_tensor_var",
+    file: "tensor_var.h",
+    deps: ["jit_tensor_t", "jit_alloc", "jit_tensor_alloc_nd", "jit_raise"],
+  },
+  {
+    name: "jit_tensor_zeros_nd",
+    file: "tensor_zeros_nd.h",
+    deps: ["jit_tensor_alloc_nd"],
+  },
+  {
+    name: "jit_tensor_zeros_square",
+    file: "tensor_zeros_square.h",
+    deps: ["jit_tensor_zeros_nd"],
+  },
+  { name: "jit_char_tensor_t", file: "char_tensor.h", deps: [] },
+  {
+    name: "jit_char_tensor_assign",
+    file: "char_tensor_assign.h",
+    deps: ["jit_char_tensor_t", "jit_char_tensor_free"],
+  },
+  {
+    name: "jit_char_tensor_copy",
+    file: "char_tensor_copy.h",
+    deps: ["jit_char_tensor_t"],
+  },
+  {
+    name: "jit_char_tensor_empty",
+    file: "char_tensor_empty.h",
+    deps: ["jit_char_tensor_t"],
+  },
+  {
+    name: "jit_char_tensor_free",
+    file: "char_tensor_free.h",
+    deps: ["jit_char_tensor_t"],
+  },
+  {
+    name: "jit_char_tensor_from_literal",
+    file: "char_tensor_from_literal.h",
+    deps: ["jit_char_tensor_t"],
+  },
+  { name: "jit_strcmp", file: "strcmp.h", deps: ["jit_text_view_t"] },
+  { name: "jit_string_t", file: "string.h", deps: [] },
+  {
+    name: "jit_string_assign",
+    file: "string_assign.h",
+    deps: ["jit_string_t", "jit_string_free"],
+  },
+  { name: "jit_string_copy", file: "string_copy.h", deps: ["jit_string_t"] },
+  { name: "jit_string_empty", file: "string_empty.h", deps: ["jit_string_t"] },
+  { name: "jit_string_free", file: "string_free.h", deps: ["jit_string_t"] },
+  {
+    name: "jit_string_from_literal",
+    file: "string_from_literal.h",
+    deps: ["jit_string_t"],
+  },
+  {
+    name: "jit_text_view_t",
+    file: "text_view.h",
+    deps: ["jit_string_t", "jit_char_tensor_t"],
+  },
+];
+
+/** Extra activation names (header `aliases=`) → snippet name. */
+export const SNIPPET_ALIASES: Record<string, string> = {
+  jit_cell_empty: "jit_cell_make",
+  jit_format_cell: "jit_cell_make",
+  jit_sprintf_char: "jit_sprintf_str",
+  jit_warning_fmt_id: "jit_warning_fmt",
+  jit_strcmpi: "jit_strcmp",
 };

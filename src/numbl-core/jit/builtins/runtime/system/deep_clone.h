@@ -1,3 +1,4 @@
+/* @snippet name=jit_deep_clone */
 /* JS-only snippet (paired with `deep_clone.js`).
  *
  * The C path's owned-value protocol (per-typedef `_copy` helpers

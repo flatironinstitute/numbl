@@ -1,3 +1,4 @@
+/* @snippet name=jit_string_t */
 /* JIT string runtime: the C representation for every numbl scalar
  * string (double-quoted) value the JIT emits.
  *

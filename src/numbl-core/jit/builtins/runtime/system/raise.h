@@ -1,3 +1,4 @@
+/* @snippet name=jit_raise */
 /* JIT runtime: the raise channel, statement locations, and the tracked
  * allocator. Always emitted first (emit.ts), so every later snippet and the
  * user code see the allocator macros below.

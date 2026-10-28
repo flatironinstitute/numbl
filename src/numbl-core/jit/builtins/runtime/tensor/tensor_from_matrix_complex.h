@@ -1,3 +1,4 @@
+/* @snippet name=jit_tensor_from_matrix_complex deps=jit_tensor_alloc_complex */
 /* JIT runtime helper: build a rows×cols complex tensor from two
  * parallel column-major `double[]` sources (`re` and `im`). See
  * `tensor_from_row_complex.h` for why we split rather than passing

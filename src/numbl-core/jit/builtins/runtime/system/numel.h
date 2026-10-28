@@ -1,3 +1,4 @@
+/* @snippet name=jit_numel deps=jit_tensor_t */
 /* mtoc runtime helper: MATLAB's `numel(t)` on a multi-element tensor.
  *
  * Returns the product of the axis sizes as a double. Scalar args don't

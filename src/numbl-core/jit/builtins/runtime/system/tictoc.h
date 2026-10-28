@@ -1,3 +1,4 @@
+/* @snippet name=jit_tic_toc */
 /* JIT runtime helper: tic / toc wall-clock timing.
  *
  * State is a single static double holding the most recent tic time

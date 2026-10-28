@@ -1,3 +1,4 @@
+/* @snippet name=jit_tensor_ones_nd deps=jit_tensor_alloc_nd */
 /* JIT runtime helper: build a real N-D tensor filled with ones.
  *
  * Allocates via `jit_tensor_alloc_nd`, then fills the `real` buffer

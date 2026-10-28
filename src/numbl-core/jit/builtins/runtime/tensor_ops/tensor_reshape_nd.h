@@ -1,3 +1,4 @@
+/* @snippet name=jit_reshape_nd deps=jit_tensor_t,jit_tensor_alloc_nd */
 /* JIT runtime helper: reshape a real tensor to an N-D shape.
  *
  * Receives the input tensor by value (`jit_tensor_t`) plus a

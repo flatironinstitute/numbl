@@ -1,6 +1,6 @@
 import { defineUnaryRealMath } from "./_unary_real.js";
 import { signIsNonneg } from "../../../lowering/types.js";
-import { cLog } from "./_complex_fold.js";
+import { jit_clog } from "../../runtime/snippets.gen.js";
 
 /** Natural log. Provably non-negative real inputs stay on the real
  *  path (`log(0) = -Inf` is still real-typed in MATLAB); anything that
@@ -13,7 +13,7 @@ export const log = defineUnaryRealMath({
   realDomainOk: t => signIsNonneg(t.sign),
   complex: {
     cFnComplex: "jit_clog",
-    jsFnComplex: cLog,
+    jsFnComplex: jit_clog,
     liftOnDomainMiss: true,
   },
 });

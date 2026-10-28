@@ -1,3 +1,4 @@
+/* @snippet name=jit_tensor_copy deps=jit_tensor_t,jit_alloc,jit_tensor_empty */
 /* mtoc runtime helper: deep-copy a real tensor.
  *
  * The returned tensor owns a fresh `real` buffer (memcpy'd from the

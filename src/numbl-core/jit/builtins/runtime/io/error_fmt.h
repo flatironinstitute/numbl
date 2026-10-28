@@ -1,3 +1,4 @@
+/* @snippet name=jit_error_fmt deps=jit_format_engine */
 /* JIT runtime helper: `error(...)` raises a MATLAB error through the
  * raise channel (`raise.h`), which the host turns into numbl's
  * RuntimeError with the same message and identifier.

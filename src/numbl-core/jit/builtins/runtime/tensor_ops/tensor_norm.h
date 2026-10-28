@@ -1,3 +1,4 @@
+/* @snippet name=jit_tensor_norm deps=jit_tensor_t */
 /* JIT runtime helpers: vector norms.
  *
  * `jit_norm2_real(a)` / `jit_norm2_complex(a)` — the 2-norm.

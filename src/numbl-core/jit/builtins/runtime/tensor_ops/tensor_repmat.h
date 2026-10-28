@@ -1,3 +1,4 @@
+/* @snippet name=jit_tensor_repmat deps=jit_tensor_t,jit_tensor_alloc_nd,jit_tensor_alloc_nd_complex */
 /* JIT runtime helper: `repmat(A, reps)` — tile a tensor by
  * replicating it along each axis.
  *

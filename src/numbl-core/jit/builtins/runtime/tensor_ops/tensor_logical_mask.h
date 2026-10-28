@@ -1,3 +1,4 @@
+/* @snippet name=jit_logical_mask_indices deps=jit_tensor_t,jit_oob_abort */
 /* JIT runtime helper: logical-mask indexing support.
  *
  * `jit_logical_mask_indices` scans `mask` column-major and fills

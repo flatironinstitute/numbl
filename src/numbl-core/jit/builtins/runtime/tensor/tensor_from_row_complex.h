@@ -1,3 +1,4 @@
+/* @snippet name=jit_tensor_from_row_complex deps=jit_tensor_alloc_complex */
 /* JIT runtime helper: build a 1×N complex tensor from two parallel
  * `double[]` sources (`re` and `im`, each length `n`). The caller
  * (the JIT's emit layer) splits each source-level cell into its real

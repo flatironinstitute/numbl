@@ -235,7 +235,11 @@ function buildSignature(spec: IRFunc): SpecCSignature {
 function assertNoNonVoidBareExprStmts(spec: IRFunc): void {
   const walk = (stmts: IRStmt[]): void => {
     for (const s of stmts) {
-      if (s.kind === "ExprStmt" && s.expr.ty.kind !== "Void") {
+      if (
+        s.kind === "ExprStmt" &&
+        s.expr.ty.kind !== "Void" &&
+        s.discard !== true
+      ) {
         throw new UnsupportedConstruct(
           `bare expression with a non-void value is not supported at the ` +
             `JIT boundary (numbl's 'ans' binding can't be modeled here)`,

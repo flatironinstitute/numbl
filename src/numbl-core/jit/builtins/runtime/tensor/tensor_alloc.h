@@ -1,3 +1,4 @@
+/* @snippet name=jit_tensor_alloc deps=jit_tensor_t,jit_alloc */
 /* mtoc runtime helper: allocate an uninitialized real tensor of the
  * given shape. Sets `imag = NULL` (the static-real marker). The
  * returned tensor owns its `real` buffer; caller must release via

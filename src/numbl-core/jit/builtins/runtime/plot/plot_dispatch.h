@@ -1,3 +1,4 @@
+/* @snippet name=jit_plot_dispatch deps=jit_format_engine,jit_host_output */
 /* JIT runtime: plot dispatch — single helper for every plotting
  * builtin (`plot`, `surf`, `imagesc`, `bar`, `figure`, `hold`, …).
  *

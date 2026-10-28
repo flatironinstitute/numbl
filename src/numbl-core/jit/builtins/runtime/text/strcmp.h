@@ -1,3 +1,4 @@
+/* @snippet name=jit_strcmp deps=jit_text_view_t aliases=jit_strcmpi */
 /* JIT runtime helpers: byte-equality / ASCII-case-fold-equality on
  * a pair of text views. Used by the `strcmp` and `strcmpi` builtins.
  *

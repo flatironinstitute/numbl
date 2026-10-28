@@ -1,3 +1,4 @@
+/* @snippet name=jit_disp_tensor_complex deps=jit_tensor_t,jit_format_complex,jit_cscalar,jit_host_output */
 /* JIT runtime helper: disp(t) for a multi-element complex tensor.
  *
  * Mirrors `disp_tensor.h`'s 2-D-slice / page-by-page rendering, but

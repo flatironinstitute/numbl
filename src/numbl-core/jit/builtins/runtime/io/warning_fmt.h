@@ -1,3 +1,4 @@
+/* @snippet name=jit_warning_fmt deps=jit_format_engine aliases=jit_warning_fmt_id */
 /* JIT runtime helper: warning — write a `Warning: <formatted text>\n`
  * line to stdout. Matches numbl's `warning(...)` shape
  * (src/numbl-core/runtime/specialBuiltins.ts — `rt.output("Warning: " + ... + "\n")`).

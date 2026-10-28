@@ -1,3 +1,4 @@
+/* @snippet name=jit_tensor_assign deps=jit_tensor_t */
 /* mtoc runtime helper: consume-and-replace tensor assignment.
  *
  * Frees `*lhs`'s current backing buffers and moves `rhs`'s buffers

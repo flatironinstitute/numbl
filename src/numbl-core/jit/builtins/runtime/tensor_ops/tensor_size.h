@@ -1,3 +1,4 @@
+/* @snippet name=jit_tensor_size_row deps=jit_tensor_t,jit_alloc */
 /* JIT runtime helper: `size(t)` — returns a freshly-owned 1×ndim
  * row tensor whose elements are the input's dim sizes as doubles.
  * MATLAB / numbl semantics: scalars and vectors return at least a

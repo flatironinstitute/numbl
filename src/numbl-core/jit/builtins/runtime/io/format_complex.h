@@ -1,3 +1,4 @@
+/* @snippet name=jit_format_complex deps=jit_format_double */
 /* JIT runtime helper: format a `double _Complex` the way numbl's
  * `formatComplex` does, into a caller-provided buffer.
  *

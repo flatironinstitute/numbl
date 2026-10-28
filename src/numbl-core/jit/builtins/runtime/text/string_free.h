@@ -1,3 +1,4 @@
+/* @snippet name=jit_string_free deps=jit_string_t */
 /* JIT runtime helper: release a string handle's backing buffer if
  * owned, then reset it to the empty state.
  *

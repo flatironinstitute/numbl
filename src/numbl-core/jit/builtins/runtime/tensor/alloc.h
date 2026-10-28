@@ -1,3 +1,4 @@
+/* @snippet name=jit_alloc */
 /* JIT runtime helper: malloc wrapper that bails on allocation
  * failure with a clear diagnostic. Used for every tensor backing
  * buffer (mtoc allocates tensor storage uniformly on the heap so the

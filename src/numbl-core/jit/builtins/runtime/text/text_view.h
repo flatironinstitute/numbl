@@ -1,3 +1,4 @@
+/* @snippet name=jit_text_view_t deps=jit_string_t,jit_char_tensor_t */
 /* JIT text view: a non-owning (data, len) pair used as the common
  * argument type for runtime helpers that read text byte-for-byte
  * (`disp`, future `error`/`strcmp`/`fprintf`).

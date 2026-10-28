@@ -1,3 +1,4 @@
+/* @snippet name=jit_tensor_fill_nd deps=jit_tensor_alloc_nd,jit_tensor_alloc_nd_complex */
 /* JIT runtime helper: build an N-D tensor filled with `v`. Real
  * variant allocates a real tensor; complex variant takes `(re, im)`
  * and fills both lanes.

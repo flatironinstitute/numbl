@@ -1,10 +1,10 @@
 import { defineUnaryRealMath } from "./_unary_real.js";
-import { cAtan } from "./_complex_fold.js";
+import { jit_catan } from "../../runtime/snippets.gen.js";
 
 export const atan = defineUnaryRealMath({
   name: "atan",
   cFnReal: "atan",
   jsFn: Math.atan,
   signRule: t => t.sign,
-  complex: { cFnComplex: "jit_catan", jsFnComplex: cAtan },
+  complex: { cFnComplex: "jit_catan", jsFnComplex: jit_catan },
 });

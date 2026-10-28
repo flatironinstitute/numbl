@@ -1,3 +1,4 @@
+/* @snippet name=jit_isequal deps=jit_tensor_t */
 /* JIT runtime helpers for `isequal` over real numeric values.
  *
  * `emitC` rejects complex tensors, char / string, struct and cell

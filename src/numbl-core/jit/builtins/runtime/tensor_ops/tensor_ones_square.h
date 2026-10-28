@@ -1,3 +1,4 @@
+/* @snippet name=jit_tensor_ones_square deps=jit_tensor_ones_nd */
 /* JIT runtime helper: build an n×n real tensor filled with ones.
  *
  * Single-eval companion to `jit_tensor_ones_nd` for the MATLAB

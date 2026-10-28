@@ -1,3 +1,4 @@
+/* @snippet name=jit_string_from_literal deps=jit_string_t */
 /* JIT runtime helper: build a string handle pointing at a C string
  * literal in `.rodata`.
  *

@@ -1,3 +1,4 @@
+/* @snippet name=jit_tensor_reduce_complex deps=jit_tensor_t,jit_alloc,jit_tensor_alloc_nd,jit_tensor_alloc_nd_complex,jit_cscalar,jit_cdiv */
 /* JIT runtime helpers: complex-tensor reductions.
  *
  * Sibling of `tensor_reduce_real.h`. Same `_all` / `_dim` shape per

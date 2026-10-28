@@ -1,3 +1,4 @@
+/* @snippet name=jit_tensor_t */
 /* mtoc tensor runtime: the single C representation for every
  * multi-element tensor mtoc emits.
  *

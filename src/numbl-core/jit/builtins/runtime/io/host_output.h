@@ -1,3 +1,4 @@
+/* @snippet name=jit_host_output */
 /* JIT host output hook.
  *
  * When numbl runs an emitted spec as a JIT'd `.so`, it binds a writer

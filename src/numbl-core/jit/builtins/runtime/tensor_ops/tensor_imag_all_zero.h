@@ -1,3 +1,4 @@
+/* @snippet name=jit_tensor_imag_all_zero deps=jit_tensor_t */
 /* JIT runtime helper: true (1.0) when a tensor carries no imaginary
  * content — NULL imag lane, or every imag element exactly zero. `isreal`
  * uses this for complex-typed tensors the JIT could not prove real at

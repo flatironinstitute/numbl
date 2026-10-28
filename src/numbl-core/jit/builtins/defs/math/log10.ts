@@ -1,6 +1,6 @@
 import { defineUnaryRealMath } from "./_unary_real.js";
 import { signIsNonneg } from "../../../lowering/types.js";
-import { cLog10 } from "./_complex_fold.js";
+import { jit_clog10 } from "../../runtime/snippets.gen.js";
 
 /** Base-10 log. Same non-negative real-domain rule as `log`; negative
  *  inputs lift to the complex path. */
@@ -12,7 +12,7 @@ export const log10 = defineUnaryRealMath({
   realDomainOk: t => signIsNonneg(t.sign),
   complex: {
     cFnComplex: "jit_clog10",
-    jsFnComplex: cLog10,
+    jsFnComplex: jit_clog10,
     liftOnDomainMiss: true,
   },
 });

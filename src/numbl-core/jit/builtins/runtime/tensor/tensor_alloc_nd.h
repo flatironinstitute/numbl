@@ -1,3 +1,4 @@
+/* @snippet name=jit_tensor_alloc_nd deps=jit_tensor_t,jit_alloc */
 /* JIT runtime helper: allocate an uninitialized real tensor with
  * an arbitrary N-D shape.
  *

@@ -41,51 +41,14 @@ import {
   exactComplex,
   exactComplexArray,
 } from "../_shared.js";
-/** Builtin names with JS tensor kernels (`jit_tensor_<name>` in
- *  `tensor_unary_real_math.js`, `jit_tensor_<name>_complex` in
- *  `tensor_unary_complex_math.js`). */
-const JS_TENSOR_UNARY = new Set([
-  "cos",
-  "sin",
-  "tan",
-  "atan",
-  "sinh",
-  "cosh",
-  "tanh",
-  "asinh",
-  "exp",
-  "log",
-  "log2",
-  "log10",
-  "sqrt",
-  "realsqrt",
-  "abs",
-  "floor",
-  "ceil",
-  "fix",
-  "round",
-  "sign",
-]);
+import * as jsSnippets from "../../runtime/snippets.gen.js";
 
-const JS_TENSOR_UNARY_COMPLEX = new Set([
-  "cos",
-  "sin",
-  "tan",
-  "atan",
-  "sinh",
-  "cosh",
-  "tanh",
-  "exp",
-  "log",
-  "log2",
-  "log10",
-  "sqrt",
-  "floor",
-  "ceil",
-  "fix",
-  "round",
-  "sign",
-]);
+/** True when the JS runtime defines the tensor kernel `fn`
+ *  (`jit_tensor_<name>` in `tensor_unary_real_math.js`,
+ *  `jit_tensor_<name>_complex` in `tensor_unary_complex_math.js`). */
+function hasJsKernel(fn: string): boolean {
+  return typeof (jsSnippets as Record<string, unknown>)[fn] === "function";
+}
 
 export interface UnaryRealMathOpts {
   /** Source-level builtin name (also the runtime helper suffix). */
@@ -326,7 +289,7 @@ export function defineUnaryRealMath(opts: UnaryRealMathOpts): Builtin {
       const lifting = liftRealToComplex(ty);
       if ((isNumeric(ty) && ty.isComplex) || lifting) {
         if (isMultiElement(ty)) {
-          if (!JS_TENSOR_UNARY_COMPLEX.has(name)) {
+          if (!hasJsKernel(`jit_tensor_${name}_complex`)) {
             throw new UnsupportedConstruct(
               `'${name}' complex-tensor emitJs has no JS kernel registered`
             );
@@ -342,7 +305,7 @@ export function defineUnaryRealMath(opts: UnaryRealMathOpts): Builtin {
         return `${complex!.cFnComplex}(${arg})`;
       }
       if (isMultiElement(ty)) {
-        if (!JS_TENSOR_UNARY.has(name)) {
+        if (!hasJsKernel(`jit_tensor_${name}`)) {
           throw new UnsupportedConstruct(
             `'${name}' tensor emitJs has no JS kernel registered`
           );

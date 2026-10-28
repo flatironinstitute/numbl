@@ -1,3 +1,4 @@
+/* @snippet name=jit_sprintf_str deps=jit_format_engine,jit_string_t,jit_char_tensor_t aliases=jit_sprintf_char */
 /* JIT runtime helper: sprintf — return formatted text as an owned
  * string or char-array, matching numbl's `sprintf` shape rule:
  *   - char-typed format ('...')  → returns `jit_char_tensor_t`

@@ -1,3 +1,4 @@
+/* @snippet name=jit_char_tensor_empty deps=jit_char_tensor_t */
 /* JIT runtime helper: zero-initialized empty char tensor handle.
  *
  * Used at every predeclaration site so a char tensor variable starts

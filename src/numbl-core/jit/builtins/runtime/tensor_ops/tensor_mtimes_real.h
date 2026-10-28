@@ -1,3 +1,4 @@
+/* @snippet name=jit_tensor_mtimes_real deps=jit_tensor_t,jit_alloc,jit_tensor_alloc */
 /* JIT runtime helper: real 2-D matrix multiplication `A * B`.
  *
  * A is m×k, B is k×n; result is m×n, freshly owned. Column-major in,

@@ -1,3 +1,4 @@
+/* @snippet name=jit_tensor_empty deps=jit_tensor_t */
 /* mtoc runtime helper: empty/zero-initialized tensor.
  *
  * Returns the canonical "no buffers, zero shape" placeholder used to

@@ -1,5 +1,5 @@
 import { defineUnaryRealMath, roundingSignRule } from "./_unary_real.js";
-import { cFloor } from "./_complex_fold.js";
+import { jit_cfloor } from "../../runtime/snippets.gen.js";
 
 /** `floor(x)` rounds toward -Inf. Complex inputs round each component
  *  independently (MATLAB convention). Only `positive` inputs may land
@@ -9,5 +9,5 @@ export const floor = defineUnaryRealMath({
   cFnReal: "floor",
   jsFn: Math.floor,
   signRule: roundingSignRule(true, false),
-  complex: { cFnComplex: "jit_cfloor", jsFnComplex: cFloor },
+  complex: { cFnComplex: "jit_cfloor", jsFnComplex: jit_cfloor },
 });

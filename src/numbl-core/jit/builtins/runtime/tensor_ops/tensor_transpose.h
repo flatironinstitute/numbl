@@ -1,3 +1,4 @@
+/* @snippet name=jit_tensor_transpose deps=jit_tensor_t,jit_alloc,jit_tensor_alloc */
 /* JIT runtime helper: real-tensor non-conjugate transpose for 2-D
  * inputs. Returns a freshly-owned tensor with `dims` swapped. The
  * 2-D restriction is enforced at lowering; by the time this helper

@@ -1171,7 +1171,7 @@ export class Lowerer {
     const folded = condToBool(cond);
     const condPrefix: IRStmt[] = condIsPure(cond)
       ? []
-      : [{ kind: "ExprStmt", expr: cond, span: s.cond.span }];
+      : [{ kind: "ExprStmt", expr: cond, span: s.cond.span, discard: true }];
     if (folded === true) return [...condPrefix, ...this.lowerStmts(s.thenBody)];
     if (folded === false) {
       if (s.elseifBlocks.length === 0) {

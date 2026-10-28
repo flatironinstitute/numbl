@@ -390,6 +390,10 @@ export interface ExprStmt {
   kind: "ExprStmt";
   expr: IRExpr;
   span: Span;
+  /** Evaluated for its side effects only and not a source expression
+   *  statement, so it never binds `ans` (e.g. the kept condition of a
+   *  folded `if`). */
+  discard?: true;
 }
 
 export interface Assign {

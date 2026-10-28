@@ -1,3 +1,4 @@
+/* @snippet name=jit_tensor_from_row deps=jit_tensor_alloc */
 /* mtoc runtime helper: build a 1×n real tensor from a flat data
  * pointer. The caller typically passes a C99 compound literal
  * (`(double[]){1.0, 2.0, 3.0}`), which gives the emitted assignment

@@ -1,3 +1,4 @@
+/* @snippet name=jit_tensor_besselh deps=jit_tensor_t,jit_alloc */
 /* JIT runtime helpers: Hankel function of the first kind for
  * integer order, real positive argument.
  *

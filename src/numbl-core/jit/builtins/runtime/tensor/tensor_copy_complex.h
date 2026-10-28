@@ -1,3 +1,4 @@
+/* @snippet name=jit_tensor_copy_complex deps=jit_tensor_t,jit_alloc,jit_tensor_empty */
 /* JIT runtime helper: deep-copy a complex tensor.
  *
  * The returned tensor owns fresh `real` and `imag` buffers (memcpy'd

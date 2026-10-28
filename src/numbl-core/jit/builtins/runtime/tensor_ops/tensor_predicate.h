@@ -1,3 +1,4 @@
+/* @snippet name=jit_tensor_predicate deps=jit_tensor_t,jit_alloc */
 /* JIT runtime helpers: elementwise tensor → logical-tensor
  * predicates (`isnan`, `isinf`, `isfinite`, `logical`). Same
  * allocate-and-fill shape as `tensor_unary_real_math.h`; each element

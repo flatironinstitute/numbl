@@ -1,3 +1,4 @@
+/* @snippet name=jit_uniquetol_real deps=jit_tensor_t,jit_alloc,jit_tensor_alloc_nd */
 /* JIT runtime helper: uniquetol for real-double tensors.
  *
  * Numbl's elementwise `uniquetol(x, tol)` scans column-major and

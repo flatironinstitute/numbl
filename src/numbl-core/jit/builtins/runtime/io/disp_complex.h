@@ -1,3 +1,4 @@
+/* @snippet name=jit_disp_complex deps=jit_format_complex,jit_host_output */
 /* JIT runtime helper: disp(z) for a scalar `double _Complex`.
  *
  * Mirrors numbl's `formatComplex` (via jit_format_complex) so

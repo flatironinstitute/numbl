@@ -1,3 +1,4 @@
+/* @snippet name=jit_cdiv deps=jit_cscalar */
 /* JIT runtime helper: scalar complex division `a / b` matching
  * numbl's signed-Inf-on-zero-divisor behavior.
  *

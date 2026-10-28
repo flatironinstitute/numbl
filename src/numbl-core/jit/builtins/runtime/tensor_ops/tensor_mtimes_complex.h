@@ -1,3 +1,4 @@
+/* @snippet name=jit_tensor_mtimes_complex deps=jit_tensor_t,jit_alloc */
 /* JIT runtime helper: 2-D matrix multiplication producing a complex
  * result.
  *
