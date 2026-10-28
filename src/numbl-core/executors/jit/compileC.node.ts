@@ -15,7 +15,14 @@
 
 import { createHash } from "node:crypto";
 import { execSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import type { NativeBridge } from "../../workspace/types.js";
@@ -79,10 +86,16 @@ export function compileAndLoadC(
   let cacheHit = true;
   if (!existsSync(libPath)) {
     cacheHit = false;
-    writeFileSync(srcPath, source);
+    // Other numbl processes may compile the same unit concurrently and
+    // load `libPath` as soon as it exists, so build under unique names and
+    // rename into place (atomic within the cache directory).
+    const tmp = `${hash}.${process.pid}.${Date.now()}`;
+    const tmpSrc = join(CACHE_DIR, `${tmp}.c`);
+    const tmpLib = join(CACHE_DIR, `${tmp}.so`);
+    writeFileSync(tmpSrc, source);
     try {
       execSync(
-        `${cc} ${flags.join(" ")} -o ${libPath} ${srcPath} ${libs.join(" ")}`,
+        `${cc} ${flags.join(" ")} -o ${tmpLib} ${tmpSrc} ${libs.join(" ")}`,
         { stdio: ["ignore", "ignore", "pipe"] }
       );
     } catch (e) {
@@ -90,8 +103,12 @@ export function compileAndLoadC(
         e && typeof e === "object" && "stderr" in e
           ? String((e as { stderr?: Buffer }).stderr ?? "")
           : "";
+      rmSync(tmpLib, { force: true });
+      renameSync(tmpSrc, srcPath);
       throw new Error(`C-JIT compile failed for ${srcPath}\n${stderr}`);
     }
+    renameSync(tmpSrc, srcPath);
+    renameSync(tmpLib, libPath);
   }
 
   const lib = bridge.load(libPath) as KoffiLib;
