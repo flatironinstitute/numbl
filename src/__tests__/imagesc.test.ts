@@ -73,4 +73,13 @@ describe("imagesc", () => {
       renderedAxes("plot(1:3); hold on; imagesc(magic(3));").yDir
     ).not.toBe("reverse");
   });
+
+  it("is cleared by a new plot with hold off, as in MATLAB", () => {
+    const ax = renderedAxes("imagesc(magic(4)); plot(1:3);");
+    expect(ax.imagescTrace).toBeUndefined();
+    expect(ax.traces.length).toBe(1);
+    const held = renderedAxes("imagesc(magic(4)); hold on; plot(1:3);");
+    expect(held.imagescTrace).toBeDefined();
+    expect(held.traces.length).toBe(1);
+  });
 });

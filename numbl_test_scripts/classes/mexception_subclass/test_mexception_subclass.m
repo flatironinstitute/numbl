@@ -53,4 +53,14 @@ end
 assert(strcmp(class(ME4), 'MyErr_'));
 assert(ME4.Extra == 42);
 
+% methods lists the subclass's own methods and the inherited MException
+% methods, but not the superclass constructor
+m = methods('MyErr_');
+assert(any(strcmp(m, 'MyErr_')));
+assert(any(strcmp(m, 'describe')));
+assert(any(strcmp(m, 'getReport')));
+assert(any(strcmp(m, 'throw')));
+assert(~any(strcmp(m, 'MException')));
+assert(ismethod(ME4, 'rethrow'));
+
 disp('SUCCESS');

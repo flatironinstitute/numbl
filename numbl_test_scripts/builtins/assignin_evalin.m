@@ -1,4 +1,4 @@
-% Test assignin and evalin with workspace and caller scopes
+% Test assignin and evalin with base and caller scopes
 
 x = 10;
 
@@ -17,7 +17,7 @@ try
     test_evalin_error();
     assert(false, 'Should have thrown an error');
 catch e
-    assert(contains(e.message, 'does not exist'));
+    assert(strcmp(e.identifier, 'MATLAB:UndefinedFunction'));
 end
 
 % Test assignin/evalin with caller scope
@@ -41,13 +41,13 @@ assert(w == 888);
 
 % Edge case 1: workspace variable type changes from scalar to vector
 x = 5;
-ws_set_x_vector();  % sets x to [2, 5] via assignin('workspace', ...)
+ws_set_x_vector();  % sets x to [2, 5] via assignin('base', ...)
 result = x + 1;
 assert(isequal(result, [3, 6]));
 
 % Edge case 2: workspace variable type changes from number to string
 x = 10;
-ws_set_x_string();  % sets x to 'hello' via assignin('workspace', ...)
+ws_set_x_string();  % sets x to 'hello' via assignin('base', ...)
 assert(isequal(x, 'hello'));
 
 % Edge case 3: workspace evalin after type change
@@ -78,10 +78,10 @@ assert(result3.value == 42);
 result4 = test_caller_chain();
 assert(isequal(result4, [10, 20, 30]));
 
-% Edge case 8: assignin('workspace', ...) inside a loop
+% Edge case 8: assignin('base', ...) inside a loop
 x = 0;
 for i = 1:3
-    ws_set_x_to(i * 10);  % sets x via assignin('workspace', ...)
+    ws_set_x_to(i * 10);  % sets x via assignin('base', ...)
 end
 assert(x == 30);
 
@@ -100,9 +100,9 @@ assert(x == -1);  % unchanged since condition was false
 caller_create_newvar();
 assert(newvar == 3);
 
-% Edge case 12: variable created by assignin('workspace')
+% Edge case 12: variable created by assignin('base')
 ws_create_newvar2();
-assert(newvar2 == 'created');
+assert(strcmp(newvar2, 'created'));
 
 % Edge case 13: new variable created in the caller by assignin, then used
 result6 = test_caller_create_and_use();
@@ -112,7 +112,7 @@ assert(result6 == 15);
 
 % Workspace: set via assignin, read via evalin
 dyn_ws_setter();
-assert(evalin('workspace', 'dyn_ws_var') == 42);
+assert(evalin('base', 'dyn_ws_var') == 42);
 
 % Caller: set via assignin, read back via evalin
 result7 = test_dyn_caller();
@@ -120,30 +120,62 @@ assert(result7 == 77);
 
 
 % Workspace with default for unset var
-assert(evalin('workspace', 'never_set_var', -1) == -1);
+assert(evalin('base', 'never_set_var', '-1') == -1);
 
 % Caller reads and writes two variables
 result8 = test_two_caller_vars();
 assert(result8 == 30);
+
+% Only 'base' and 'caller' name a workspace
+try
+    evalin('workspace', 'x');
+    assert(false);
+catch e
+    assert(strcmp(e.identifier, 'MATLAB:badopt'));
+    assert(strcmp(e.message, 'Unknown command option.'));
+end
+try
+    assignin('workspace', 'x', 1);
+    assert(false);
+catch e
+    assert(strcmp(e.identifier, 'MATLAB:badopt'));
+end
+
+% The third evalin argument is a catch expression (text), evaluated when
+% the first one errors
+assert(evalin('base', 'x', 'disp(1)') == x);
+assert(evalin('base', 'error(''zz'')', '5 + 1') == 6);
+try
+    evalin('base', 'nonexistent', 99);
+    assert(false);
+catch e
+    assert(strcmp(e.identifier, 'MATLAB:string:MustBeStringScalarOrCharacterVector'));
+end
+try
+    evalin('base', 'nonexistent_q2');
+    assert(false);
+catch e
+    assert(strcmp(e.identifier, 'MATLAB:UndefinedFunction'));
+end
 
 disp('SUCCESS');
 
 % ── Helper functions ──────────────────────────────────────────────────
 
 function val = test_evalin_read()
-    val = evalin('workspace', 'x');
+    val = evalin('base', 'x');
 end
 
 function test_assignin_write()
-    assignin('workspace', 'x', 42);
+    assignin('base', 'x', 42);
 end
 
 function val = test_evalin_default()
-    val = evalin('workspace', 'nonexistent', 99);
+    val = evalin('base', 'nonexistent', '99');
 end
 
 function test_evalin_error()
-    evalin('workspace', 'nonexistent');
+    evalin('base', 'nonexistent');
 end
 
 function test_caller_outer(y)
@@ -180,20 +212,20 @@ function caller_writer_w()
 end
 
 function ws_set_x_vector()
-    assignin('workspace', 'x', [2, 5]);
+    assignin('base', 'x', [2, 5]);
 end
 
 function ws_set_x_string()
-    assignin('workspace', 'x', 'hello');
+    assignin('base', 'x', 'hello');
 end
 
 function ws_set_x_to(val)
-    assignin('workspace', 'x', val);
+    assignin('base', 'x', val);
 end
 
 function ws_set_x_conditional(flag)
     if flag
-        assignin('workspace', 'x', -1);
+        assignin('base', 'x', -1);
     end
 end
 
@@ -239,7 +271,7 @@ function result = test_caller_default_exists()
 end
 
 function val = caller_read_q_with_default()
-    val = evalin('caller', 'q', 999);
+    val = evalin('caller', 'q', '999');
 end
 
 function caller_create_newvar()
@@ -247,7 +279,7 @@ function caller_create_newvar()
 end
 
 function ws_create_newvar2()
-    assignin('workspace', 'newvar2', 'created');
+    assignin('base', 'newvar2', 'created');
 end
 
 function result = test_caller_create_and_use()
@@ -262,7 +294,7 @@ end
 % ── assignin/evalin-only helpers ──────────────────────────────────────────
 
 function dyn_ws_setter()
-    assignin('workspace', 'dyn_ws_var', 42);
+    assignin('base', 'dyn_ws_var', 42);
 end
 
 function result = test_dyn_caller()
@@ -277,7 +309,7 @@ function dyn_caller_setter()
 end
 
 function result = dyn_caller_reader()
-    result = evalin('caller', 'dyn_var', -1);
+    result = evalin('caller', 'dyn_var', '-1');
 end
 
 function result = test_two_caller_vars()

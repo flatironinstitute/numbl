@@ -22,8 +22,13 @@ import type { Interpreter } from "./interpreter.js";
 import { evalExprNargout } from "./evalExpressions.js";
 import { execStmt } from "./execStatements.js";
 import { declaredNargin, declaredNargout } from "./calls.js";
-import { classPublicMethods, classPublicProperties } from "./oop.js";
+import {
+  classPublicMethods,
+  classPublicProperties,
+  classStaticMethods,
+} from "./oop.js";
 import { metaClassFor } from "./metaClass.js";
+import { strToFunc } from "./handles.js";
 
 /** The value(s) of evaluated text: undefined when it ran as statements. */
 type EvalResult = RuntimeValue | RuntimeValue[] | undefined;
@@ -80,8 +85,12 @@ export interface CallerScope {
   /** Public method names of a class (including inherited, static and the
    *  constructor), or undefined if not a known class. */
   classPublicMethods: (className: string) => Set<string> | undefined;
+  /** The static ones among a classdef class's public methods. */
+  classStaticMethods: (className: string) => Set<string>;
   /** The meta.class object describing a class (`?Name`, `metaclass`). */
   metaClass: (className: string) => RuntimeValue;
+  /** A function handle from text (`str2func`). */
+  str2func: (text: string) => RuntimeValue;
 }
 
 const scopes = new WeakMap<Interpreter, CallerScope>();
@@ -139,7 +148,9 @@ export function callerScope(interp: Interpreter): CallerScope {
     },
     classPublicProperties: n => classPublicProperties(interp, n),
     classPublicMethods: n => classPublicMethods(interp, n),
+    classStaticMethods: n => classStaticMethods(interp, n),
     metaClass: n => metaClassFor(interp, n),
+    str2func: text => strToFunc(interp, text),
   };
   scopes.set(interp, scope);
   return scope;

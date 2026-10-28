@@ -7,6 +7,7 @@ import { Parser } from "./Parser.js";
 // Re-export all types
 export * from "./types.js";
 export { SyntaxError } from "./errors.js";
+export { unparseExpr } from "./unparse.js";
 
 /**
  * Parse code with default options.

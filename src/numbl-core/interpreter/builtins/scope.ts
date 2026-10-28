@@ -43,19 +43,21 @@ builtin({
   },
 });
 
-/** The frame named by an evalin/assignin scope argument. `'workspace'` is
- *  accepted as a synonym for `'base'`. At the top level the caller is the
- *  base workspace. */
-function scopeFrame(
-  scope: CallerScope,
-  fn: string,
-  arg: RuntimeValue
-): CallFrame {
-  const name = toString(arg);
+/** The frame named by an evalin/assignin scope argument ('base' or
+ *  'caller'). At the top level the caller is the base workspace. */
+function scopeFrame(scope: CallerScope, arg: RuntimeValue): CallFrame {
+  const name =
+    isRuntimeChar(arg) || isRuntimeString(arg) ? toString(arg) : undefined;
   if (name === "caller") return scope.callerFrame ?? scope.baseFrame;
-  if (name === "base" || name === "workspace") return scope.baseFrame;
-  throw new RuntimeError(`${fn}: first argument must be 'base' or 'caller'`);
+  if (name === "base") return scope.baseFrame;
+  throw builtinError("MATLAB:badopt", "Unknown command option.");
 }
+
+const notTextScalar = () =>
+  builtinError(
+    "MATLAB:string:MustBeStringScalarOrCharacterVector",
+    "Argument must be a text scalar."
+  );
 
 builtin({
   name: "evalin",
@@ -63,19 +65,25 @@ builtin({
   nargout: Infinity,
   scope: true,
   apply: (args, nargout, { scope }) => {
-    const target = scopeFrame(scope, "evalin", args[0]);
-    const code = toString(args[1]);
-    // A variable name is looked up directly; numbl takes a third argument
-    // as the value to return when the variable does not exist.
-    if (/^[a-zA-Z_]\w*$/.test(code)) {
-      const val = target.env.get(code);
-      if (val !== undefined) return val;
-      if (args.length >= 3) return args[2];
-      throw new RuntimeError(
-        `Variable '${code}' does not exist in ${toString(args[0])} scope`
-      );
+    const target = scopeFrame(scope, args[0]);
+    for (const a of args.slice(1))
+      if (!isRuntimeChar(a) && !isRuntimeString(a)) throw notTextScalar();
+    const run = (text: RuntimeValue) => {
+      // A variable name is looked up directly.
+      const code = toString(text);
+      if (/^[a-zA-Z_]\w*$/.test(code)) {
+        const val = target.env.get(code);
+        if (val !== undefined) return val;
+      }
+      return scope.evalInFrame(target, text, nargout);
+    };
+    if (args.length === 2) return run(args[1]);
+    // evalin(ws, try, catch): run the catch text if the try text errors.
+    try {
+      return run(args[1]);
+    } catch {
+      return run(args[2]);
     }
-    return scope.evalInFrame(target, args[1], nargout);
   },
 });
 
@@ -85,7 +93,32 @@ builtin({
   nargout: 0,
   scope: true,
   apply: (args, _nargout, { scope }) => {
-    scopeFrame(scope, "assignin", args[0]).env.set(toString(args[1]), args[2]);
+    scopeFrame(scope, args[0]).env.set(toString(args[1]), args[2]);
+  },
+});
+
+builtin({
+  name: "str2func",
+  help: {
+    signatures: ["fh = str2func(str)"],
+    description:
+      "Function handle from text: str2func('name') is @name, and " +
+      "str2func('@(x) x+1') creates an anonymous function. The anonymous " +
+      "function's body sees no workspace variables or local functions, and " +
+      "a name does not reach nested functions.",
+  },
+  nargin: 1,
+  scope: true,
+  apply: (args, _nargout, { scope }) => {
+    const a = args[0];
+    const text =
+      isRuntimeChar(a) && (!a.shape || a.shape[0] <= 1)
+        ? toString(a)
+        : isRuntimeString(a)
+          ? a
+          : undefined;
+    if (text === undefined) throw notTextScalar();
+    return scope.str2func(text);
   },
 });
 
@@ -384,10 +417,15 @@ const narginoutBadInput = () =>
 const notValidMfile = () =>
   builtinError("MATLAB:narginout:notValidMfile", "Not a valid MATLAB file.");
 
-/** The running function's `$nargin` / `$nargout` (0 at the top level). */
+/** The running function's `$nargin` / `$nargout`. Outside a function (the
+ *  base workspace or a script run from it) MATLAB raises an error. */
 function callCount(scope: CallerScope, which: "$nargin" | "$nargout"): number {
   const v = scope.env.get(which);
-  return typeof v === "number" ? v : 0;
+  if (typeof v === "number") return v;
+  throw builtinError(
+    "MATLAB:narginout:NoStack",
+    "You can only call nargin/nargout from within a MATLAB function."
+  );
 }
 
 builtin({

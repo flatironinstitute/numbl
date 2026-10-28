@@ -540,8 +540,13 @@ export class ExpressionParser extends ParserBase {
           const span = this.spanFrom(start, body.span.end);
           return { type: "AnonFunc", params, body, span };
         } else {
-          // function handle @name or @ClassName.method
-          let name = this.expectIdent();
+          // function handle @name or @ClassName.method. true/false lex as
+          // keywords but name builtin functions (@true, @false).
+          const kw = this.peekToken();
+          let name =
+            kw === Token.True || kw === Token.False
+              ? this.next()!.lexeme
+              : this.expectIdent();
           // Handle dotted names like @chebfun.ode113 (static method handles)
           while (this.consume(Token.Dot)) {
             name += "." + this.expectIdent();

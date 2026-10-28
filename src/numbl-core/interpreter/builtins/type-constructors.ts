@@ -35,6 +35,7 @@ import { allocFloat64Array } from "../../runtime/alloc.js";
 import { imagAllZero } from "../../helpers/effectively-real.js";
 import { charToNumericTensor } from "../../runtime/indexing.js";
 import { parseShapeArgs } from "../../helpers/shape-utils.js";
+import { unparseExpr, type Expr } from "../../parser/index.js";
 
 // ── Shared helpers ──────────────────────────────────────────────────────
 
@@ -935,10 +936,18 @@ builtin({
 
 builtin({
   name: "func2str",
+  help: {
+    signatures: ["str = func2str(fh)"],
+    description:
+      "Text of a function handle: the function name for a named handle " +
+      "('sin'), or the definition of an anonymous function ('@(x)x+1').",
+  },
   nargin: 1,
   apply: args => {
     const v = args[0];
     if (!isRuntimeFunction(v)) throw undefinedForTypeError("func2str", v);
-    return RTV.string(v.name);
+    const ast = v.handleAst as Expr | undefined;
+    if (ast?.type === "AnonFunc") return RTV.char(unparseExpr(ast));
+    return RTV.char(v.name);
   },
 });

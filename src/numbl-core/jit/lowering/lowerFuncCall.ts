@@ -522,14 +522,12 @@ function lowerCellConstructor(
   e: Extract<Expr, { type: "FuncCall" }>
 ): IRExpr {
   if (e.args.length === 0) {
-    // `cell()` — match numbl which treats it as cell(0) (0×0). The
-    // common idiom is `cell(n)` though, so this path is rare.
-    return {
-      kind: "CellEmpty",
-      dims: [],
-      ty: cellTuple([0, 0], []),
-      span: e.span,
-    };
+    // `cell()` errors in MATLAB ("Not enough input arguments."); decline so
+    // the interpreter raises it.
+    throw new UnsupportedConstruct(
+      "'cell' requires at least one argument",
+      e.span
+    );
   }
   if (e.args.length > JIT_MAX_NDIM) {
     throw new UnsupportedConstruct(

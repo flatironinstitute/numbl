@@ -466,7 +466,7 @@ builtin({
     description:
       "Graph Laplacian matrix L = D - A of an undirected graph G, where A is " +
       "the (binary, unweighted) adjacency matrix and D the diagonal node-degree " +
-      "matrix. Returns a sparse matrix.",
+      "matrix. Returns a sparse matrix. G must not have self-loops.",
   },
   // G is required; requireGraph raises MATLAB's error for a missing graph.
   nargin: [0, 1],
@@ -475,6 +475,11 @@ builtin({
     const g = requireGraph(args, "laplacian");
     const n = graphN(g);
     const A = graphAdj(g);
+    if (edgesFromAdj(A).some(e => e.u === e.v))
+      throw builtinError(
+        "MATLAB:graphfun:laplacian:SelfLoops",
+        "Graph has self-loops."
+      );
     const edges: Edge[] = [];
     for (let c = 0; c < n; c++) {
       let degree = 0;
@@ -576,7 +581,7 @@ builtin({
     signatures: ["d = degree(G)", "d = degree(G, nodeIDs)"],
     description:
       "Degree of each node in graph G, returned as a column vector of edge " +
-      "counts (self-loops excluded). With numeric nodeIDs, the degrees of " +
+      "counts (a self-loop counts twice). With numeric nodeIDs, the degrees of " +
       "those nodes, in the shape of nodeIDs.",
   },
   nargin: [0, 2],
@@ -585,8 +590,12 @@ builtin({
     const g = requireGraph(args, "degree");
     const n = graphN(g);
     const A = graphAdj(g);
+    // A self-loop adds 2 to its node's degree, as in MATLAB.
     const d = new Float64Array(n);
-    for (let c = 0; c < n; c++) eachNeighbor(A, c, () => (d[c] += 1));
+    for (const { u, v } of edgesFromAdj(A)) {
+      d[u - 1] += 1;
+      d[v - 1] += 1;
+    }
     if (args.length < 2) return RTV.tensor(d, [n, 1]);
     const idArg = args[1];
     const badId = () =>

@@ -100,9 +100,6 @@ export interface TraceFieldSpec<F extends TraceField> {
    *  drawn by SurfView instead of the 2-D canvas. True exactly for the
    *  `TraceField3D` fields, except patch, which decides per value. */
   is3D(v: TraceValue<F>): boolean;
-  /** A single-trace field that a new plot with hold off leaves in place. Only
-   *  imagesc sets this; it is the reducer's long-standing behavior. */
-  keptWithoutHold?: true;
   /** Grow `ext` to cover this field's data (raw, unpadded). `axes` gives
    *  access to related non-trace state such as `areaBaseValue`. */
   extents(v: TraceValue<F>, ext: Extents, axes: Partial<AxesTraceState>): void;
@@ -219,7 +216,6 @@ export const TRACE_FIELDS: { [F in TraceField]: TraceFieldSpec<F> } = {
     kinds: ["imagesc"],
     multiplicity: "one",
     is3D: () => false,
-    keptWithoutHold: true,
     extents(trace, { x, y }) {
       const ext = imagescExtent(trace);
       include(x, ext.x[0]);
