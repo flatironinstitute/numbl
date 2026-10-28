@@ -18,7 +18,7 @@
  *  column-major linear offset at runtime.
  */
 
-import type { Expr, LValue, Span } from "../parser/index.js";
+import type { Expr, LValue, Span } from "../numbl/index.js";
 import { TypeError, UnsupportedConstruct } from "./errors.js";
 import type { IRExpr, IRStmt } from "./ir.js";
 import {
@@ -119,7 +119,7 @@ export function lowerCellIndexLoad(
 function resolveCellSlotType(
   baseTy: CellType,
   indices: IRExpr[],
-  span: import("../parser/index.js").Span
+  span: import("../numbl/index.js").Span
 ): Type {
   if (baseTy.mode === "uniform") {
     return baseTy.elem!;

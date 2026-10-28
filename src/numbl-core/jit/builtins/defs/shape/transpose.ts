@@ -14,6 +14,7 @@ import {
   tensorComplex,
   tensorDouble,
   typeToString,
+  isDoubleOrLogical,
 } from "../../../lowering/types.js";
 import type { NumericType } from "../../../lowering/types.js";
 import type { Builtin } from "../../registry.js";
@@ -48,7 +49,7 @@ export const transpose: Builtin = {
         `transpose argument must be numeric (got ${typeToString(a)})`
       );
     }
-    if (a.elem !== "double" && a.elem !== "logical") {
+    if (!isDoubleOrLogical(a)) {
       throw new TypeError(
         `transpose argument must be a double or logical (got ${a.elem})`
       );

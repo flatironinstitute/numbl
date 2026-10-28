@@ -51,6 +51,7 @@ import {
   tensorDouble,
   tensorDoubleFromDims,
   typeToString,
+  isDoubleOrLogical,
 } from "../../../lowering/types.js";
 import type { DimInfo, NumericType, Type } from "../../../lowering/types.js";
 import type { Builtin } from "../../registry.js";
@@ -96,7 +97,7 @@ function resolveReps(argTypes: Type[]): ResolvedReps {
     !isScalar(argTypes[1])
   ) {
     const v = argTypes[1];
-    if (v.isComplex || (v.elem !== "double" && v.elem !== "logical")) {
+    if (v.isComplex || !isDoubleOrLogical(v)) {
       throw new TypeError(
         `'repmat' rep vector must be a real double / logical tensor (got ${typeToString(v)})`
       );
@@ -146,7 +147,7 @@ function resolveReps(argTypes: Type[]): ResolvedReps {
         `'repmat' rep arg ${i} must be a scalar real numeric (got ${typeToString(r)})`
       );
     }
-    if (r.isComplex || (r.elem !== "double" && r.elem !== "logical")) {
+    if (r.isComplex || !isDoubleOrLogical(r)) {
       throw new TypeError(
         `'repmat' rep arg ${i} must be a scalar real double / logical (got ${typeToString(r)})`
       );
@@ -334,7 +335,7 @@ export const repmat: Builtin = {
         `'repmat' first arg must be numeric (got ${typeToString(a)})`
       );
     }
-    if (a.elem !== "double" && a.elem !== "logical") {
+    if (!isDoubleOrLogical(a)) {
       throw new TypeError(
         `'repmat' first arg must be a real double / logical (got ${a.elem})`
       );

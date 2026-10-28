@@ -24,6 +24,7 @@ import {
   tensorComplex,
   tensorDouble,
   typeToString,
+  isDoubleOrLogical,
 } from "../../../lowering/types.js";
 import type { NumericType, Type } from "../../../lowering/types.js";
 import type { Builtin, EmitCArgs, EmitJsArgs } from "../../registry.js";
@@ -44,7 +45,7 @@ function resolveK(name: string, argTypes: Type[]): number {
       `'${name}' second arg must be a scalar real integer (got ${typeToString(t)})`
     );
   }
-  if (t.elem !== "double" && t.elem !== "logical") {
+  if (!isDoubleOrLogical(t)) {
     throw new TypeError(
       `'${name}' second arg must be double or logical (got ${t.elem})`
     );
@@ -94,7 +95,7 @@ export function defineTriangular(spec: TriangularSpec): Builtin {
         `'${name}' first arg must be numeric (got ${typeToString(a)})`
       );
     }
-    if (a.elem !== "double" && a.elem !== "logical") {
+    if (!isDoubleOrLogical(a)) {
       throw new TypeError(
         `'${name}' first arg must be a double or logical tensor (got ${a.elem})`
       );

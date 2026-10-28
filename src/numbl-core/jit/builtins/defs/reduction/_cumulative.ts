@@ -32,6 +32,7 @@ import {
   tensorComplexFromDims,
   tensorDouble,
   tensorDoubleFromDims,
+  isDoubleOrLogical,
 } from "../../../lowering/types.js";
 import type { Builtin } from "../../registry.js";
 import {
@@ -225,7 +226,7 @@ export function defineCumulative(spec: CumulativeSpec): Builtin {
           `'${spec.name}' arg must be numeric (got ${inputType.kind})`
         );
       }
-      if (inputType.elem !== "double" && inputType.elem !== "logical") {
+      if (!isDoubleOrLogical(inputType)) {
         throw new TypeError(
           `'${spec.name}' arg must be double or logical (got ${inputType.elem})`
         );

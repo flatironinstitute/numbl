@@ -27,16 +27,14 @@
  * (or `JitTypeError`) with a span.
  */
 
-import type { Expr, LValue, Stmt, Span } from "../parser/index.js";
+import type { Expr, LValue, Stmt, Span } from "../numbl/index.js";
 import {
   BinaryOperation,
   UnaryOperation,
   offsetToLineCol,
-} from "../parser/index.js";
-import {
   tryExtractDottedName,
   unwindMemberLvalue,
-} from "../parser/astUtils.js";
+} from "../numbl/index.js";
 import { UnsupportedConstruct, TypeError } from "./errors.js";
 import {
   type Type,
@@ -67,6 +65,7 @@ import {
   widenMemberLeafAfterIndexedWrite,
   withPathTypeUpdated,
   withoutExact,
+  isDoubleOrLogical,
 } from "./types.js";
 import type { ClassRegistration } from "./classDefs.js";
 import type { Workspace } from "../workspace/workspace.js";
@@ -2048,7 +2047,7 @@ export class Lowerer {
   private requireScalarCondType(t: Type, what: string, span: Span): void {
     if (
       isNumeric(t) &&
-      (t.elem === "double" || t.elem === "logical") &&
+      isDoubleOrLogical(t) &&
       t.dims.length === 2 &&
       t.dims[0].kind === "exact" &&
       t.dims[0].value === 1 &&
@@ -2214,7 +2213,7 @@ export function cIdentForUserName(name: string): string {
 
 // Re-export so existing call sites (`lowerMethodCall`,
 // `lowerMultiAssign`) keep working without import-path churn.
-export { tryExtractDottedName } from "../parser/astUtils.js";
+export { tryExtractDottedName } from "../numbl/index.js";
 
 /** If the lowered cond's type carries an exact scalar value, return
  *  its boolean interpretation; otherwise null. This is the ONLY place

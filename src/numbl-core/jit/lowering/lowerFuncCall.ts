@@ -17,7 +17,7 @@
  *      builtins numbl wires through runtime dispatch.
  */
 
-import type { Expr } from "../parser/index.js";
+import type { Expr } from "../numbl/index.js";
 import { TypeError, UnsupportedConstruct } from "./errors.js";
 import type { IRExpr } from "./ir.js";
 import {

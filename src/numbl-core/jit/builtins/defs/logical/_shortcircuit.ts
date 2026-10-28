@@ -34,6 +34,7 @@ import {
   typeToString,
   type NumericType,
   type Type,
+  isDoubleOrLogical,
 } from "../../../lowering/types.js";
 import type { Builtin } from "../../registry.js";
 import { exactDouble, exactScalarAsComplex } from "../_shared.js";
@@ -47,7 +48,7 @@ function asScalarRealOrLogical(t: Type, what: string, surface: string): void {
         `'${surface}' requires scalar operands (numbl accepts tensors via toBool, but the JIT follows MATLAB)`
     );
   }
-  if (t.elem !== "double" && t.elem !== "logical") {
+  if (!isDoubleOrLogical(t)) {
     throw new TypeError(
       `${what} must be a real double or logical (got ${t.elem})`
     );

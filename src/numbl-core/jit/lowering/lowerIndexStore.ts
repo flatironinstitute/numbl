@@ -7,7 +7,7 @@
  * / colon (that case routes to `lowerIndexSliceStore`).
  */
 
-import type { Expr, LValue, Span } from "../parser/index.js";
+import type { Expr, LValue, Span } from "../numbl/index.js";
 import { TypeError, UnsupportedConstruct } from "./errors.js";
 import type { IRExpr, IRStmt } from "./ir.js";
 import {

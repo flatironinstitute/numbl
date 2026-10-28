@@ -40,6 +40,7 @@ import {
   tensorComplex,
   tensorDouble,
   typeToString,
+  isDoubleOrLogical,
 } from "../../../lowering/types.js";
 import type { NumericType, Type } from "../../../lowering/types.js";
 import type { Builtin } from "../../registry.js";
@@ -76,7 +77,7 @@ function resolveDim(argTypes: Type[]): number {
       `'cat' first arg (dim) must be a scalar real integer (got ${typeToString(d)})`
     );
   }
-  if (d.elem !== "double" && d.elem !== "logical") {
+  if (!isDoubleOrLogical(d)) {
     throw new TypeError(
       `'cat' first arg (dim) must be a scalar real integer (got ${d.elem})`
     );
@@ -108,7 +109,7 @@ function viewsForInputs(argTypes: Type[], ndim: number): InputView[] {
         `'cat' arg ${i + 1} must be numeric (got ${typeToString(a)})`
       );
     }
-    if (a.elem !== "double" && a.elem !== "logical") {
+    if (!isDoubleOrLogical(a)) {
       throw new TypeError(
         `'cat' arg ${i + 1} must be a double or logical (got ${a.elem})`
       );

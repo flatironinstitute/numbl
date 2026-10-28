@@ -18,7 +18,7 @@
  *    validate at runtime).
  */
 
-import type { Expr } from "../parser/index.js";
+import type { Expr } from "../numbl/index.js";
 import { TypeError, UnsupportedConstruct } from "./errors.js";
 import type { IRExpr } from "./ir.js";
 import {
@@ -32,6 +32,7 @@ import {
   tensorDouble,
   tensorDoubleFromDims,
   typeToString,
+  isDoubleOrLogical,
 } from "./types.js";
 import type { DimInfo, NumericType } from "./types.js";
 import { exactDouble, exactScalarAsComplex } from "../builtins/defs/_shared.js";
@@ -81,7 +82,7 @@ export function lowerTensorLit(
           cell.span
         );
       }
-      if (ty.elem !== "double" && ty.elem !== "logical") {
+      if (!isDoubleOrLogical(ty)) {
         throw new UnsupportedConstruct(
           `bracket literal cell must be a real double or logical (got ${ty.elem})`,
           cell.span

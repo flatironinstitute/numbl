@@ -12,7 +12,7 @@
  * standard scope-exit-free / early-free lifecycle.
  */
 
-import type { Expr, LValue, Span, Stmt } from "../parser/index.js";
+import type { Expr, LValue, Span, Stmt } from "../numbl/index.js";
 import { TypeError, UnsupportedConstruct } from "./errors.js";
 import type { IRExpr, IRStmt } from "./ir.js";
 import { handleType, typeToString, VOID } from "./types.js";

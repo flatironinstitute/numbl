@@ -2,13 +2,15 @@
  * Helpers shared across multiple builtin files.
  */
 
-import type { Span } from "../../parser/index.js";
-import { TypeError } from "../../lowering/errors.js";
+import type { Span } from "../../numbl/index.js";
+import { TypeError, UnsupportedConstruct } from "../../lowering/errors.js";
 import {
+  type NumericType,
   type Type,
   isScalarRealDouble,
   isNumeric,
   isScalar,
+  isDoubleOrLogical,
 } from "../../lowering/types.js";
 
 export function requireScalarRealDouble(
@@ -30,7 +32,7 @@ export function requireRealDouble(t: Type, what: string, span?: Span): void {
   if (!isNumeric(t) || t.isComplex) {
     throw new TypeError(`${what} must be a real numeric (got ${t.kind})`, span);
   }
-  if (t.elem !== "double" && t.elem !== "logical") {
+  if (!isDoubleOrLogical(t)) {
     throw new TypeError(
       `${what} must be double or logical (got ${t.elem})`,
       span
@@ -45,7 +47,7 @@ export function requireRealOrComplex(t: Type, what: string, span?: Span): void {
   if (!isNumeric(t)) {
     throw new TypeError(`${what} must be a numeric (got ${t.kind})`, span);
   }
-  if (t.elem !== "double" && t.elem !== "logical") {
+  if (!isDoubleOrLogical(t)) {
     throw new TypeError(
       `${what} must be double or logical (got ${t.elem})`,
       span
@@ -65,12 +67,21 @@ export function requireScalarRealOrComplex(
       span
     );
   }
-  if (t.elem !== "double" && t.elem !== "logical") {
+  if (!isDoubleOrLogical(t)) {
     throw new TypeError(
       `${what} must be double or logical (got ${t.elem})`,
       span
     );
   }
+}
+
+/** The MATLAB class of a numeric value (complex counts as double). An
+ *  element type the JIT does not model declines. */
+export function numericClassName(t: NumericType): "double" | "logical" {
+  if (t.elem === "double" || t.elem === "logical") return t.elem;
+  throw new UnsupportedConstruct(
+    `the class of a '${t.elem}' numeric value is not modeled by the JIT`
+  );
 }
 
 export function exactDouble(t: Type): number | undefined {

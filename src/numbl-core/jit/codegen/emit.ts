@@ -61,6 +61,8 @@ export interface EmitResult {
   /** Exported host-entry symbol: a wrapper around `exposeSpec` that arms
    *  the raise guard (see `emitHostEntry`). */
   hostEntry: string;
+  /** Names of every runtime snippet activated during emit. */
+  activatedSnippets: ReadonlyArray<string>;
   /** Files named by statement locations, by index (see `locCode`). */
   locFiles: string[];
 }
@@ -182,7 +184,12 @@ export function emitProgram(prog: IRProgram, opts: EmitOptions): EmitResult {
   );
   out.push("void jit_free(void *p) { free(p); }");
   out.push("");
-  return { source: out.join("\n"), hostEntry, locFiles: state.locFiles };
+  return {
+    source: out.join("\n"),
+    hostEntry,
+    activatedSnippets: Array.from(state.active),
+    locFiles: state.locFiles,
+  };
 }
 
 /** The exported wrapper the host calls: clears the raise status, arms the

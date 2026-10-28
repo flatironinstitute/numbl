@@ -23,6 +23,7 @@ import {
   tensorDoubleFromDims,
   type NumericType,
   type Type,
+  isDoubleOrLogical,
 } from "../../../lowering/types.js";
 import type { Builtin } from "../../registry.js";
 import { exactDouble } from "../_shared.js";
@@ -106,7 +107,7 @@ function planVar(
       `'${name}' on complex input is not JIT-compiled`
     );
   }
-  if (input.elem !== "double" && input.elem !== "logical") {
+  if (!isDoubleOrLogical(input)) {
     throw new TypeError(
       `'${name}' arg must be double or logical (got ${input.elem})`
     );

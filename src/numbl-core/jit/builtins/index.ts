@@ -9,8 +9,8 @@
  *  See `registry.ts` for the `Builtin` interface and the registry itself.
  */
 
-import type { Span } from "../parser/index.js";
-import { BinaryOperation, UnaryOperation } from "../parser/index.js";
+import type { Span } from "../numbl/index.js";
+import { BinaryOperation, UnaryOperation } from "../numbl/index.js";
 import { UnsupportedConstruct } from "../lowering/errors.js";
 import { registerBuiltin } from "./registry.js";
 

@@ -37,6 +37,7 @@ import {
   signFromNumber,
   isNumeric,
   isScalar,
+  isDoubleOrLogical,
 } from "../../../lowering/types.js";
 import type { DimInfo, NumericType, Type } from "../../../lowering/types.js";
 import type { Builtin, InlineSnippet } from "../../registry.js";
@@ -108,7 +109,7 @@ function resolveShape(name: string, argTypes: Type[]): ResolvedShape {
     !isScalar(argTypes[0])
   ) {
     const a = argTypes[0];
-    if (a.elem !== "double" && a.elem !== "logical") {
+    if (!isDoubleOrLogical(a)) {
       throw new TypeError(
         `'${name}' dim vector must be a real-double tensor (got ${a.elem})`
       );

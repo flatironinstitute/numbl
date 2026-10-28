@@ -7,6 +7,7 @@ import {
   isScalar,
   isText,
   type Type,
+  isDoubleOrLogical,
 } from "../../../lowering/types.js";
 
 /** A nested struct/cell/class value inside a struct field or cell slot
@@ -35,11 +36,7 @@ export const disp: Builtin = {
     if (isNumeric(t) && isScalar(t) && t.isComplex && t.elem === "double") {
       return [{ kind: "Void" }];
     }
-    if (
-      isNumeric(t) &&
-      !t.isComplex &&
-      (t.elem === "double" || t.elem === "logical")
-    ) {
+    if (isNumeric(t) && !t.isComplex && isDoubleOrLogical(t)) {
       return [{ kind: "Void" }];
     }
     if (isNumeric(t) && t.isComplex && !isScalar(t) && t.elem === "double") {

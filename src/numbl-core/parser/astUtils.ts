@@ -1,10 +1,9 @@
 /**
- * Small AST helpers consumed by both the lowerer and the interpreter.
- * Pure functions over the numbl AST shape — no dependency on the
- * lowering / runtime layers.
+ * Small AST helpers shared by the interpreter and the JIT lowerer. Pure
+ * functions over the AST shape.
  */
 
-import type { Expr, LValue } from "./index.js";
+import type { Expr, LValue } from "./types.js";
 
 /** Walk a member-chain rooted in an `Ident` and return the dotted
  *  identifier (`pkg.fn`, `pkg.sub.fn`, `ClassName.staticMethod`).

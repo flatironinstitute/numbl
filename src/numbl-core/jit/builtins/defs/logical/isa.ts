@@ -23,6 +23,7 @@ import {
   type Type,
 } from "../../../lowering/types.js";
 import type { Builtin } from "../../registry.js";
+import { numericClassName } from "../_shared.js";
 
 function staticClassNameOf(t: Type): string | null {
   if (isClass(t)) return t.className;
@@ -31,7 +32,7 @@ function staticClassNameOf(t: Type): string | null {
   if (isChar(t)) return "char";
   if (isString(t)) return "string";
   if (isCell(t)) return "cell";
-  if (isNumeric(t)) return t.elem === "logical" ? "logical" : "double";
+  if (isNumeric(t)) return numericClassName(t);
   return null;
 }
 

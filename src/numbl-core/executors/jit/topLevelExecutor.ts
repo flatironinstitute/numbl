@@ -30,16 +30,16 @@ interface TopLevelData {
  *
  *  Unsuppressed bare expressions pass on the JS backend: a void call
  *  (`disp(...)`) prints on its own, and `compileSpec` rejects a
- *  value-yielding one (`1 + 2`, which would echo "ans = 3"). The C backend
- *  keeps the stricter gate (bare expressions decline too) because its
- *  whole-scope path is less battle-tested; such scripts fall to JS-JIT at
+ *  value-yielding one (`1 + 2`, which would echo "ans = 3"). A backend
+ *  with `strictDisplayGate` (C) keeps the stricter gate (bare expressions
+ *  decline too) because its whole-scope path is less battle-tested; such scripts fall to JS-JIT at
  *  --opt 2 unless they opt in with `%!numbl:assert_jit c`, which the
  *  annotator adds only after verifying the script C-JITs correctly. */
 function displayGateOk(
   backend: JitBackend,
   c: TopLevelClassification
 ): boolean {
-  const strict = backend.lang === "c";
+  const strict = backend.strictDisplayGate;
   if (strict && c.assertsCJit) return true;
   for (const s of c.stmts) {
     if (
