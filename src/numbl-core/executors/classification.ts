@@ -1,25 +1,19 @@
 /**
- * Classification (JS-JIT-independent).
+ * Classification (backend-independent).
  *
- * Two classification phases — top-level (whole-script) and call
- * (user-function-call) — produce the analysis records that codegen
- * executors consume to decide whether they can lower a stmt list /
- * call and to key their caches.
- *
- * The analysis is purely AST + type inference and is consumed by the
- * JIT executors (`executors/jit/`) — no backend-specific IR involved.
+ * The top-level, loop and call classifications produce the analysis
+ * records that the JIT executors consume to decide whether they can
+ * compile a unit and to key their caches. Inputs are typed directly in
+ * the JIT compiler's `Type` lattice (`inputTypes.ts`).
  */
 
 import type { Interpreter } from "../interpreter/interpreter.js";
 import type { FunctionDef } from "../interpreter/types.js";
 import type { Stmt, Expr } from "../parser/types.js";
-import {
-  inferJitType,
-  jitTypeKey,
-  unifyJitTypes,
-  type JitType,
-} from "../jitTypes.js";
+import { isRuntimeFunction, type RuntimeValue } from "../runtime/types.js";
+import type { Type } from "../jit/index.js";
 import { inlinableHandleExpr } from "./handleInline.js";
+import { typeKey, typeOfValue, widenAgainst } from "./inputTypes.js";
 
 /** A capture-free function handle the JIT inlines into the spec body as
  *  an in-scope `@...` constant instead of taking it as a runtime input.
@@ -56,68 +50,28 @@ export const KNOWN_CONSTANTS: ReadonlySet<string> = new Set([
   "j",
 ]);
 
-/**
- * Drop `exact` from a numeric scalar `JitType`. Numeric `exact` only
- * survives unification when two consecutive specializations see the
- * *same* literal — almost never the case for variables — so stripping
- * up front means the first specialization's cacheKey already matches
- * later calls.
- */
-export function pruneArgType(t: JitType): JitType {
-  if (t.kind === "number" && t.exact !== undefined) {
-    const pruned: JitType = { kind: "number" };
-    if (t.sign !== undefined) pruned.sign = t.sign;
-    if (t.isInteger) pruned.isInteger = true;
-    return pruned;
-  }
-  return t;
-}
-
-/**
- * Progressive type widening: in-place unify each entry of `types`
- * with the corresponding entry of `prev`. No-op when shapes don't
- * match (different arity → different specialization, no widening).
- *
- * Widening that would collapse a known type to `unknown` is rejected
- * — keep this call's concrete type so a fresh, specific spec gets
- * built. Without this, a 1st call with (number, …) followed by a 2nd
- * call with (tensor, …) would unify the first arg to `unknown` and
- * poison every subsequent specialization with the same arg shape.
- */
-export function widenAgainst(
-  types: JitType[],
-  prev: readonly JitType[] | undefined
-): void {
-  if (!prev || prev.length !== types.length) return;
-  for (let i = 0; i < types.length; i++) {
-    if (types[i].kind === "unknown" || prev[i].kind === "unknown") continue;
-    const widened = unifyJitTypes(types[i], prev[i]);
-    if (widened.kind === "unknown") continue;
-    types[i] = widened;
-  }
+/** Cache-key fragment for named inputs. */
+function inputsKey(names: readonly string[], types: readonly Type[]): string {
+  return names.map((n, i) => `${n}:${typeKey(types[i])}`).join(",");
 }
 
 /**
  * Gather env inputs for the synthetic FunctionDef of a top-level
- * block. For each candidate name: skip known constants, skip names
- * not in env (likely fn names), infer the JIT type, prune `exact`.
- * Returns null if any candidate has an unknown type — that's a
- * structural blocker for lowering.
+ * block or loop. For each candidate name: skip known constants, skip
+ * names not in env (likely fn names), and type the value.
  */
 export function gatherTypedEnvInputs(
   interp: Interpreter,
   candidates: readonly string[]
-): { inputs: string[]; inputTypes: JitType[] } | null {
+): { inputs: string[]; inputTypes: Type[] } {
   const inputs: string[] = [];
-  const inputTypes: JitType[] = [];
+  const inputTypes: Type[] = [];
   for (const name of candidates) {
     if (KNOWN_CONSTANTS.has(name)) continue;
     const val = interp.frame.env.get(name);
     if (val === undefined) continue;
-    const t = inferJitType(val);
-    if (t.kind === "unknown") return null;
     inputs.push(name);
-    inputTypes.push(pruneArgType(t));
+    inputTypes.push(typeOfValue(val));
   }
   return { inputs, inputTypes };
 }
@@ -127,7 +81,7 @@ export function gatherTypedEnvInputs(
 export interface TopLevelClassification {
   readonly stmts: readonly Stmt[];
   readonly inputs: readonly string[];
-  readonly inputTypes: readonly JitType[];
+  readonly inputTypes: readonly Type[];
   readonly outputs: readonly string[];
   readonly currentFile: string;
   readonly hasReturn: boolean;
@@ -142,7 +96,7 @@ export interface TopLevelClassification {
 export function classifyTopLevel(
   interp: Interpreter,
   stmts: readonly Stmt[],
-  prevInputTypes: readonly JitType[] | undefined
+  prevInputTypes: readonly Type[] | undefined
 ): TopLevelClassification | null {
   if (stmts.length === 0) return null;
 
@@ -158,18 +112,14 @@ export function classifyTopLevel(
     inputCandidates.push(name);
   }
 
-  const gathered = gatherTypedEnvInputs(interp, inputCandidates);
-  if (!gathered) return null;
-  const { inputs, inputTypes } = gathered;
+  const { inputs, inputTypes } = gatherTypedEnvInputs(interp, inputCandidates);
 
   // Every assigned name is live-out at top level.
   const outputs = [...new Set(analysis.outputs)];
 
   widenAgainst(inputTypes, prevInputTypes);
 
-  const typeKey = inputs
-    .map((n, i) => `${n}:${jitTypeKey(inputTypes[i])}`)
-    .join(",");
+  const typeKey = inputsKey(inputs, inputTypes);
   const cacheKey = `$top:${interp.frame.file}|${typeKey}`;
 
   return {
@@ -190,7 +140,7 @@ export interface LoopClassification {
   /** The single For/While stmt this classification describes. */
   readonly stmt: Stmt & { type: "For" | "While" };
   readonly inputs: readonly string[];
-  readonly inputTypes: readonly JitType[];
+  readonly inputTypes: readonly Type[];
   /** Loop-local writes that are read by code AFTER the loop in the
    *  same sibling list. Loop-internal-only temporaries are filtered
    *  out so a JIT artifact doesn't need to write them back to env. */
@@ -217,7 +167,7 @@ export function classifyLoop(
   stmt: Stmt & { type: "For" | "While" },
   siblings: readonly Stmt[],
   siblingIndex: number,
-  prevInputTypes: readonly JitType[] | undefined
+  prevInputTypes: readonly Type[] | undefined
 ): LoopClassification | null {
   const analysis = analyzeLoop(stmt);
 
@@ -233,11 +183,10 @@ export function classifyLoop(
   }
 
   const gathered = gatherTypedEnvInputs(interp, inputCandidates);
-  if (!gathered) return null;
 
   // Partition out capture-free handle inputs: instead of taking them as
-  // runtime inputs (which the JIT can't type — `function_handle` maps to
-  // null), inline their `@...` definition as an in-scope constant in the
+  // runtime inputs (which the JIT can't type: a handle value is UNKNOWN),
+  // inline their `@...` definition as an in-scope constant in the
   // spec body. A handle reassigned in the loop (`analysis.outputs`) is
   // not constant, so it stays a regular (declining) input.
   const rawOutputs = new Set(analysis.outputs);
@@ -251,15 +200,13 @@ export function classifyLoop(
   if (stmt.type === "For") relocScopeNames.add(stmt.varName);
   const constHandles: ConstHandle[] = [];
   const inputs: string[] = [];
-  const inputTypes: JitType[] = [];
+  const inputTypes: Type[] = [];
   for (let i = 0; i < gathered.inputs.length; i++) {
     const name = gathered.inputs[i];
-    if (
-      gathered.inputTypes[i].kind === "function_handle" &&
-      !rawOutputs.has(name)
-    ) {
+    const value = interp.frame.env.get(name);
+    if (isRuntimeFunction(value as RuntimeValue) && !rawOutputs.has(name)) {
       const expr = inlinableHandleExpr(
-        interp.frame.env.get(name),
+        value,
         interp.frame.file,
         relocScopeNames
       );
@@ -298,9 +245,7 @@ export function classifyLoop(
 
   widenAgainst(inputTypes, prevInputTypes);
 
-  const typeKey = inputs
-    .map((n, i) => `${n}:${jitTypeKey(inputTypes[i])}`)
-    .join(",");
+  const typeKey = inputsKey(inputs, inputTypes);
   const outputKey = outputs.join(",");
   const lineLabel = stmt.span?.start ?? 0;
   // Const-handle identities salt the key: a different handle bound to the
@@ -326,7 +271,7 @@ export function classifyLoop(
 export interface CallClassification {
   readonly fn: FunctionDef;
   readonly nargout: number;
-  readonly argTypes: readonly JitType[];
+  readonly argTypes: readonly Type[];
   /** Compile-cache key within the FunctionDef owner: arg types + nargout
    *  (the spec is specialized on both). */
   readonly cacheKey: string;
@@ -338,7 +283,7 @@ export function classifyCall(
   fn: FunctionDef,
   args: unknown[],
   nargout: number,
-  prevArgTypes: readonly JitType[] | undefined
+  prevArgTypes: readonly Type[] | undefined
 ): CallClassification | null {
   // `~` placeholder params aren't valid identifiers downstream.
   for (const p of fn.params) {
@@ -357,16 +302,9 @@ export function classifyCall(
     if (args.length !== fn.params.length) return null;
   }
 
-  const argTypes: JitType[] = [];
-  for (const arg of args) {
-    const t = inferJitType(arg);
-    if (t.kind === "unknown") return null;
-    argTypes.push(pruneArgType(t));
-  }
-
+  const argTypes = args.map(typeOfValue);
   widenAgainst(argTypes, prevArgTypes);
-
-  const cacheKey = argTypes.map(jitTypeKey).join(",") + "|n=" + nargout;
+  const cacheKey = argTypes.map(typeKey).join(",") + "|n=" + nargout;
 
   return {
     fn,

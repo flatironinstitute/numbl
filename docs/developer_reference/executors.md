@@ -76,9 +76,9 @@ A compiler rejection (`UnsupportedConstruct` / `JitTypeError`) makes `compile` r
 
 ## Lowering
 
-`tryLowerTopLevel`, `tryLowerLoop`, and `tryLowerCall` classify the unit (inputs, outputs, input types, cache key) via `classification.ts`. Lowering makes no codegen-feasibility decisions; those live in each executor's `propose`.
+`tryLowerTopLevel`, `tryLowerLoop`, and `tryLowerCall` classify the unit (inputs, outputs, input types, cache key) via `classification.ts`. Input types are the JIT compiler's own `Type`, read off the runtime values by `typeOfValue` (a scalar's sign but not its value, a tensor's shape; `Unknown` for values no backend takes), and the cache key is built from their `canonicalizeType` strings; see [type-system.md](compiler/type-system.md#executor-inputs). Lowering makes no codegen-feasibility decisions; those live in each executor's `propose`.
 
-`WideningState` records the most recent input-type signature per owner (and per nargout for calls). Classification widens against it, so a unit invoked with shifting input types converges to a single specialization rather than thrashing the compile cache.
+`WideningState` records the most recent input-type signature per owner (and per nargout for calls). Classification widens each input against it with `widenArgType`, so a unit invoked with shifting input types converges to a single specialization rather than thrashing the compile cache. An input that should not widen (a scalar after a tensor, say) keeps its own type and gets its own specialization.
 
 The loop shape has one extra step. A capture-free function-handle _input_ (defined before the loop, e.g. `f = @(t) …;` or `f = @name;`) would otherwise be an opaque `function_handle` the JIT can't type. Classification (`classifyLoop`) detects these and, instead of taking them as runtime inputs, emits them as `ConstHandle`s that the loop executor inlines as in-scope `<name> = @…` assignments prepended to the synthetic body, reducing the boundary case to the supported in-scope handle case on both backends. The inliner (`handleInline.ts`) reuses the handle's recorded defining AST and env (stored on `RuntimeFunction`) and only fires when capture-free and same-file. It also declines if any free body name (a name that was a function or undefined at definition, not a captured variable) collides with a name that will be in scope at the relocation site (the loop's inputs, assigned locals, or `for` variable); otherwise re-lowering would re-resolve that name to the loop variable, silently turning `@(t) sq(t)` from a function call into an array index.
 
@@ -95,7 +95,7 @@ A `JitBackend` supplies:
 | Member        | JS (`jsBackend.ts`)                            | C (`cBackend.ts`)                                                        |
 | ------------- | ---------------------------------------------- | ------------------------------------------------------------------------ |
 | `available`   | always                                         | `interp.nativeBridge.koffi` present                                      |
-| `mapType`     | `jitTypeToCompilerType`                        | same, and the type must have a C declaration (`compilerTypeToCDecl`)     |
+| `accepts`     | any input type but `Unknown`                   | input types with a C declaration (`compilerTypeToCDecl`)                 |
 | `compile`     | `compileSpec` → `new Function` → spec function | `compileSpecC` → `cc -shared` → koffi `dlopen`                           |
 | `invoke`      | `numblToJit` / `jitToNumbl` around the JS call | `marshalInputs` / out-pointer buffers / `unmarshal*` around the FFI call |
 | raise channel | tagged `JitRaise` thrown by the emitted code   | `longjmp` to the host-entry guard; status read with `bindRaise`          |
@@ -160,6 +160,7 @@ executors/
   cache.ts          ExecutorCache (WeakMap with BAILED sentinel)
   lowering.ts       tryLowerTopLevel / tryLowerLoop / tryLowerCall + WideningState
   classification.ts top-level / loop / call classification (backend-independent)
+  inputTypes.ts     runtime value → compiler Type, widening, cache-key strings
   handleInline.ts   inlines capture-free function-handle inputs into loop bodies
   plugins.ts        registerExecutorsForOpt (the --opt → executors switch)
   jit/
@@ -170,7 +171,6 @@ executors/
     jsBackend.ts         JS backend (compileSpec + new Function)
     cBackend.ts          C backend (compileSpecC + cc + koffi; Node only)
     session.ts           per-context Workspace + Lowerer (the spec cache)
-    typeAdapter.ts       numbl JitType → compiler Type
     valueAdapter.ts      RuntimeValue ↔ emitted-JS value shape
     typeAdapterC.ts      compiler Type → C decl (`compilerTypeToCDecl`)
     valueAdapterC.ts     RuntimeValue ↔ C ABI marshaling (koffi)

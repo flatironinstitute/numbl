@@ -8,12 +8,12 @@
  */
 
 import type { Interpreter } from "../../interpreter/interpreter.js";
-import type { JitType } from "../../jitTypes.js";
 import type { Stmt, Span } from "../../parser/index.js";
 import type { RuntimeValue } from "../../runtime/types.js";
 import {
   UnsupportedConstruct,
   JitTypeError,
+  typeToString,
   type Type as CompilerType,
 } from "../../jit/index.js";
 import { recordJitDecline } from "../../jitDeclineDiagnostics.js";
@@ -31,7 +31,7 @@ export interface CompileRequest {
   /** True when `funcDecl` wraps a script body or loop rather than a
    *  user function (relaxes the C entry-output check). */
   readonly synthetic: boolean;
-  /** Suffix for the `onJitCompile` label, e.g. `(number) -> nargout=1`. */
+  /** Suffix for the `onJitCompile` label, e.g. `(double[1×1]:positive) -> nargout=1`. */
   readonly describe: string;
 }
 
@@ -41,8 +41,9 @@ export interface JitBackend<A = unknown> {
   readonly prefix: string;
   /** Whether the backend can run in this interpreter at all. */
   available(interp: Interpreter): boolean;
-  /** Translate a numbl input type to a compiler type; null declines. */
-  mapType(jt: JitType): CompilerType | null;
+  /** Whether the backend can take an input of this type (classified by
+   *  `typeOfValue`); a unit with any input it cannot take declines. */
+  accepts(t: CompilerType): boolean;
   /** Compile a spec. May throw `UnsupportedConstruct` / `JitTypeError`
    *  (see `compileUnit`); returns null for any other decline. */
   compile(req: CompileRequest, interp: Interpreter): A | null;
@@ -98,18 +99,17 @@ export function compileUnit<A>(
   }
 }
 
-/** Map every input type through the backend; null if any declines. */
-export function mapTypes(
+/** Whether the backend can take every input type. */
+export function acceptsAll(
   backend: JitBackend,
-  types: readonly JitType[]
-): CompilerType[] | null {
-  const out: CompilerType[] = [];
-  for (const jt of types) {
-    const t = backend.mapType(jt);
-    if (t === null) return null;
-    out.push(t);
-  }
-  return out;
+  types: readonly CompilerType[]
+): boolean {
+  return types.every(t => backend.accepts(t));
+}
+
+/** The `onJitCompile` label suffix for a unit's input types. */
+export function describeTypes(types: readonly CompilerType[]): string {
+  return `(${types.map(typeToString).join(", ")})`;
 }
 
 /** `%!numbl:assert_jit c` requires C-JIT at --opt 2, so the JS backend

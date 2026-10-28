@@ -1,6 +1,8 @@
 /**
- * JIT type system. Built from scratch — not derived from numbl's
- * JitType. Designed to be the long-term home for static type info,
+ * JIT type system: the single type lattice of the JIT. The executors
+ * classify runtime inputs straight into it (`typeOfValue`), widen them
+ * across dispatches with `widenArgType` and key their caches with
+ * `canonicalizeType`. Designed to be the long-term home for static type info,
  * with "exact known value" tracking as a first-class feature on
  * every scalar (and eventually small arrays). The lowerer and codegen
  * reject anything they cannot handle with UnsupportedConstruct.
@@ -1068,6 +1070,56 @@ export function unify(a: Type, b: Type): Type {
     return cellUniform(dims, elem);
   }
   return UNKNOWN;
+}
+
+// ── Argument widening (executor specialization) ─────────────────────────
+
+/** Widen `a`, the type of an argument (or loop/script input) on this
+ *  dispatch, against `prev`, its type on the previous dispatch of the same
+ *  unit, so a unit called with shifting argument types converges on one
+ *  specialization instead of compiling one per call. Returns undefined
+ *  when the two should not share a specialization; the caller then keeps
+ *  `a`.
+ *
+ *  Like `unify`, with two differences. A real or logical numeric widens to
+ *  double or complex, since the boundary adapters box such a value for the
+ *  wider parameter. And it never widens a scalar against a non-scalar,
+ *  across ranks, between structs with different fields, or to Unknown: a
+ *  spec generalized that far would run scalar calls through tensor code,
+ *  or not compile at all. */
+export function widenArgType(a: Type, prev: Type): Type | undefined {
+  if (a.kind === "Numeric" && prev.kind === "Numeric") {
+    if (isScalar(a) !== isScalar(prev)) return undefined;
+    if ((a.elem === "char") !== (prev.elem === "char")) return undefined;
+    const elem = a.elem === prev.elem ? a.elem : "double";
+    const isComplex = a.isComplex || prev.isComplex;
+    const coerce = (t: NumericType): NumericType => {
+      const { exact: _e, ...rest } = t;
+      void _e;
+      return {
+        ...rest,
+        elem,
+        isComplex,
+        sign: isComplex ? "unknown" : t.sign,
+      };
+    };
+    const u = unify(coerce(a), coerce(prev));
+    return u.kind === "Unknown" ? undefined : u;
+  }
+  if (a.kind === "Struct" && prev.kind === "Struct") {
+    if (a.fields.length !== prev.fields.length) return undefined;
+    const fields: { name: string; ty: Type }[] = [];
+    for (let i = 0; i < a.fields.length; i++) {
+      if (a.fields[i].name !== prev.fields[i].name) return undefined;
+      const ty = widenArgType(a.fields[i].ty, prev.fields[i].ty);
+      if (ty === undefined) return undefined;
+      fields.push({ name: a.fields[i].name, ty });
+    }
+    return structType(fields);
+  }
+  if (a.kind !== prev.kind) return undefined;
+  const u = unify(a, prev);
+  return u.kind === "Unknown" ? undefined : u;
 }
 
 /** Demote a tuple-mode cell to uniform mode if every slot type

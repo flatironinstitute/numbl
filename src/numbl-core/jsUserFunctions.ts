@@ -19,9 +19,22 @@ import type { WorkspaceFile, NativeBridge } from "./workspace/index.js";
 import { RTV, RuntimeError, toNumber } from "./runtime/index.js";
 import type { RuntimeValue } from "./runtime/types.js";
 import { getCurrentRuntime } from "./runtime/refcount.js";
-import { isRuntimeClassInstance, isRuntimeStruct } from "./runtime/types.js";
+import {
+  isRuntimeCell,
+  isRuntimeChar,
+  isRuntimeClassInstance,
+  isRuntimeClassInstanceArray,
+  isRuntimeComplexNumber,
+  isRuntimeDictionary,
+  isRuntimeFunction,
+  isRuntimeLogical,
+  isRuntimeNumber,
+  isRuntimeSparseMatrix,
+  isRuntimeString,
+  isRuntimeStruct,
+  isRuntimeTensor,
+} from "./runtime/types.js";
 import type { IBuiltin } from "./runtime/builtinRegistry.js";
-import { inferJitType, type JitType } from "./jitTypes.js";
 
 /** Minimal runtime surface needed to invoke a function handle from JS. */
 interface HandleCaller {
@@ -78,10 +91,15 @@ export interface LoadedJsUserFunction {
 
 type JsApply = (args: RuntimeValue[], nargout: number) => unknown;
 
+/** The argument description the legacy resolve form sees: the value's
+ *  kind, plus a few details (the shape of the executors' former type
+ *  descriptor, kept so existing files see what they used to). */
+type LegacyArgType = { kind: string } & Record<string, unknown>;
+
 /** The older register({ resolve }) form: given argument types, return the
  *  output types and an apply, or null to reject the arguments. */
 type LegacyResolve = (
-  argTypes: JitType[],
+  argTypes: LegacyArgType[],
   nargout: number
 ) => {
   outputTypes: unknown[];
@@ -96,16 +114,34 @@ type RegisterSpec =
 
 /** The argument type the legacy resolve form sees. Structs and objects
  *  carry only their kind and class, not their fields. */
-function legacyArgType(v: RuntimeValue): JitType {
+function legacyArgType(v: RuntimeValue): LegacyArgType {
+  if (typeof v === "boolean" || isRuntimeLogical(v))
+    return { kind: "boolean", value: v };
+  if (isRuntimeNumber(v)) return { kind: "number", exact: v };
+  if (isRuntimeString(v)) return { kind: "string", value: v };
+  if (isRuntimeChar(v)) return { kind: "char", value: v.value };
+  if (isRuntimeComplexNumber(v)) return { kind: "complex_or_number" };
+  if (isRuntimeTensor(v))
+    return {
+      kind: "tensor",
+      isComplex: v.imag !== undefined,
+      shape: v.shape.length >= 2 ? v.shape.slice() : [1, ...v.shape],
+      ...(v._isLogical ? { isLogical: true } : {}),
+    };
   if (isRuntimeStruct(v)) return { kind: "struct", fields: {} };
-  if (isRuntimeClassInstance(v))
+  if (isRuntimeClassInstance(v) || isRuntimeClassInstanceArray(v))
     return {
       kind: "class_instance",
       className: v.className,
-      isHandleClass: v.isHandleClass,
+      isHandleClass: isRuntimeClassInstance(v) ? v.isHandleClass : false,
       fields: {},
     };
-  return inferJitType(v);
+  if (isRuntimeSparseMatrix(v))
+    return { kind: "sparse_matrix", isComplex: !!v.pi, m: v.m, n: v.n };
+  if (isRuntimeCell(v)) return { kind: "cell", shape: v.shape.slice() };
+  if (isRuntimeDictionary(v)) return { kind: "dictionary" };
+  if (isRuntimeFunction(v)) return { kind: "function_handle" };
+  return { kind: "unknown" };
 }
 
 /** Adapt the legacy resolve form to an apply. */

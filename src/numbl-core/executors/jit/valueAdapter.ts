@@ -16,10 +16,10 @@
  * take ownership of the returned buffer directly (the JIT's spec
  * always returns a freshly-owned tensor).
  *
- * The executor only invokes these adapters on values whose JitType
- * was accepted by `jitTypeToCompilerType`. Unsupported value kinds
- * arriving here are a programmer error — the type adapter should
- * have caused `propose()` to decline earlier.
+ * The executor only invokes these adapters on values whose type
+ * (`typeOfValue`) the backend accepted. Unsupported value kinds
+ * arriving here are a programmer error: `propose()` should have
+ * declined earlier.
  */
 
 import {

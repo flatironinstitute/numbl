@@ -10,12 +10,11 @@
 
 import type { Executor } from "../types.js";
 import type { TopLevelClassification } from "../classification.js";
-import { jitTypeKey } from "../../jitTypes.js";
-import type { Type as CompilerType } from "../../jit/index.js";
 import {
+  acceptsAll,
   compileUnit,
   declinedByAssertC,
-  mapTypes,
+  describeTypes,
   runInEnv,
   synthesizeFuncStmt,
   type JitBackend,
@@ -24,7 +23,6 @@ import { scopeOfStmts } from "./raise.js";
 
 interface TopLevelData {
   readonly c: TopLevelClassification;
-  readonly argTypes: CompilerType[];
 }
 
 /** The interpreter echoes unsuppressed assignments ("x = 10"); the
@@ -72,8 +70,7 @@ export function makeTopLevelExecutor<A>(
       // A top-level `return` has no place in the function-body model.
       if (c.hasReturn) return null;
       if (!displayGateOk(backend, c)) return null;
-      const argTypes = mapTypes(backend, c.inputTypes);
-      return argTypes && { c, argTypes };
+      return acceptsAll(backend, c.inputTypes) ? { c } : null;
     },
 
     cacheKey: d => d.c.cacheKey,
@@ -91,10 +88,10 @@ export function makeTopLevelExecutor<A>(
             [...c.stmts],
             c.currentFile
           ),
-          argTypes: d.argTypes,
+          argTypes: [...c.inputTypes],
           nargout: c.outputs.length,
           synthetic: true,
-          describe: `(${c.inputTypes.map(jitTypeKey).join(", ")}) -> outputs=${c.outputs.length}`,
+          describe: `${describeTypes(c.inputTypes)} -> outputs=${c.outputs.length}`,
         },
         interp
       );
