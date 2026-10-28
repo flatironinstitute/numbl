@@ -1,6 +1,8 @@
 import type * as monaco from "monaco-editor";
-import { getAllBuiltinNames } from "./numbl-core/helpers/registry.js";
-import { getAllConstantNames } from "./numbl-core/helpers/constants.js";
+import {
+  BUILTIN_CONSTANT_NAMES,
+  BUILTIN_FUNCTION_NAMES,
+} from "./builtinNames.gen.js";
 
 export const numblLanguageConfig: monaco.languages.LanguageConfiguration = {
   comments: {
@@ -27,9 +29,9 @@ export const numblLanguageConfig: monaco.languages.LanguageConfiguration = {
 };
 
 export function createNumblTokensProvider(): monaco.languages.IMonarchLanguage {
-  // Get builtin names dynamically from numbl-core
-  const builtinFunctions = getAllBuiltinNames();
-  const builtinConstants = getAllConstantNames();
+  // Generated from numbl-core's registry (scripts/gen_builtin_names.ts).
+  const builtinFunctions = [...BUILTIN_FUNCTION_NAMES];
+  const builtinConstants = [...BUILTIN_CONSTANT_NAMES];
 
   return {
     defaultToken: "",

@@ -9,7 +9,6 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { parseMFile } from "../numbl-core/parser/index.js";
 import type { OptLevel } from "../numbl-core/executors/plugins.js";
 import type { PlotInstruction } from "../numbl-core/plotting/types.js";
 import {
@@ -19,9 +18,8 @@ import {
 import { formatDiagnostic } from "../numbl-core/diagnostics";
 import { Splitter } from "./Splitter";
 import { ReplView, type TerminalMethods } from "./ReplView";
-import { fileText, isBinaryData } from "../hooks/useProjectFiles";
+import { fileText } from "../hooks/useProjectFiles";
 import type { FileEntry } from "../hooks/projectFilesState";
-import { executeRemoteStream } from "../utils/remoteExecution";
 import { effectiveWasmBridgeUrl } from "../utils/wasmLapackBridge";
 import {
   syncVfsChangesToProject,
@@ -30,11 +28,15 @@ import {
 import type { VfsChanges } from "../vfs/VirtualFileSystem";
 import { useSystemFiles } from "../hooks/useSystemFiles";
 import { useMipCorePackage } from "../hooks/useMipCorePackage";
-import { useNumblWorker } from "../hooks/useNumblWorker";
+import { useExecutionBackends } from "../hooks/useExecutionBackends";
 import { useRemoteExecution } from "../hooks/useRemoteExecution";
 import { useActiveFileContent } from "../hooks/useActiveFileContent";
 import { buildWorkerFiles } from "../buildWorkerFiles";
 import type { WorkspaceRep } from "../numblWorkerProtocol";
+import type {
+  ExecutionBackend,
+  ExecutionEvents,
+} from "../execution/ExecutionBackend";
 import { EditorPanel, RunControls, ScriptPane } from "./ide/EditorPanel";
 import { OutputPanel } from "./ide/OutputPanel";
 import { FiguresPanel } from "./ide/FiguresPanel";
@@ -135,16 +137,14 @@ export function IDEWorkspace(props: IDEWorkspaceProps) {
   // Keep the latest value in a ref so the stable handlePlotInstruction callback
   // can read it without being recreated (which would churn the worker).
   const isMobileRef = useRef(isMobile);
-  isMobileRef.current = isMobile;
+  useEffect(() => {
+    isMobileRef.current = isMobile;
+  }, [isMobile]);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [mobileOutputTab, setMobileOutputTab] = useState(0);
 
   const remote = useRemoteExecution();
   const [settingsOpen, setSettingsOpen] = useState(false);
-
-  // Tracks which execution mode is active for routing streaming messages
-  const activeExecutionMode = useRef<"script" | "repl" | null>(null);
-  const remoteAbortRef = useRef<AbortController | null>(null);
 
   // Persistent workspace toggle
   const [persistWorkspace, setPersistWorkspace] = useState(false);
@@ -197,6 +197,8 @@ export function IDEWorkspace(props: IDEWorkspaceProps) {
   // Select the current figure's tab when the script switches figures.
   useEffect(() => {
     const idx = sortedHandles(figures.figs).indexOf(figures.currentHandle);
+    // The tab stays user-selectable, so it is state rather than derived.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (idx >= 0) setFigureTab(idx);
   }, [figures.figs, figures.currentHandle]);
 
@@ -245,54 +247,15 @@ export function IDEWorkspace(props: IDEWorkspaceProps) {
     [projectName, mergeVfsChanges, reloadSystemFiles]
   );
 
-  // Unified worker (handles both script runs and REPL). Streaming output is
-  // routed by which mode is active.
-  const worker = useNumblWorker(
-    {
-      onOutput: text => {
-        if (activeExecutionMode.current === "repl") {
-          replTerminalRef.current?.writeOutput(text, false);
-        } else {
-          setOutput(prev => prev + text);
-        }
-      },
-      onPlotInstructions: instructions => {
-        for (const instr of instructions) handlePlotInstruction(instr);
-      },
-      onDone: msg => {
-        activeExecutionMode.current = null;
-        setGeneratedJS(msg.generatedJS || "");
-        setWorkspaceRep(msg.workspaceRep);
-        setDispatchUnknownCounts(msg.dispatchUnknownCounts ?? null);
-        setIsRunning(false);
-      },
-      onError: msg => {
-        activeExecutionMode.current = null;
-        if (msg.generatedJS) setGeneratedJS(msg.generatedJS);
-        setWorkspaceRep(msg.workspaceRep);
-        setIsRunning(false);
-        setOutput(prev => prev + `\n${formatDiagnostic(msg)}\n`);
-      },
-      onResult: msg => {
-        activeExecutionMode.current = null;
-        const term = replTerminalRef.current;
-        if (!msg.success && msg.error) term?.writeOutput(msg.error, true);
-        term?.writePrompt();
-        setIsReplExecuting(false);
-      },
-      onVfsChanges: changes => void handleVfsChanges(changes),
-      onWorkerError: ev => {
-        activeExecutionMode.current = null;
-        replTerminalRef.current?.writeOutput(
-          `Worker error: ${ev.message}`,
-          true
-        );
-        setIsRunning(false);
-        setIsReplExecuting(false);
-      },
-    },
-    { optimization, wasmBridgeUrl: effectiveWasmBridgeUrl }
-  );
+  // Runs go to the browser worker or, when enabled, the execution server; the
+  // REPL always uses the worker.
+  const { worker, active: backend } = useExecutionBackends(remote, {
+    optimization,
+    wasmBridgeUrl: effectiveWasmBridgeUrl,
+  });
+  // The backend running the current script, which Stop must reach even if
+  // the execution target changed meanwhile.
+  const runningBackend = useRef<ExecutionBackend | null>(null);
 
   // Track that workspace needs updating when files change
   const workspaceStale = useRef(true);
@@ -331,140 +294,67 @@ export function IDEWorkspace(props: IDEWorkspaceProps) {
       projectContents.get(activeFileId) ??
       contentCache.current.get(activeFileId) ??
       new Uint8Array(0);
-    const codeToRun = fileText(activeData);
 
-    try {
-      const ast = parseMFile(codeToRun);
-      console.info("AST:", ast);
-    } catch {
-      console.info("Parse check skipped - error will be handled by worker");
-    }
-
-    if (remote.enabled) {
-      const abortController = new AbortController();
-      remoteAbortRef.current = abortController;
-      try {
-        // Send all project files (excluding system/ directory) to the server
-        const decoder = new TextDecoder("utf-8");
-        const remoteFiles: { name: string; content: string }[] = [];
-        for (const f of files) {
-          if (f.name === "system" || f.name.startsWith("system/")) continue;
-          const data =
-            projectContents.get(f.id) ??
-            contentCache.current.get(f.id) ??
-            new Uint8Array(0);
-          if (isBinaryData(data)) continue;
-          remoteFiles.push({ name: f.name, content: decoder.decode(data) });
-        }
-        // Ensure the active file is included with the latest content
-        if (!remoteFiles.some(f => f.name === activeFile.name)) {
-          remoteFiles.push({ name: activeFile.name, content: codeToRun });
-        } else {
-          const idx = remoteFiles.findIndex(f => f.name === activeFile.name);
-          remoteFiles[idx] = { name: activeFile.name, content: codeToRun };
-        }
-
-        const result = await executeRemoteStream(
-          {
-            files: remoteFiles,
-            mainScript: activeFile.name,
-            optimization,
-          },
-          {
-            onOutput: (text: string) => {
-              setOutput(prev => prev + text);
-            },
-            onDrawnow: plotInstructions => {
-              for (const instr of plotInstructions) {
-                handlePlotInstruction(instr);
-              }
-            },
-          },
-          remote.serviceUrl,
-          abortController.signal,
-          remote.passkey
-        );
-
-        setGeneratedJS(result.generatedJS || "");
-
-        if (!result.success) {
-          setOutput(
-            prev =>
-              prev +
-              `\nError: ${result.error}${result.timedOut ? " (timed out)" : ""}\n`
-          );
-        }
-      } catch (error) {
-        setOutput(
-          prev =>
-            prev +
-            `\nRemote execution failed: ${error instanceof Error ? error.message : "Unknown error"}\n`
-        );
-      } finally {
-        remoteAbortRef.current = null;
-        setIsRunning(false);
-      }
-      return;
-    }
-
-    // Send workspace update before run
-    worker.updateWorkspace(workspaceFiles, vfsFiles);
-    workspaceStale.current = false;
-
-    activeExecutionMode.current = "script";
-    worker.run({
-      code: codeToRun,
-      workspaceFiles,
-      mainFileName: activeFile.name,
-      options: {
-        displayResults: true,
-        maxIterations: 10000000,
-        optimization,
+    const events: ExecutionEvents = {
+      onOutput: text => setOutput(prev => prev + text),
+      onPlotInstructions: instructions => {
+        for (const instr of instructions) handlePlotInstruction(instr);
       },
-      vfsFiles,
-      persistent: persistWorkspace,
-    });
+      onError: diagnostic =>
+        setOutput(prev => prev + `\n${formatDiagnostic(diagnostic)}\n`),
+      onVfsChanges: changes => void handleVfsChanges(changes),
+      onDone: result => {
+        runningBackend.current = null;
+        setGeneratedJS(result.generatedJS || "");
+        setWorkspaceRep(result.workspaceRep ?? null);
+        setDispatchUnknownCounts(result.dispatchUnknownCounts ?? null);
+        setIsRunning(false);
+      },
+    };
+
+    runningBackend.current = backend;
+    backend.run(
+      {
+        code: fileText(activeData),
+        mainFileName: activeFile.name,
+        vfsFiles,
+        workspaceFiles,
+        optimization,
+        persistent: persistWorkspace,
+      },
+      events
+    );
+    // The worker backend also hands the files to the REPL.
+    if (backend === worker) workspaceStale.current = false;
   }, [
     activeFile,
     activeFileId,
     files,
-    remote.enabled,
-    remote.serviceUrl,
-    remote.passkey,
+    backend,
+    worker,
     handlePlotInstruction,
+    handleVfsChanges,
     optimization,
     loadAllContents,
     getSystemVfsFiles,
     getSystemWorkspaceFiles,
     contentCache,
     persistWorkspace,
-    worker,
   ]);
 
   const stopExecution = useCallback(() => {
-    if (remoteAbortRef.current) {
-      remoteAbortRef.current.abort();
-      remoteAbortRef.current = null;
-      setIsRunning(false);
-      setOutput(prev => prev + "\n--- Execution stopped ---\n");
+    const running = runningBackend.current ?? backend;
+    if (running.stop() === "stopping") {
+      // Cooperative cancellation keeps the worker's state; the run's onDone
+      // clears isRunning.
+      setOutput(prev => prev + "\n--- Cancelling execution... ---\n");
       return;
     }
-
-    if (persistWorkspace) {
-      // Persistent mode: cooperative cancellation (preserve worker state).
-      // The worker reports "done", which clears isRunning.
-      worker.cancel();
-      setOutput(prev => prev + "\n--- Cancelling execution... ---\n");
-    } else {
-      // Non-persistent mode: terminate and recreate
-      worker.restart();
-      activeExecutionMode.current = null;
-      workspaceStale.current = true;
-
-      setIsRunning(false);
-      setOutput(prev => prev + "\n--- Execution stopped ---\n");
-    }
-  }, [persistWorkspace, worker]);
+    // A replaced worker has lost its workspace files.
+    if (running === worker) workspaceStale.current = true;
+    setIsRunning(false);
+    setOutput(prev => prev + "\n--- Execution stopped ---\n");
+  }, [backend, worker]);
 
   const handleReplExecute = useCallback(
     async (command: string) => {
@@ -479,12 +369,25 @@ export function IDEWorkspace(props: IDEWorkspaceProps) {
           getSystemVfsFiles,
           getSystemWorkspaceFiles,
         });
-        worker.updateWorkspace(workspaceFiles, vfsFiles);
+        worker.client.updateWorkspace(workspaceFiles, vfsFiles);
         workspaceStale.current = false;
       }
 
-      activeExecutionMode.current = "repl";
-      worker.execute(command);
+      const term = () => replTerminalRef.current;
+      worker.execute(command, {
+        onOutput: text => term()?.writeOutput(text, false),
+        onPlotInstructions: instructions => {
+          for (const instr of instructions) handlePlotInstruction(instr);
+        },
+        onVfsChanges: changes => void handleVfsChanges(changes),
+        onResult: result => {
+          if (!result.success && result.error) {
+            term()?.writeOutput(result.error, true);
+          }
+          term()?.writePrompt();
+          setIsReplExecuting(false);
+        },
+      });
     },
     [
       isReplExecuting,
@@ -494,6 +397,8 @@ export function IDEWorkspace(props: IDEWorkspaceProps) {
       getSystemVfsFiles,
       getSystemWorkspaceFiles,
       worker,
+      handlePlotInstruction,
+      handleVfsChanges,
     ]
   );
 
@@ -543,7 +448,7 @@ export function IDEWorkspace(props: IDEWorkspaceProps) {
 
   const editor = (
     <EditorPanel
-      showRepl={!remote.enabled}
+      showRepl={backend.capabilities.repl}
       tab={editorTab}
       onTabChange={setEditorTab}
       script={
@@ -696,7 +601,7 @@ export function IDEWorkspace(props: IDEWorkspaceProps) {
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
         remote={remote}
-        onWasmBridgeChange={url => worker.setWasmBridge(url)}
+        onWasmBridgeChange={url => worker.client.setWasmBridge(url)}
       />
     </>
   );

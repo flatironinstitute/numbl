@@ -41,9 +41,20 @@ The CLI provides:
 - `--dump-js` — write JS-JIT-generated JavaScript to disk for inspection (`--opt 1`, plus the JS-JIT sections that pick up the slack at `--opt 2`).
 - `--dump-c` — write C-JIT-generated C to disk for inspection (`--opt 2`). At `--opt 2` both flags can be used together: C-JIT kernels land in the `--dump-c` file, JS-JIT fallbacks in the `--dump-js` file.
 - `--dump-ast` — print the parsed AST as JSON.
-- `--stream` — NDJSON output, suitable for programmatic consumers.
+- `--stream` — NDJSON output, suitable for programmatic consumers; see below.
 - `--path <dir>` and the `NUMBL_PATH` environment variable — add extra workspace directories to the search path.
 - `--plot` / `--plot-port` — enable the embedded plot server for figures.
+
+## Stream protocol
+
+With `--stream`, `run` and `eval` write one JSON message per line to stdout. The `StreamMessage` union and its `encodeStreamMessage` / `decodeStreamMessage` live in `src/streamProtocol.ts`, which the CLI, the execution server and the web app share. Every message carries `v` (currently 1) and a `type`:
+
+- `output` (`text`) and `drawnow` (`plotInstructions`) as the program runs;
+- `input_request` (`prompt`) when the program calls `input()`; the reply is read as one line from stdin;
+- `error`, one per diagnostic: `message`, `errorType`, `identifier`, `file`, `line`, `snippet`, `callStack`;
+- `done` (`success`, plus `generatedJS` / `generatedC`) as the last message.
+
+The process exits 0 after a successful run and 1 after an error, as without `--stream`. Version 1 only adds to the earlier unversioned format (which had no `v`, `success`, `identifier`, `callStack` or `input_request`, and exited 0 after errors), so the decoder accepts unversioned messages; it ignores messages of other versions or unknown types. The execution server relays the messages as server-sent events and appends `close` (`success`) once the process has exited.
 
 ## REPL specifics
 

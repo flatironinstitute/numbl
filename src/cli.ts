@@ -38,6 +38,7 @@ import { cmdBuildSite } from "./cli-build-site.js";
 import { cmdShowProfile, writeProfile } from "./cli-profile.js";
 
 import { executeCode } from "./numbl-core/executeCode.js";
+import { encodeStreamMessage, type StreamMessage } from "./streamProtocol.js";
 import { parseMFile } from "./numbl-core/parser/index.js";
 import { WorkspaceFile, NativeBridge } from "./numbl-core/workspace/types.js";
 import { scanMFiles } from "./cli-scan.js";
@@ -255,11 +256,11 @@ async function cmdEval(args: string[]) {
   );
 }
 
-/** NDJSON writer on stdout for --stream. */
-function ndjsonStdout(): (obj: Record<string, unknown>) => void {
+/** NDJSON writer on stdout for --stream (see streamProtocol.ts). */
+function ndjsonStdout(): (msg: StreamMessage) => void {
   // Force stdout to blocking mode so large writes (e.g. drawnow events
   // carrying megabytes of plot data) are fully flushed before
-  // process.exit(0). With the default non-blocking pipe behavior, exit can
+  // process.exit(). With the default non-blocking pipe behavior, exit can
   // drop the tail of a write, which the parent then sees as an unparseable
   // line and surfaces as raw output text.
   const stdoutHandle = (
@@ -268,8 +269,8 @@ function ndjsonStdout(): (obj: Record<string, unknown>) => void {
     }
   )._handle;
   stdoutHandle?.setBlocking?.(true);
-  return obj => {
-    process.stdout.write(JSON.stringify(obj) + "\n");
+  return msg => {
+    process.stdout.write(encodeStreamMessage(msg) + "\n");
   };
 }
 
@@ -309,9 +310,15 @@ async function executeWithOptions(
   const fileIO = new NodeFileIOAdapter();
   const system = new NodeSystemAdapter();
 
+  // --stream emits NDJSON on stdout; otherwise output goes to stdout and
+  // figures to the plot handler (a no-op unless --plot).
+  const stream = opts.stream ? ndjsonStdout() : undefined;
+
   /** Synchronous line reader for input() builtin. */
   const onInput = (prompt: string): string => {
-    process.stdout.write(prompt);
+    // In stream mode the prompt is a message, so stdout stays valid NDJSON.
+    if (stream) stream({ type: "input_request", prompt });
+    else process.stdout.write(prompt);
     const buf = Buffer.alloc(1);
     let line = "";
     while (true) {
@@ -388,9 +395,6 @@ async function executeWithOptions(
     process.stderr.write(`warning: JIT bailed to interpreter — ${message}\n`);
   };
 
-  // --stream emits NDJSON on stdout; otherwise output goes to stdout and
-  // figures to the plot handler (a no-op unless --plot).
-  const stream = opts.stream ? ndjsonStdout() : undefined;
   const plot = stream ? undefined : plotHandlerFor(opts);
   const log =
     opts.verbose && !stream
@@ -438,6 +442,7 @@ async function executeWithOptions(
       }
       stream({
         type: "done",
+        success: true,
         generatedJS: result.generatedJS || undefined,
         generatedC: result.generatedC || undefined,
       });
@@ -458,12 +463,15 @@ async function executeWithOptions(
           type: "error",
           message: diag.message,
           errorType: diag.errorType,
+          identifier: diag.identifier || undefined,
           file: diag.file,
           line: diag.line,
           snippet: diag.snippet,
+          callStack: diag.callStack ?? null,
         });
       }
-      process.exit(0);
+      stream({ type: "done", success: false });
+      process.exit(1);
     }
     const getSource = (file: string) =>
       getSourceForFile(file, mainFileName, code, workspaceFiles);

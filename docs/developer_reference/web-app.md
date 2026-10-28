@@ -13,11 +13,18 @@ A React + Vite single-page app that lets users write and run `.m` scripts in the
 A message-passing contract between the main thread and the worker (`src/numbl-worker.ts`), typed as discriminated unions in `src/numblWorkerProtocol.ts`:
 
 - main → worker: run a script (optionally after a hidden preamble, optionally sharing state with the REPL), execute a REPL command, set optimization level, update workspace files, clear state, forward a uihtml iframe event.
-- worker → main: output chunks, plot-draw events, input requests, uihtml events for an iframe, run completion (`done`) or one `error` per diagnostic, REPL completion (`result`), workspace (VFS) deltas.
+- worker → main: output chunks, plot-draw events, input requests, uihtml events for an iframe, run completion (`done`) or one `error` per diagnostic (the final one flagged `last`), REPL completion (`result`), workspace (VFS) deltas.
 
-The main-thread side lives in `NumblWorkerClient` (`src/numblWorkerClient.ts`): it owns the `Worker`, the input and cancellation `SharedArrayBuffer`s, the uihtml relay (`src/graphics/uihtmlRelay.ts`) and the dispatch of incoming messages to host callbacks. React hosts (the IDE, embed, embed REPL, figure page and plot gallery) use it through `useNumblWorker`, which starts the worker on mount and terminates it on unmount; the benchmark page uses the class directly, one worker per benchmark. `buildWorkerFiles` (`src/buildWorkerFiles.ts`) assembles the VFS and workspace files sent with a run. The embedding API (`src/browser/`) has its own worker and protocol.
+The main-thread side lives in `NumblWorkerClient` (`src/numblWorkerClient.ts`): it owns the `Worker`, the input and cancellation `SharedArrayBuffer`s, the uihtml relay (`src/graphics/uihtmlRelay.ts`) and the dispatch of incoming messages to host callbacks. React hosts (embed, embed REPL, figure page and plot gallery) use it through `useNumblWorker`, which starts the worker on mount and terminates it on unmount, and the IDE through its worker execution backend (below); the benchmark page uses the class directly, one worker per benchmark. `buildWorkerFiles` (`src/buildWorkerFiles.ts`) assembles the VFS and workspace files sent with a run. The embedding API (`src/browser/`) has its own worker and protocol.
 
-The worker is the only thing that ever calls `executeCode`. The main thread never runs numbl-core logic directly.
+The worker is the only thing that ever calls `executeCode`. The main thread never runs numbl-core logic directly; it imports only types and small pure helpers (the figures reducer, `formatDiagnostic`). The builtin names used for syntax highlighting and the landing page come from `src/builtinNames.gen.ts`, generated from the registry by `npm run gen:builtin-names` (CI and a unit test check that it is current).
+
+## Execution backends
+
+The IDE runs scripts through an `ExecutionBackend` (`src/execution/ExecutionBackend.ts`): `run(request, events)`, `stop()`, `sendInput(text)`, and a `capabilities` record. A run reports output, plot instructions, input requests, one `onError` per diagnostic and, last and exactly once, `onDone` with a status (`success`, `error` or `cancelled`). `useExecutionBackends` provides both implementations and picks the active one:
+
+- `WorkerExecutionBackend` wraps the IDE's `NumblWorkerClient`. It also runs REPL commands (`execute`), which share state with persistent runs. `stop()` cancels a persistent run cooperatively and otherwise replaces the worker.
+- `RemoteExecutionBackend` posts the project's text files to a numbl execution server (`numbl serve`, see [server.md](server.md)) and decodes the server-sent events with the `--stream` protocol (`src/streamProtocol.ts`, see [cli.md](cli.md#stream-protocol)). It has no REPL or persistent workspace, `input()` returns an empty value, and uihtml figures are not interactive.
 
 ## Virtual file system
 

@@ -5,8 +5,8 @@ An optional standalone HTTP service that runs numbl scripts on behalf of remote 
 ## Role
 
 - Accepts a request describing the files to run, the main script, and an optimization level.
-- Runs the script via the CLI as a child process in a temporary working directory.
-- Streams stdout back to the client.
+- Runs the script via `numbl run --stream` as a child process in a temporary working directory, with stdin closed (so `input()` returns an empty value).
+- Relays the CLI's stream messages (see [cli.md](cli.md#stream-protocol)) as server-sent events, with file paths made relative to the project, then appends a `close` message. The IDE consumes them through `RemoteExecutionBackend` ([web-app.md](web-app.md#execution-backends)).
 - Enforces per-request limits: concurrency, execution timeout, memory cap.
 - Gates access behind a shared-secret passkey header.
 

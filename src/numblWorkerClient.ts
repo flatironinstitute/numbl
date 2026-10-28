@@ -28,6 +28,9 @@ import type { VfsChanges } from "./vfs/VirtualFileSystem.js";
 
 export interface NumblWorkerHandlers {
   onOutput?(text: string): void;
+  /** The running code called input(). When set, the host must answer with
+   *  `respondToInput`; otherwise the client asks with window.prompt. */
+  onInputRequest?(prompt: string): void;
   /** Instructions from drawnow and those returned with done/result. */
   onPlotInstructions?(instructions: PlotInstruction[]): void;
   onPreambleDone?(): void;
@@ -170,6 +173,11 @@ export class NumblWorkerClient {
     this.post({ type: "clear" });
   }
 
+  /** Answer the pending input() request. */
+  respondToInput(text: string): void {
+    if (this.inputSAB) mainThreadRespond(this.inputSAB, text);
+  }
+
   sendUihtmlEvent(ev: UihtmlPageEvent): void {
     this.post({ type: "html_event", ...ev });
   }
@@ -181,11 +189,10 @@ export class NumblWorkerClient {
   private handleMessage(msg: FromNumblWorker): void {
     const h = this.handlers;
     switch (msg.type) {
-      case "request-input": {
-        const response = prompt(msg.prompt ?? "") ?? "";
-        if (this.inputSAB) mainThreadRespond(this.inputSAB, response);
+      case "request-input":
+        if (h.onInputRequest) h.onInputRequest(msg.prompt ?? "");
+        else this.respondToInput(prompt(msg.prompt ?? "") ?? "");
         return;
-      }
       case "output":
         h.onOutput?.(msg.text);
         return;
@@ -201,19 +208,20 @@ export class NumblWorkerClient {
       case "preamble_error":
         h.onPreambleError?.(msg);
         return;
+      // File changes are reported before the completion callback.
       case "done":
         this.plot(h, msg.plotInstructions);
-        h.onDone?.(msg);
         this.vfsChanges(h, msg.vfsChanges);
+        h.onDone?.(msg);
         return;
       case "error":
-        h.onError?.(msg);
         this.vfsChanges(h, msg.vfsChanges);
+        h.onError?.(msg);
         return;
       case "result":
         if (msg.success) this.plot(h, msg.plotInstructions);
-        h.onResult?.(msg);
         this.vfsChanges(h, msg.vfsChanges);
+        h.onResult?.(msg);
         return;
       case "cleared":
         return;

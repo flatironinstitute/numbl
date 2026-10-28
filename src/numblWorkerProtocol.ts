@@ -63,6 +63,8 @@ export type ToNumblWorker =
 export interface WorkerDiagnostic {
   message: string;
   errorType: "syntax" | "runtime" | "unknown";
+  /** MATLAB error identifier, if any. */
+  identifier?: string;
   file: string | null;
   line: number | null;
   snippet: string | null;
@@ -93,9 +95,11 @@ export interface DoneMessage {
   vfsChanges?: VfsChanges;
 }
 
-/** One per diagnostic, so a failed run can post several. */
+/** One per diagnostic, so a failed run can post several; `last` marks the
+ *  final one, which alone carries the run's VFS changes. */
 export interface ErrorMessage extends WorkerDiagnostic {
   type: "error";
+  last: boolean;
   generatedJS: string | undefined;
   workspaceRep: WorkspaceRep;
   vfsChanges?: VfsChanges;

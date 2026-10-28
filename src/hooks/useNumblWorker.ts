@@ -22,16 +22,22 @@ export function useNumblWorker(
 ): NumblWorkerClient {
   const [client] = useState(() => new NumblWorkerClient({}, options));
   useEffect(() => client.setHandlers(handlers));
+  useWorkerLifecycle(client, options.optimization);
+  return client;
+}
 
+/** Start `client` on mount, terminate it on unmount, and keep its default
+ *  optimization level in sync. */
+export function useWorkerLifecycle(
+  client: NumblWorkerClient,
+  optimization: OptLevel | undefined
+): void {
   useEffect(() => {
     client.start();
     return () => client.terminate();
   }, [client]);
 
-  const { optimization } = options;
   useEffect(() => {
     if (optimization) client.setOptimization(optimization);
   }, [client, optimization]);
-
-  return client;
 }
