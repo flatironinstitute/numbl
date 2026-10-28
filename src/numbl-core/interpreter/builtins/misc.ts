@@ -17,7 +17,7 @@ import type { RuntimeValue, RuntimeStruct } from "../../runtime/types.js";
 import { RTV, RuntimeError } from "../../runtime/index.js";
 import { toNumber } from "../../runtime/convert.js";
 import { toString } from "../../runtime/convert.js";
-import { registerIBuiltin, getIBuiltin } from "./types.js";
+import { registerIBuiltin, getIBuiltinNargin } from "./types.js";
 import { tryDatetimeDurationBinop } from "./datetime.js";
 import { tryDecompositionDivide } from "./sparse-solvers.js";
 import {
@@ -329,17 +329,9 @@ registerIBuiltin({
         if (args.length === 1 && isRuntimeFunction(args[0])) {
           const handle = args[0];
           if (handle.nargin !== undefined) return handle.nargin;
-          // Infer nargin for IBuiltins by probing resolve with 1..N unknown args
           if (handle.impl === "builtin" && handle.name) {
-            const ib = getIBuiltin(handle.name);
-            if (ib) {
-              for (let n = 1; n <= 10; n++) {
-                const testArgs = Array.from({ length: n }, () => ({
-                  kind: "number" as const,
-                }));
-                if (ib.resolve(testArgs, 1)) return n;
-              }
-            }
+            const n = getIBuiltinNargin(handle.name);
+            if (n !== undefined) return n;
           }
           return 0;
         }

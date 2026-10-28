@@ -34,6 +34,12 @@ import { requireRealOrComplex } from "../_shared.js";
 function requireVectorInput(a: Type): NumericType {
   requireRealOrComplex(a, "'sort' arg 1");
   const aN = a as NumericType;
+  if (aN.elem === "logical") {
+    // The runtime helpers return a double tensor; MATLAB keeps logical.
+    throw new UnsupportedConstruct(
+      `'sort' on a logical input is not supported`
+    );
+  }
   if (!isMultiElement(aN)) {
     throw new UnsupportedConstruct(
       `'sort' on a scalar is a no-op; pass a 1-D vector (1×N or N×1)`
