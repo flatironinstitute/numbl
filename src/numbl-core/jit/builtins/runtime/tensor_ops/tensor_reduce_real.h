@@ -55,8 +55,7 @@ static void jit__squeeze_trailing(int *ndim, long *dims) {
                                                                               \
   static jit_tensor_t jit_##name##_dim(jit_tensor_t a, int dim) {             \
     if (dim < 1) {                                                            \
-      jit_raise_bailf(#name "_dim: dim must be >= 1 (got %d)",    \
-              dim);                                                                \
+      jit_raise_bad_dim();                                                                \
     }                                                                         \
     if (dim > a.ndim) {                                                       \
       /* No-op axis: output is same shape/data as input (fresh copy). */      \
@@ -117,8 +116,7 @@ static void jit__squeeze_trailing(int *ndim, long *dims) {
                                                                               \
   static jit_tensor_t jit_##name##_dim(jit_tensor_t a, int dim) {             \
     if (dim < 1) {                                                            \
-      jit_raise_bailf(#name "_dim: dim must be >= 1 (got %d)",    \
-              dim);                                                                \
+      jit_raise_bad_dim();                                                                \
     }                                                                         \
     if (dim > a.ndim) {                                                       \
       long total = 1;                                                         \
@@ -180,8 +178,7 @@ static void jit__squeeze_trailing(int *ndim, long *dims) {
                                                                               \
   static jit_tensor_t jit_##name##_dim(jit_tensor_t a, int dim) {             \
     if (dim < 1) {                                                            \
-      jit_raise_bailf(#name "_dim: dim must be >= 1 (got %d)",    \
-              dim);                                                                \
+      jit_raise_bad_dim();                                                                \
     }                                                                         \
     if (dim > a.ndim) {                                                       \
       /* Numbl's `logicalAlongDim` with `dim > ndims` does an elementwise   \

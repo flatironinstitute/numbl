@@ -364,5 +364,13 @@ export function lowerSliceArg(
       arg.step?.span ?? arg.span
     );
   }
+  // With an integer step, an integer start keeps every index integral, so
+  // checking the range's first and last values validates them all.
+  if (!Number.isInteger(step.value)) {
+    throw new UnsupportedConstruct(
+      `range step in an index expression must be an integer`,
+      arg.step?.span ?? arg.span
+    );
+  }
   return { kind: "Range", start, step, end, span: arg.span };
 }

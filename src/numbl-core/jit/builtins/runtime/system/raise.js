@@ -31,6 +31,14 @@ export function jit_raise_error_deferred() {
   throw new JitRaise("error", "", null);
 }
 
+/** An invalid dimension argument (`sum(x, 0)`). */
+export function jit_raise_bad_dim() {
+  jit_raise_error(
+    "MATLAB:getdimarg:invalidDim",
+    "Dimension argument must be a positive integer scalar, a vector of unique positive integers, or 'all'."
+  );
+}
+
 /** A read of a local that may be unassigned: the interpreter raises its
  *  undefined-variable error. */
 export function jit_bound(v) {

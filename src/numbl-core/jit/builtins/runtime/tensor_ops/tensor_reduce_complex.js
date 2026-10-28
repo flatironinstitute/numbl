@@ -4,7 +4,7 @@
 
 import { jit_tensor_alloc_nd } from "../tensor/tensor_alloc_nd.js";
 import { jit_tensor_alloc_nd_complex } from "../tensor/tensor_alloc_nd_complex.js";
-import { jit_raise_bail } from "../system/raise.js";
+import { jit_raise_bad_dim } from "../system/raise.js";
 
 function cSqueezeTrailing(dims) {
   while (dims.length > 2 && dims[dims.length - 1] === 1) dims.pop();
@@ -36,7 +36,7 @@ function complexAccumAll(t, init, accum, finalize) {
 }
 
 function complexAccumDim(t, dim, init, accum, finalize) {
-  if (dim < 1) jit_raise_bail(`reducer _dim: dim must be >= 1 (got ${dim})`);
+  if (dim < 1) jit_raise_bad_dim();
   if (dim > t.shape.length) {
     // No-op axis: return a fresh complex copy.
     const out = jit_tensor_alloc_nd_complex(t.shape.length, t.shape.slice());
@@ -130,7 +130,7 @@ function complexBetter(aRe, aIm, bRe, bIm, cmp) {
 }
 
 function complexMinmaxDim(t, dim, cmp) {
-  if (dim < 1) jit_raise_bail(`reducer _dim: dim must be >= 1 (got ${dim})`);
+  if (dim < 1) jit_raise_bad_dim();
   if (dim > t.shape.length) {
     const out = jit_tensor_alloc_nd_complex(t.shape.length, t.shape.slice());
     out.data.set(t.data);
@@ -196,7 +196,7 @@ function complexLogicalAll(t, emptyResult, shortPredicate) {
 }
 
 function complexLogicalDim(t, dim, emptyResult, shortPredicate) {
-  if (dim < 1) jit_raise_bail(`reducer _dim: dim must be >= 1 (got ${dim})`);
+  if (dim < 1) jit_raise_bad_dim();
   if (dim > t.shape.length) {
     const out = jit_tensor_alloc_nd(t.shape.length, t.shape.slice());
     for (let i = 0; i < t.data.length; i++) {

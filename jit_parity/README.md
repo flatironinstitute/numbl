@@ -85,7 +85,9 @@ the diagnosis and the divergence observed at discovery time.
   location and call stack on stderr) and inside `try` (`ME.message`,
   `ME.identifier`, `ME.stack`): out-of-bounds reads, shape mismatches,
   `error`/`assert` forms, errors in callees and recursive functions, while
-  conditions, and a unit that errors for some calls and succeeds for others.
+  conditions, indexing and indexed-store errors in the interpreter's
+  index-planner wording, and a unit that errors for some calls and succeeds
+  for others.
   These found two concatenation bugs (a cell height inferred from its row
   skipped the runtime check), a JS-JIT `%g` of `-0`, and use-before-assign /
   recursive-output shapes the JS-JIT only survived through its old catch-all.

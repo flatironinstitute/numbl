@@ -36,7 +36,7 @@ static double jit_signum(double x) {
  * result for x < 0. NaN passes through as NaN. */
 static double jit_realsqrt(double x) {
   if (x < 0) {
-    jit_raise_error("", "Realsqrt produced complex result.");
+    jit_raise_error("MATLAB:realsqrt:complexResult", "Realsqrt produced complex result.");
   }
   return sqrt(x);
 }

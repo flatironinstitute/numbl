@@ -10,11 +10,11 @@
 
 import { jit_tensor_alloc_nd } from "../tensor/tensor_alloc_nd.js";
 import { jit_tensor_alloc_nd_complex } from "../tensor/tensor_alloc_nd_complex.js";
-import { jit_raise_bail } from "../system/raise.js";
+import { jit_raise_bad_dim } from "../system/raise.js";
 
 function cumScan(t, dim, init, op) {
   if (dim < 1) {
-    jit_raise_bail(`cumulative _dim: dim must be >= 1 (got ${dim})`);
+    jit_raise_bad_dim();
   }
   const shape = t.shape;
   const out = jit_tensor_alloc_nd(shape.length, shape.slice());
@@ -44,7 +44,7 @@ function cumScan(t, dim, init, op) {
 
 function cumScanComplex(t, dim, initRe, initIm, op) {
   if (dim < 1) {
-    jit_raise_bail(`cumulative_complex _dim: dim must be >= 1 (got ${dim})`);
+    jit_raise_bad_dim();
   }
   const shape = t.shape;
   const out = jit_tensor_alloc_nd_complex(shape.length, shape.slice());

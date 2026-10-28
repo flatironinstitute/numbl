@@ -312,28 +312,36 @@ function emitLinearLogicalMaskSetup(
   };
 }
 
-/** Emit a "lhs/rhs element count mismatch" runtime check for a tensor
- *  RHS in a slice store. Assumes `_jit_n` is already declared as the
- *  lhs slice element count. On a mismatch the interpreter grows an empty
- *  base (`A = []; A(:, 1) = v`), so that bails; otherwise it is the
- *  interpreter's "Subscripted assignment dimension mismatch". */
+/** Emit the RHS size check of a slice store with a tensor RHS, mirroring
+ *  the interpreter's `planStore` (runtime/indexPlan.ts). Assumes `_jit_n`
+ *  holds the selection's element count. A linear store needs equal element
+ *  counts. A subscripted store (`counts`: its per-slot extents) needs equal
+ *  non-singleton dimensions; on a mismatch the interpreter either grows an
+ *  empty base (`A = []; A(:, 1) = v`), which bails, or words a size error,
+ *  which it raises on the re-run. */
 function emitTensorRhsSizeCheck(
   rhs: Extract<IRExpr, { kind: "Var" }>,
   baseCName: string,
   baseTy: Type,
+  counts: readonly string[] | null,
   lines: string[],
-  indent: string
+  indent: string,
+  state: RuntimeState
 ): void {
+  if (counts === null) {
+    lines.push(
+      `${indent}if (_jit_n != ${dimsProductExpr(rhs.cName, rhs.ty)}) jit_raise_error("", "Unable to perform assignment because the left and right sides have a different number of elements.");`
+    );
+    return;
+  }
+  useRuntimeByName(state, "jit_oob_abort");
   lines.push(
-    `${indent}long _jit_rhs_n = ${dimsProductExpr(rhs.cName, rhs.ty)};`
+    `${indent}if (!jit_store_shape_ok(${counts.length}, (long[]){${counts.join(", ")}}, &${rhs.cName})) {`
   );
-  lines.push(`${indent}if (_jit_n != _jit_rhs_n) {`);
   lines.push(
     `${indent}  if (${dimsProductExpr(baseCName, baseTy)} == 0) jit_raise_bail("slice store into an empty array");`
   );
-  lines.push(
-    `${indent}  jit_raise_error("", "Subscripted assignment dimension mismatch");`
-  );
+  lines.push(`${indent}  jit_raise_error_deferred();`);
   lines.push(`${indent}}`);
 }
 
@@ -632,7 +640,15 @@ export function emitIndexSliceStore(
           `emit internal: IndexSliceStore tensor RHS must be a Var (got ${s.rhs.kind})`
         );
       }
-      emitTensorRhsSizeCheck(s.rhs, baseCName, slotTy, lines, `${indent}  `);
+      emitTensorRhsSizeCheck(
+        s.rhs,
+        baseCName,
+        slotTy,
+        null,
+        lines,
+        `${indent}  `,
+        state
+      );
       lines.push(
         `${indent}  for (long _jit_k = 0; _jit_k < _jit_n; _jit_k++) {`
       );
@@ -686,7 +702,15 @@ export function emitIndexSliceStore(
         `emit internal: IndexSliceStore tensor RHS must be a Var (got ${s.rhs.kind})`
       );
     }
-    emitTensorRhsSizeCheck(s.rhs, baseCName, slotTy, lines, `${indent}  `);
+    emitTensorRhsSizeCheck(
+      s.rhs,
+      baseCName,
+      slotTy,
+      totalParts,
+      lines,
+      `${indent}  `,
+      state
+    );
   }
 
   for (let i = ndim - 1; i >= 0; i--) {

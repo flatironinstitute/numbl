@@ -444,7 +444,7 @@ function emitIndexSliceStoreJs(
   indent: string,
   state: RuntimeState
 ): string {
-  // Bounds and size-mismatch helpers (`jit_slice_store_mismatch`).
+  // Bounds and size-mismatch helpers (`scalar_index.js`).
   useRuntimeByName(state, "jit_scalar_index");
   // Same member-rooted slot-path treatment as the scalar IndexStore.
   const baseName =
@@ -502,7 +502,7 @@ function emitIndexSliceStoreJs(
         `const _jit_n = ${baseName}.data.length; ` +
         (rhsIsScalar
           ? ``
-          : `if (_jit_rhs.data.length !== _jit_n) jit_slice_store_mismatch(${baseName}); `) +
+          : `if (_jit_rhs.data.length !== _jit_n) jit_numel_mismatch(); `) +
         `for (let _jit_k = 0; _jit_k < _jit_n; _jit_k++) { ` +
         `${writeAt("_jit_k", "_jit_k")} ` +
         `} ` +
@@ -521,7 +521,7 @@ function emitIndexSliceStoreJs(
       // instead of silently truncating.
       const lenCheck = rhsIsScalar
         ? ``
-        : `if (_jit_rhs.data.length !== _jit_n) jit_slice_store_mismatch(${baseName}); `;
+        : `if (_jit_rhs.data.length !== _jit_n) jit_numel_mismatch(); `;
       // Each target offset goes through the grow-aware checker: a sub-1
       // index errors, and an index past the end grow-bails to the
       // interpreter (which has full grow semantics) — matching the
@@ -550,7 +550,7 @@ function emitIndexSliceStoreJs(
       // the RHS end → silent NaN/truncation.
       const lenCheck = rhsIsScalar
         ? ``
-        : `if (_jit_rhs.data.length !== _jit_n) jit_slice_store_mismatch(${baseName}); `;
+        : `if (_jit_rhs.data.length !== _jit_n) jit_numel_mismatch(); `;
       return (
         `${indent}{ ` +
         `const _jit_rhs = ${rhsExpr}; ` +
@@ -577,7 +577,7 @@ function emitIndexSliceStoreJs(
       // ignores trailing RHS elements (long RHS → silent truncation).
       const lenCheck = rhsIsScalar
         ? ``
-        : `if (_jit_rhs.data.length !== _jit_n) jit_slice_store_mismatch(${baseName}); `;
+        : `if (_jit_rhs.data.length !== _jit_n) jit_numel_mismatch(); `;
       return (
         `${indent}{ ` +
         `const _jit_rhs = ${rhsExpr}; ` +
@@ -671,13 +671,12 @@ function emitIndexSliceStoreJs(
   }
   const lines: string[] = [`${indent}{`];
   for (const ln of setup) lines.push(`${indent}  ${ln}`);
-  // Tensor RHS: enforce that the source has exactly slot-product
-  // elements so a size-mismatched assignment throws instead of
+  // Tensor RHS: its non-singleton dimensions must match the selection's
+  // (the interpreter's rule), so a mismatched assignment raises instead of
   // silently truncating or padding.
   if (!rhsIsScalar) {
-    const slotProduct = dims.join(" * ");
     lines.push(
-      `${indent}  { const _jit_total = ${slotProduct}; if (_jit_rhs.data.length !== _jit_total) jit_slice_store_mismatch(${baseName}); }`
+      `${indent}  jit_store_shape_check(${baseName}, [${dims.join(", ")}], _jit_rhs);`
     );
   }
   for (let i = ndim - 1; i >= 0; i--) {
@@ -1029,6 +1028,8 @@ function emitIndexSliceJs(
   e: Extract<IRExpr, { kind: "IndexSlice" }>,
   state: RuntimeState
 ): string {
+  // Index conversion and error helpers (`scalar_index.js`).
+  useRuntimeByName(state, "jit_scalar_index");
   if (e.base.kind !== "Var") {
     throw new Error(
       `emitJs internal: IndexSlice base must be a Var after ANF (got ${e.base.kind})`
@@ -1078,9 +1079,9 @@ function emitIndexSliceJs(
         off =
           `(() => { const _jit_s = ${s}, _jit_e = ${en}, _jit_st = ${st}; ` +
           `const _jit_n = jit_loop_count(_jit_s, _jit_e, _jit_st); ` +
-          `const _jit_idx = Math.round(jit_range_value(_jit_s, _jit_st, _jit_e, _jit_n, 0)); ` +
+          `const _jit_idx = jit_to_index(jit_range_value(_jit_s, _jit_st, _jit_e, _jit_n, 0)); ` +
           `const _jit_len = ${baseName}.data.length; ` +
-          `if (_jit_idx < 1 || _jit_idx > _jit_len) jit_raise_error("", "Index exceeds array bounds"); ` +
+          `if (_jit_idx < 1 || _jit_idx > _jit_len) jit_index_error(0, _jit_idx, _jit_len); ` +
           `return _jit_idx - 1; })()`;
       } else if (slot.kind === "IndexVec") {
         useRuntimeByName(state, "jit_scalar_index");
@@ -1132,8 +1133,8 @@ function emitIndexSliceJs(
         `const _jit_len = ${baseName}.data.length; ` +
         `for (let _jit_k = 0; _jit_k < _jit_n; _jit_k++) { ` +
         `const _jit_v = jit_range_value(_jit_s, _jit_st, _jit_e, _jit_n, _jit_k); ` +
-        `const _jit_idx = Math.round(_jit_v); ` +
-        `if (_jit_idx < 1 || _jit_idx > _jit_len) jit_raise_error("", "Index exceeds array bounds"); ` +
+        `const _jit_idx = jit_to_index(_jit_v); ` +
+        `if (_jit_idx < 1 || _jit_idx > _jit_len) jit_index_error(0, _jit_idx, _jit_len); ` +
         `${copy("_jit_k", "_jit_idx - 1")} ` +
         `} ` +
         `return _jit_t; ` +
@@ -1183,7 +1184,7 @@ function emitIndexSliceJs(
         `if (_jit_md[_jit_mi] !== 0) { ` +
         // A truthy mask bit past the base end is an error in MATLAB (the C
         // path raises too); without this the gather reads OOB -> NaN.
-        `if (_jit_mi >= _jit_blen) jit_raise_error("", "Index exceeds array bounds"); ` +
+        `if (_jit_mi >= _jit_blen) jit_mask_oob(0); ` +
         `_jit_ix.push(_jit_mi); } ` +
         `const _jit_n = _jit_ix.length; ` +
         `const _jit_t = ${allocFn}(2, [${rows}, ${cols}]); ` +
@@ -1284,10 +1285,10 @@ function emitIndexSliceJs(
     for (const s of setup) slines.push(s);
     for (let i = 0; i < ndim; i++) slines.push(`const _jit_k_${i} = 0;`);
     for (let i = 0; i < ndim; i++) {
-      slines.push(`const _jit_idx_${i} = Math.round(${idxFns[i]});`);
+      slines.push(`const _jit_idx_${i} = jit_to_index(${idxFns[i]});`);
       slines.push(
         `if (_jit_idx_${i} < 1 || _jit_idx_${i} > (${baseName}.shape[${i}] ?? 1)) ` +
-          `jit_raise_error("", "Index exceeds array bounds");`
+          `jit_index_error(${i + 1}, _jit_idx_${i}, ${baseName}.shape[${i}] ?? 1);`
       );
     }
     const srcTerms: string[] = [];
@@ -1337,10 +1338,10 @@ function emitIndexSliceJs(
   // NaN. Colon slots are always in range; the check is cheap and
   // uniform across slot kinds (Range / Scalar / IndexVec / mask).
   for (let i = 0; i < ndim; i++) {
-    lines.push(`const _jit_idx_${i} = Math.round(${idxFns[i]});`);
+    lines.push(`const _jit_idx_${i} = jit_to_index(${idxFns[i]});`);
     lines.push(
       `if (_jit_idx_${i} < 1 || _jit_idx_${i} > (${baseName}.shape[${i}] ?? 1)) ` +
-        `jit_raise_error("", "Index exceeds array bounds");`
+        `jit_index_error(${i + 1}, _jit_idx_${i}, ${baseName}.shape[${i}] ?? 1);`
     );
   }
   // Column-major source offset: sum_i (idx[i] - 1) * stride[i] where

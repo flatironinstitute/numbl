@@ -26,7 +26,11 @@ function matlabRound(x) {
 // realsqrt(x): MATLAB raises an error rather than returning a complex
 // result for x < 0. NaN passes through as NaN.
 export function jit_realsqrt(x) {
-  if (x < 0) jit_raise_error("", "Realsqrt produced complex result.");
+  if (x < 0)
+    jit_raise_error(
+      "MATLAB:realsqrt:complexResult",
+      "Realsqrt produced complex result."
+    );
   return Math.sqrt(x);
 }
 

@@ -8,7 +8,7 @@
 // then trailing singletons stripped subject to a 2-axis floor.
 
 import { jit_tensor_alloc_nd } from "../tensor/tensor_alloc_nd.js";
-import { jit_raise_bail } from "../system/raise.js";
+import { jit_raise_bad_dim } from "../system/raise.js";
 
 function squeeze_trailing(dims) {
   while (dims.length > 2 && dims[dims.length - 1] === 1) dims.pop();
@@ -32,7 +32,7 @@ function prod_all_seq(x) {
 
 function accum_dim(t, dim, isProd, isMean) {
   if (dim < 1) {
-    jit_raise_bail(`reducer _dim: dim must be >= 1 (got ${dim})`);
+    jit_raise_bad_dim();
   }
   if (dim > t.shape.length) {
     // Reducing along a trailing singleton axis is the identity: every
@@ -106,7 +106,7 @@ function minmax_all(t, op /* "min" | "max" */) {
 }
 
 function minmax_dim(t, dim, op) {
-  if (dim < 1) jit_raise_bail(`reducer _dim: dim must be >= 1 (got ${dim})`);
+  if (dim < 1) jit_raise_bad_dim();
   if (dim > t.shape.length) {
     const out = jit_tensor_alloc_nd(t.shape.length, t.shape.slice());
     out.data.set(t.data);
@@ -152,7 +152,7 @@ function logical_all(t, emptyResult, shortPredicate) {
 }
 
 function logical_dim(t, dim, emptyResult, shortPredicate) {
-  if (dim < 1) jit_raise_bail(`reducer _dim: dim must be >= 1 (got ${dim})`);
+  if (dim < 1) jit_raise_bad_dim();
   if (dim > t.shape.length) {
     // No-op axis: emit a logical cast of the input (each element →
     // 1 if nonzero, 0 otherwise).

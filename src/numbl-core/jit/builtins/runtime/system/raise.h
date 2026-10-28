@@ -226,6 +226,13 @@ static void jit__fmt_shape(char *out, size_t cap, int ndim, const long *dims) {
   if (k < cap) snprintf(out + k, cap - k, "]");
 }
 
+/* An invalid dimension argument (`sum(x, 0)`). */
+static void jit_raise_bad_dim(void) __attribute__((noreturn, cold));
+static void jit_raise_bad_dim(void) {
+  jit_raise_error("MATLAB:getdimarg:invalidDim",
+                  "Dimension argument must be a positive integer scalar, a vector of unique positive integers, or 'all'.");
+}
+
 /* "<what>: [a] vs [b]", the interpreter's operand-shape mismatch error. */
 static void jit_raise_dims_mismatch(const char *what, int andim,
                                     const long *adims, int bndim,
