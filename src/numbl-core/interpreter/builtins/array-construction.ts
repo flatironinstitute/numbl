@@ -1,21 +1,34 @@
 /**
- * Array construction builtins: zeros, ones, nan/NaN, eye, linspace, logspace.
+ * Array construction builtins: zeros, ones, nan/NaN, inf/Inf, eye,
+ * linspace, logspace.
  */
 
-import { isRuntimeChar, isRuntimeString } from "../../runtime/types.js";
+import {
+  isRuntimeCell,
+  isRuntimeChar,
+  isRuntimeComplexNumber,
+  isRuntimeFunction,
+  isRuntimeSparseMatrix,
+  isRuntimeString,
+  isRuntimeStruct,
+  isRuntimeTensor,
+} from "../../runtime/types.js";
 import type { RuntimeValue } from "../../runtime/types.js";
-import { toNumber, toString, numel } from "../../runtime/index.js";
-import type { JitType, SignCategory } from "../../jitTypes.js";
-import { defineBuiltin, type BuiltinCase, makeTensor } from "./types.js";
+import { toString, numel } from "../../runtime/index.js";
+import type { JitType } from "../../jitTypes.js";
+import { makeTensor, mkc } from "./types.js";
+import { builtin } from "./builtin.js";
+import { builtinError, numericArg } from "./args.js";
 import { allocFloat64Array } from "../../runtime/alloc.js";
 import { parseShapeArgs, validateDim } from "../../helpers/shape-utils.js";
+import { sparseToDense } from "../../helpers/sparse-arithmetic.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
 // MATLAB's size constructors (zeros, ones, eye, rand, …) accept a trailing
 // class-name string — `zeros(2,3,'int32')` — and the `'like'` prototype form
 // — `zeros(sz,'like',p)`. numbl only has the double type, so we accept and
-// silently ignore the class spec rather than erroring on the extra arg.
+// ignore the class spec rather than erroring on the extra arg.
 
 function isClassNameType(t: JitType): boolean {
   return t.kind === "char" || t.kind === "string";
@@ -52,289 +65,284 @@ export function stripClassNameArgs(args: RuntimeValue[]): RuntimeValue[] {
   return args;
 }
 
-/** Build cases for array constructors that take shape args and return a real tensor. */
-function arrayConstructorCases(
-  fillFn: (shape: number[]) => RuntimeValue,
-  scalarValue: RuntimeValue,
-  opts?: { scalarSign?: SignCategory; nonneg?: boolean }
-): BuiltinCase[] {
-  const cases: BuiltinCase[] = [
-    // No args: return scalar
-    {
-      match: argTypes => {
-        if (argTypes.length !== 0) return null;
-        return [
-          {
-            kind: "number" as const,
-            ...(opts?.scalarSign ? { sign: opts.scalarSign } : {}),
-          },
-        ];
-      },
-      apply: () => scalarValue,
-    },
-    // Single arg: number/boolean → n×n, tensor → shape from tensor
-    {
-      match: argTypes => {
-        if (argTypes.length !== 1) return null;
-        const a = argTypes[0];
-        if (
-          a.kind === "number" ||
-          a.kind === "boolean" ||
-          a.kind === "tensor"
-        ) {
-          // Propagate literal `exact` to the n×n static shape when known.
-          const n =
-            a.kind === "number" && typeof a.exact === "number" ? a.exact : -1;
-          return [
-            {
-              kind: "tensor" as const,
-              isComplex: false,
-              shape: [n, n],
-              ...(opts?.nonneg ? { nonneg: true } : {}),
-            },
-          ];
-        }
-        return null;
-      },
-      apply: args => {
-        const shape = parseShapeArgs(args);
-        if (shape.length === 1) shape.push(shape[0]);
-        return fillFn(shape);
-      },
-    },
-    // Multiple scalar args. A 1×1 array counts as a scalar dimension, so
-    // accept `tensor` here too (apply-time validates each is scalar).
-    {
-      match: argTypes => {
-        if (argTypes.length <= 1) return null;
-        for (const a of argTypes) {
-          if (
-            a.kind !== "number" &&
-            a.kind !== "boolean" &&
-            a.kind !== "tensor"
-          )
-            return null;
-        }
-        // Propagate literal `exact` per-dim so e.g. zeros(2, 3) gets
-        // [2, 3] instead of [-1, -1].
-        const shape = argTypes.map(a =>
-          a.kind === "number" && typeof a.exact === "number" ? a.exact : -1
+const isText = (v: RuntimeValue) => isRuntimeChar(v) || isRuntimeString(v);
+
+const ALL_NUMERIC_CLASSES = [
+  "double",
+  "single",
+  "logical",
+  "int8",
+  "int16",
+  "int32",
+  "int64",
+  "uint8",
+  "uint16",
+  "uint32",
+  "uint64",
+];
+const FLOAT_CLASSES = ["double", "single"];
+
+interface SizeCtorSpec {
+  /** MATLAB's spelling in error identifiers (zeros, ones, eye, NaN, Inf). */
+  idName: string;
+  /** Class names accepted (and ignored) after the size arguments. */
+  classes: string[];
+}
+
+/** Split a size constructor's arguments into the size arguments, checking
+ *  a trailing class name or `'like', prototype` pair the way MATLAB does.
+ *  The class itself is ignored (numbl only has doubles). Each size
+ *  argument must be real numeric. */
+function sizeCtorArgs(
+  args: RuntimeValue[],
+  spec: SizeCtorSpec
+): RuntimeValue[] {
+  const { idName } = spec;
+  const upper = idName.toUpperCase();
+  const badClass = () =>
+    idName === "NaN" || idName === "Inf"
+      ? builtinError(
+          `MATLAB:${idName}:invalidClassName`,
+          `Class name must be a class that supports ${upper}, such as "double" or "single".`
+        )
+      : builtinError(
+          `MATLAB:${idName}:invalidStringInput`,
+          idName === "eye"
+            ? `Class name must be a class that supports ${upper}, such as "single" or "double".`
+            : `Class name must be a class that supports ${upper}, such as "double" or "single".`
         );
-        return [
-          {
-            kind: "tensor" as const,
-            isComplex: false,
-            shape,
-            ...(opts?.nonneg ? { nonneg: true } : {}),
-          },
-        ];
-      },
-      apply: args => {
-        const shape = parseShapeArgs(args);
-        return fillFn(shape);
-      },
-    },
-  ];
-  // Accept (and ignore) a trailing class-name spec on every case.
-  return cases.map(c => ({
-    match: (argTypes: JitType[], nargout: number) =>
-      c.match(stripClassNameTypes(argTypes), nargout),
-    apply: (args: RuntimeValue[], nargout: number) =>
-      c.apply(stripClassNameArgs(args), nargout),
-  }));
+  let n = args.length;
+  if (
+    n >= 2 &&
+    isText(args[n - 2]) &&
+    toString(args[n - 2]).toLowerCase() === "like"
+  ) {
+    const proto = args[n - 1];
+    if (
+      isRuntimeCell(proto) ||
+      isRuntimeStruct(proto) ||
+      isRuntimeFunction(proto) ||
+      isText(proto)
+    )
+      throw builtinError(
+        `MATLAB:${idName}:invalidInputClass`,
+        `Argument following "like" must be a variable with a data type that supports ${upper}, such as a double or single variable.`
+      );
+    n -= 2;
+  } else if (n >= 1 && isText(args[n - 1])) {
+    if (!spec.classes.includes(toString(args[n - 1]))) throw badClass();
+    n -= 1;
+  }
+  const sizeArgs = args.slice(0, n);
+  for (const a of sizeArgs) {
+    if (
+      typeof a === "number" ||
+      typeof a === "boolean" ||
+      isRuntimeTensor(a) ||
+      isRuntimeSparseMatrix(a)
+    ) {
+      if (isRuntimeTensor(a) && a.imag)
+        throw builtinError(
+          "MATLAB:obsoleteComplexInput",
+          "Size inputs must be real."
+        );
+      continue;
+    }
+    if (isRuntimeComplexNumber(a))
+      throw builtinError(
+        "MATLAB:obsoleteComplexInput",
+        "Size inputs must be real."
+      );
+    throw builtinError(
+      `MATLAB:${idName}:invalidNumericInput`,
+      "Size inputs must be numeric."
+    );
+  }
+  return sizeArgs.map(a => (isRuntimeSparseMatrix(a) ? sparseToDense(a) : a));
 }
 
-// ── zeros ────────────────────────────────────────────────────────────────
+/** The shape requested by size arguments: none → 1×1, one scalar n → n×n,
+ *  one vector → that shape, several scalars → those dims. */
+function sizeCtorShape(sizeArgs: RuntimeValue[]): number[] {
+  if (sizeArgs.length === 0) return [1, 1];
+  const shape = parseShapeArgs(sizeArgs);
+  if (shape.length === 0) return [0, 0];
+  if (shape.length === 1) shape.push(shape[0]);
+  return shape;
+}
 
-defineBuiltin({
-  name: "zeros",
-  cases: arrayConstructorCases(
-    shape => makeTensor(allocFloat64Array(numel(shape)), undefined, shape),
-    0,
-    { scalarSign: "nonneg", nonneg: true }
-  ),
-});
-
-// ── ones ─────────────────────────────────────────────────────────────────
-
-defineBuiltin({
-  name: "ones",
-  cases: arrayConstructorCases(
-    shape => {
-      const data = allocFloat64Array(numel(shape));
-      data.fill(1);
-      return makeTensor(data, undefined, shape);
-    },
-    1,
-    { scalarSign: "positive", nonneg: true }
-  ),
-});
-
-// ── nan / NaN ────────────────────────────────────────────────────────────
-
-function nanFill(shape: number[]): RuntimeValue {
+function filled(shape: number[], value: number): RuntimeValue {
   const data = allocFloat64Array(numel(shape));
-  data.fill(NaN);
+  if (value !== 0) data.fill(value);
   return makeTensor(data, undefined, shape);
 }
 
-defineBuiltin({
-  name: "nan",
-  cases: arrayConstructorCases(nanFill, NaN),
-});
-
-defineBuiltin({
-  name: "NaN",
-  cases: arrayConstructorCases(nanFill, NaN),
-});
-
-// ── inf / Inf ────────────────────────────────────────────────────────────
-
-function infFill(shape: number[]): RuntimeValue {
-  const data = allocFloat64Array(numel(shape));
-  data.fill(Infinity);
-  return makeTensor(data, undefined, shape);
+function defineFill(name: string, idName: string, value: number): void {
+  const spec: SizeCtorSpec = {
+    idName,
+    classes:
+      Number.isNaN(value) || value === Infinity
+        ? FLOAT_CLASSES
+        : ALL_NUMERIC_CLASSES,
+  };
+  builtin({
+    name,
+    apply: args => {
+      const sizeArgs = sizeCtorArgs(args, spec);
+      if (sizeArgs.length === 0) return value;
+      return filled(sizeCtorShape(sizeArgs), value);
+    },
+  });
 }
 
-defineBuiltin({
-  name: "inf",
-  cases: arrayConstructorCases(infFill, Infinity),
-});
-
-defineBuiltin({
-  name: "Inf",
-  cases: arrayConstructorCases(infFill, Infinity),
-});
+defineFill("zeros", "zeros", 0);
+defineFill("ones", "ones", 1);
+defineFill("nan", "NaN", NaN);
+defineFill("NaN", "NaN", NaN);
+defineFill("inf", "Inf", Infinity);
+defineFill("Inf", "Inf", Infinity);
 
 // ── eye ──────────────────────────────────────────────────────────────────
 
-defineBuiltin({
+builtin({
   name: "eye",
-  cases: arrayConstructorCases(
-    () => {
-      throw new Error("eye: unreachable — uses custom apply");
-    },
-    1,
-    { scalarSign: "nonneg", nonneg: true }
-  ).map((c, i) =>
-    i === 0
-      ? c
-      : {
-          ...c,
-          apply: (rawArgs: RuntimeValue[]) => {
-            const args = stripClassNameArgs(rawArgs);
-            let rows: number, cols: number;
-            if (args.length === 1) {
-              const shape = parseShapeArgs(args);
-              if (shape.length >= 2) {
-                rows = shape[0];
-                cols = shape[1];
-              } else {
-                rows = shape[0];
-                cols = rows;
-              }
-            } else {
-              rows = validateDim(toNumber(args[0]));
-              cols = validateDim(toNumber(args[1]));
-            }
-            const data = allocFloat64Array(rows * cols);
-            const minDim = Math.min(rows, cols);
-            for (let i = 0; i < minDim; i++) {
-              data[i * rows + i] = 1;
-            }
-            return makeTensor(data, undefined, [rows, cols]);
-          },
-        }
-  ),
+  apply: args => {
+    const sizeArgs = sizeCtorArgs(args, {
+      idName: "eye",
+      classes: ALL_NUMERIC_CLASSES,
+    });
+    if (sizeArgs.length === 0) return 1;
+    const shape = sizeCtorShape(sizeArgs);
+    while (shape.length > 2 && shape[shape.length - 1] === 1) shape.pop();
+    if (shape.length > 2)
+      throw builtinError(
+        "MATLAB:eye:unsupportedNd",
+        "N-dimensional arrays are not supported."
+      );
+    const [rows, cols] = shape.map(validateDim);
+    const data = allocFloat64Array(rows * cols);
+    const minDim = Math.min(rows, cols);
+    for (let i = 0; i < minDim; i++) data[i * rows + i] = 1;
+    return makeTensor(data, undefined, [rows, cols]);
+  },
 });
 
-// ── linspace ─────────────────────────────────────────────────────────────
+// ── linspace / logspace ──────────────────────────────────────────────────
 
-defineBuiltin({
+/** A scalar endpoint for linspace/logspace as [re, im]. */
+function scalarEndpoint(v: RuntimeValue): [number, number] {
+  const a = numericArg(v);
+  if (typeof a === "number") return [a, 0];
+  if (isRuntimeComplexNumber(a)) return [a.re, a.im];
+  const t = isRuntimeSparseMatrix(a) ? sparseToDense(a) : a;
+  if (t.data.length !== 1)
+    throw builtinError(
+      "MATLAB:linspace:scalarInputs",
+      "Inputs must be scalars."
+    );
+  return [t.data[0], t.imag ? t.imag[0] : 0];
+}
+
+/** The point count argument: a real scalar, floored as MATLAB does. */
+function pointCount(v: RuntimeValue): number {
+  const [re, im] = isRuntimeString(v) ? [Number(v), 0] : scalarEndpoint(v);
+  if (im !== 0)
+    throw builtinError(
+      "MATLAB:colon:operandsNotRealScalar",
+      "Colon operands must be real scalars."
+    );
+  return Math.floor(re);
+}
+
+/** n evenly spaced points from start to end (real parts; the imaginary
+ *  parts are spaced the same way when either endpoint is complex). */
+function linspaceData(start: number, end: number, n: number): Float64Array {
+  const data = allocFloat64Array(n);
+  if (n === 1) {
+    data[0] = end;
+    return data;
+  }
+  // MATLAB preserves both endpoints exactly (so NaN/Inf at one end don't
+  // contaminate the other).
+  data[0] = start;
+  data[n - 1] = end;
+  for (let i = 1; i < n - 1; i++) {
+    data[i] = start + ((end - start) * i) / (n - 1);
+  }
+  // Opposite-sign infinite endpoints: MATLAB places 0 at the exact center
+  // for odd n.
+  if (
+    (n & 1) === 1 &&
+    !Number.isFinite(start) &&
+    !Number.isFinite(end) &&
+    Math.sign(start) !== Math.sign(end)
+  ) {
+    data[(n - 1) / 2] = 0;
+  }
+  return data;
+}
+
+builtin({
   name: "linspace",
-  cases: [
-    {
-      match: argTypes => {
-        if (argTypes.length < 2 || argTypes.length > 3) return null;
-        for (const a of argTypes) {
-          if (a.kind !== "number" && a.kind !== "boolean") return null;
-        }
-        return [{ kind: "tensor", isComplex: false, shape: [1, -1] }];
-      },
-      apply: args => {
-        if (args.length < 2 || args.length > 3)
-          throw new Error("linspace requires 2 or 3 arguments");
-        const start = toNumber(args[0]);
-        const end = toNumber(args[1]);
-        const n = args.length === 3 ? Math.round(toNumber(args[2])) : 100;
-        if (n <= 0) return makeTensor(allocFloat64Array(0), undefined, [1, 0]);
-        if (n === 1)
-          return makeTensor(allocFloat64Array([end]), undefined, [1, 1]);
-        const data = allocFloat64Array(n);
-        // MATLAB preserves both endpoints exactly (so NaN/Inf at one end
-        // don't contaminate the other).
-        data[0] = start;
-        data[n - 1] = end;
-        for (let i = 1; i < n - 1; i++) {
-          data[i] = start + ((end - start) * i) / (n - 1);
-        }
-        // Opposite-sign infinite endpoints: MATLAB places 0 at the exact
-        // center for odd n.
-        if (
-          (n & 1) === 1 &&
-          !Number.isFinite(start) &&
-          !Number.isFinite(end) &&
-          Math.sign(start) !== Math.sign(end)
-        ) {
-          data[(n - 1) / 2] = 0;
-        }
-        return makeTensor(data, undefined, [1, n]);
-      },
-    },
-  ],
+  nargin: [2, 3],
+  mfile: true,
+  apply: args => {
+    const [s, sIm] = scalarEndpoint(args[0]);
+    const [e, eIm] = scalarEndpoint(args[1]);
+    const n = args.length === 3 ? pointCount(args[2]) : 100;
+    if (Number.isNaN(n)) return NaN;
+    if (n <= 0) return makeTensor(allocFloat64Array(0), undefined, [1, 0]);
+    const re = linspaceData(s, e, n);
+    if (sIm === 0 && eIm === 0) return makeTensor(re, undefined, [1, n]);
+    const im = linspaceData(sIm, eIm, n);
+    if (n === 1) return mkc(re[0], im[0]);
+    return makeTensor(re, im, [1, n]);
+  },
 });
 
-// ── logspace ─────────────────────────────────────────────────────────────
-
-defineBuiltin({
+builtin({
   name: "logspace",
-  cases: [
-    {
-      match: argTypes => {
-        if (argTypes.length < 2 || argTypes.length > 3) return null;
-        for (const a of argTypes) {
-          if (a.kind !== "number" && a.kind !== "boolean") return null;
-        }
-        return [{ kind: "tensor", isComplex: false, shape: [1, -1] }];
-      },
-      apply: args => {
-        if (args.length < 2 || args.length > 3)
-          throw new Error("logspace requires 2 or 3 arguments");
-        const a = toNumber(args[0]);
-        const b = toNumber(args[1]);
-        const n = args.length === 3 ? Math.round(toNumber(args[2])) : 50;
-        if (n <= 0) return makeTensor(allocFloat64Array(0), undefined, [1, 0]);
-        const isPi = b === Math.PI;
-        const endVal = isPi ? Math.PI : Math.pow(10, b);
-        const startVal = Math.pow(10, a);
-        if (n === 1)
-          return makeTensor(allocFloat64Array([endVal]), undefined, [1, 1]);
-        const data = allocFloat64Array(n);
-        if (isPi) {
-          const logStart = Math.log10(startVal);
-          const logEnd = Math.log10(Math.PI);
-          for (let i = 0; i < n; i++) {
-            const t = logStart + ((logEnd - logStart) * i) / (n - 1);
-            data[i] = Math.pow(10, t);
-          }
-        } else {
-          for (let i = 0; i < n; i++) {
-            const t = a + ((b - a) * i) / (n - 1);
-            data[i] = Math.pow(10, t);
-          }
-        }
-        return makeTensor(data, undefined, [1, n]);
-      },
-    },
-  ],
+  nargin: [2, 3],
+  mfile: true,
+  apply: args => {
+    const [a, aIm] = scalarEndpoint(args[0]);
+    const [b, bIm] = scalarEndpoint(args[1]);
+    const n = args.length === 3 ? pointCount(args[2]) : 50;
+    if (n <= 0) return makeTensor(allocFloat64Array(0), undefined, [1, 0]);
+    if (aIm !== 0 || bIm !== 0) {
+      // 10.^linspace(a, b, n) on complex exponents.
+      const tRe = linspaceData(a, b, n);
+      const tIm = linspaceData(aIm, bIm, n);
+      const re = allocFloat64Array(n);
+      const im = allocFloat64Array(n);
+      for (let i = 0; i < n; i++) {
+        const mag = Math.pow(10, tRe[i]);
+        const ang = tIm[i] * Math.LN10;
+        re[i] = mag * Math.cos(ang);
+        im[i] = mag * Math.sin(ang);
+      }
+      if (n === 1) return mkc(re[0], im[0]);
+      return makeTensor(re, im, [1, n]);
+    }
+    const isPi = b === Math.PI;
+    const endVal = isPi ? Math.PI : Math.pow(10, b);
+    const startVal = Math.pow(10, a);
+    if (n === 1)
+      return makeTensor(allocFloat64Array([endVal]), undefined, [1, 1]);
+    const data = allocFloat64Array(n);
+    if (isPi) {
+      const logStart = Math.log10(startVal);
+      const logEnd = Math.log10(Math.PI);
+      for (let i = 0; i < n; i++) {
+        const t = logStart + ((logEnd - logStart) * i) / (n - 1);
+        data[i] = Math.pow(10, t);
+      }
+    } else {
+      for (let i = 0; i < n; i++) {
+        const t = a + ((b - a) * i) / (n - 1);
+        data[i] = Math.pow(10, t);
+      }
+    }
+    return makeTensor(data, undefined, [1, n]);
+  },
 });

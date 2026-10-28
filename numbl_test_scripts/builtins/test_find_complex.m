@@ -7,9 +7,10 @@ assert(isequal(r, [1; 2]));
 assert(isequal(c, [1; 2]));
 assert(isequal(v, [1+2i; 3-4i]));
 
-%% find on complex vector
+%% find on complex row vector (outputs are rows, as in MATLAB)
 B = [0 2+3i 0 1i];
 [r2, c2, v2] = find(B);
-assert(isequal(v2, [2+3i; 1i]));
+assert(isequal(v2, [2+3i, 1i]));
+assert(isequal(r2, [1 1]) && isequal(c2, [2 4]));
 
 disp('SUCCESS')
