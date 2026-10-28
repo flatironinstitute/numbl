@@ -3,9 +3,8 @@
  */
 
 import type { Stmt, ArgumentsBlock } from "../parser/types.js";
-import type { Runtime } from "../runtime/runtime.js";
 import type { RuntimeValue } from "../runtime/types.js";
-import { incref, decref } from "../runtime/refcount.js";
+import { incref, decref, type RefcountRuntime } from "../runtime/refcount.js";
 
 // ── Control flow signals ─────────────────────────────────────────────────
 
@@ -59,8 +58,9 @@ export class Environment {
   }
   /** Function ID for persistent variable storage */
   persistentFuncId: string | undefined;
-  /** Back-reference to the runtime (needed for global/persistent access) */
-  rt: Runtime | null = null;
+  /** Back-reference to the runtime (needed for global/persistent access).
+   *  Typed narrowly so this module does not import runtime.ts. */
+  rt: (RefcountRuntime & { $g: Record<string, RuntimeValue> }) | null = null;
   /** Set when a `@nestedFn` handle has been created that captures this env
    *  (or an ancestor). Tells the function-exit cleanup that clearing this
    *  env would strand the handle's closure, so locals must be left alive. */
