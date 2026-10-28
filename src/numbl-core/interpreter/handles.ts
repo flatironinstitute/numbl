@@ -2,7 +2,12 @@
  * Anonymous functions (`@(x) ...`) and named function handles (`@name`).
  */
 
-import type { Expr } from "../parser/types.js";
+import {
+  parseMFile,
+  SyntaxError,
+  type AbstractSyntaxTree,
+  type Expr,
+} from "../parser/index.js";
 import type { RuntimeValue } from "../runtime/types.js";
 import { RTV } from "../runtime/constructors.js";
 import { ensureRuntimeValue } from "../runtime/runtimeHelpers.js";
@@ -193,6 +198,50 @@ export function makeFuncHandle(
     fn.handleDefFile = scope.file;
   }
   return fn;
+}
+
+/** `str2func(text)`: a handle to the function `text` names (`'name'` or
+ *  `'@name'`), or an anonymous function parsed from `text` (`'@(x) ...'`).
+ *  As in MATLAB, the anonymous function is created in an empty workspace
+ *  with no access to local functions, and a name does not reach nested
+ *  functions. */
+export function strToFunc(interp: Interpreter, text: string): RuntimeValue {
+  const t = text.trim();
+  const env = new Environment();
+  env.rt = interp.rt;
+  if (/^@\s*\(/.test(t)) {
+    let ast: AbstractSyntaxTree;
+    try {
+      ast = parseMFile(t, "str2func");
+    } catch (e) {
+      if (e instanceof SyntaxError) throw new RuntimeError(e.message);
+      throw e;
+    }
+    const [stmt, ...rest] = ast.body;
+    if (
+      rest.length > 0 ||
+      stmt?.type !== "ExprStmt" ||
+      stmt.expr.type !== "AnonFunc"
+    )
+      throw new RuntimeError(
+        `str2func: '${t}' is not a valid anonymous function`
+      );
+    const anon = stmt.expr;
+    const frame = new CallFrame(
+      interp.code,
+      "",
+      undefined,
+      undefined,
+      env,
+      undefined,
+      undefined
+    );
+    return interp.inFrame(frame, () => evalAnonFunc(interp, anon));
+  }
+  const name = t.startsWith("@") ? t.slice(1).trim() : t;
+  return interp.inFrame(interp.frame.detach(env), () =>
+    makeFuncHandle(interp, name)
+  );
 }
 
 /** Whether `@name` is a handle to a class member (`@Class.staticMethod`). */

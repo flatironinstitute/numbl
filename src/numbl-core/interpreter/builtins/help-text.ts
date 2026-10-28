@@ -2049,10 +2049,6 @@ const H: Record<string, BuiltinHelp> = {
     signatures: ["P = pathdef"],
     description: "Return default path. Returns empty string in numbl.",
   },
-  func2str: {
-    signatures: ["S = func2str(FH)"],
-    description: "Convert function handle to string name.",
-  },
   odeset: {
     signatures: ["S = odeset(...)"],
     description: "Create ODE options struct. Stub in numbl.",

@@ -97,6 +97,31 @@ builtin({
   },
 });
 
+builtin({
+  name: "str2func",
+  help: {
+    signatures: ["fh = str2func(str)"],
+    description:
+      "Function handle from text: str2func('name') is @name, and " +
+      "str2func('@(x) x+1') creates an anonymous function. The anonymous " +
+      "function's body sees no workspace variables or local functions, and " +
+      "a name does not reach nested functions.",
+  },
+  nargin: 1,
+  scope: true,
+  apply: (args, _nargout, { scope }) => {
+    const a = args[0];
+    const text =
+      isRuntimeChar(a) && (!a.shape || a.shape[0] <= 1)
+        ? toString(a)
+        : isRuntimeString(a)
+          ? a
+          : undefined;
+    if (text === undefined) throw notTextScalar();
+    return scope.str2func(text);
+  },
+});
+
 // ── input, run ───────────────────────────────────────────────────────────
 
 builtin({
