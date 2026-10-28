@@ -48,5 +48,5 @@ function v = soft_bail_tensor(x)
 end
 
 function v = caller_reads_outer_q()
-    v = evalin('caller', 'outer_q', -1);
+    v = evalin('caller', 'outer_q', '-1');
 end

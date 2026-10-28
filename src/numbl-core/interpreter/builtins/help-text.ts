@@ -1368,19 +1368,17 @@ const H: Record<string, BuiltinHelp> = {
 
   // ── Dynamic evaluation ────────────────────────────────────────────────
   evalin: {
-    signatures: ["V = evalin(WS, EXPR)", "V = evalin(WS, EXPR, DEFAULT)"],
+    signatures: ["V = evalin(WS, EXPR)", "V = evalin(WS, EXPR, CATCH_EXPR)"],
     description:
-      "Evaluate EXPR in workspace WS ('caller' or 'base'; numbl also accepts\n" +
-      "'workspace' for 'base'). If EXPR is a variable name that does not\n" +
-      "exist in WS, DEFAULT is returned when given; otherwise an error is\n" +
-      "raised.",
+      "Evaluate EXPR in workspace WS ('caller' or 'base'). If EXPR errors and\n" +
+      "CATCH_EXPR is given, CATCH_EXPR is evaluated in WS instead.",
   },
   assignin: {
     signatures: ["assignin(WS, NAME, VALUE)"],
     description:
-      "Assign VALUE to variable NAME in workspace WS ('caller' or 'base'; numbl\n" +
-      "also accepts 'workspace' for 'base'). The variable is created if it\n" +
-      "does not exist and is then visible by name in that workspace.",
+      "Assign VALUE to variable NAME in workspace WS ('caller' or 'base').\n" +
+      "The variable is created if it does not exist and is then visible by\n" +
+      "name in that workspace.",
   },
 
   // ── Misc ──────────────────────────────────────────────────────────────
