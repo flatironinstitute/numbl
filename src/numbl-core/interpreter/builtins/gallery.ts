@@ -5,27 +5,26 @@
  * which is the variant exercised by library code such as M-M.E.S.S.
  */
 
-import {
-  isRuntimeNumber,
-  isRuntimeLogical,
-  isRuntimeTensor,
-  isRuntimeComplexNumber,
-  isRuntimeString,
-  isRuntimeChar,
-} from "../../runtime/types.js";
+import { isRuntimeString, isRuntimeChar } from "../../runtime/types.js";
 import type { RuntimeValue, RuntimeSparseMatrix } from "../../runtime/types.js";
 import { RTV, RuntimeError } from "../../runtime/index.js";
-import { toNumber } from "../../runtime/convert.js";
 import { parseStringArgLower } from "../../helpers/check-helpers.js";
-import { registerIBuiltin } from "./types.js";
+import { builtin } from "./builtin.js";
+import { realDenseArg } from "./math-args.js";
 import { allocFloat64Array } from "../../runtime/alloc.js";
 
 function toNumArray(v: RuntimeValue, what: string): number[] {
-  if (isRuntimeNumber(v)) return [v];
-  if (isRuntimeLogical(v)) return [v ? 1 : 0];
-  if (isRuntimeTensor(v)) return Array.from(v.data);
-  if (isRuntimeComplexNumber(v)) return [v.re];
-  throw new RuntimeError(`gallery: ${what} must be numeric`);
+  const err = () =>
+    new RuntimeError(`gallery: complex ${what} is not supported`);
+  const a = realDenseArg(v, err);
+  return typeof a === "number" ? [a] : Array.from(a.data);
+}
+
+function scalar(v: RuntimeValue, what: string): number {
+  const a = toNumArray(v, what);
+  if (a.length !== 1)
+    throw new RuntimeError(`gallery: ${what} must be a scalar`);
+  return a[0];
 }
 
 /**
@@ -86,15 +85,15 @@ function buildTridiagToeplitz(
 function galleryTridiag(rest: RuntimeValue[]): RuntimeValue {
   // gallery('tridiag', n) == gallery('tridiag', n, -1, 2, -1)
   if (rest.length === 1) {
-    return buildTridiagToeplitz(Math.round(toNumber(rest[0])), -1, 2, -1);
+    return buildTridiagToeplitz(Math.round(scalar(rest[0], "n")), -1, 2, -1);
   }
   // gallery('tridiag', n, c, d, e) — n scalar, c/d/e scalars (Toeplitz)
   if (rest.length === 4) {
     return buildTridiagToeplitz(
-      Math.round(toNumber(rest[0])),
-      toNumber(rest[1]),
-      toNumber(rest[2]),
-      toNumber(rest[3])
+      Math.round(scalar(rest[0], "n")),
+      scalar(rest[1], "c"),
+      scalar(rest[2], "d"),
+      scalar(rest[3], "e")
     );
   }
   // gallery('tridiag', x, y, z) — x/z vectors (length n-1), y diagonal (length n)
@@ -111,7 +110,7 @@ function galleryTridiag(rest: RuntimeValue[]): RuntimeValue {
   throw new RuntimeError("gallery: tridiag expects (n), (n,c,d,e), or (x,y,z)");
 }
 
-registerIBuiltin({
+builtin({
   name: "gallery",
   help: {
     signatures: [
@@ -128,30 +127,26 @@ registerIBuiltin({
       "gallery('tridiag', x, y, z) uses vectors x (subdiagonal), y (diagonal), " +
       "z (superdiagonal), where x and z have length one less than y.",
   },
-  resolve: () => ({
-    outputTypes: [{ kind: "unknown" }],
-    apply: args => {
-      if (args.length < 1) {
-        throw new RuntimeError("gallery: not enough input arguments");
+  nargin: [1, Infinity],
+  mfile: true,
+  apply: args => {
+    const name = parseStringArgLower(args[0]);
+    // Drop an optional trailing classname argument ('single'/'double').
+    let rest = args.slice(1);
+    if (rest.length >= 1) {
+      const last = rest[rest.length - 1];
+      if (isRuntimeString(last) || isRuntimeChar(last)) {
+        const cn = parseStringArgLower(last);
+        if (cn === "single" || cn === "double") rest = rest.slice(0, -1);
       }
-      const name = parseStringArgLower(args[0]);
-      // Drop an optional trailing classname argument ('single'/'double').
-      let rest = args.slice(1);
-      if (rest.length >= 1) {
-        const last = rest[rest.length - 1];
-        if (isRuntimeString(last) || isRuntimeChar(last)) {
-          const cn = parseStringArgLower(last);
-          if (cn === "single" || cn === "double") rest = rest.slice(0, -1);
-        }
-      }
-      switch (name) {
-        case "tridiag":
-          return galleryTridiag(rest);
-        default:
-          throw new RuntimeError(
-            `gallery: matrix family '${name}' is not supported`
-          );
-      }
-    },
-  }),
+    }
+    switch (name) {
+      case "tridiag":
+        return galleryTridiag(rest);
+      default:
+        throw new RuntimeError(
+          `gallery: matrix family '${name}' is not supported`
+        );
+    }
+  },
 });

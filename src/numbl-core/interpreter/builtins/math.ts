@@ -1,21 +1,40 @@
 /**
- * Unary math builtins: trig, hyperbolic, exp/log, rounding, abs, sqrt, sign.
+ * Unary math builtins: trig, hyperbolic, exp/log, rounding, abs, sqrt, sign,
+ * plus the binary hypot, atan2d, nthroot, beta and pow2.
+ *
+ * Like MATLAB, the floating-point functions (sin, exp, gamma, ...) reject
+ * char and non-numeric input with "Argument must be double or single";
+ * numbl also accepts logical input for them (MATLAB does not). abs, sign
+ * and the rounding functions accept char like MATLAB.
  */
 
-import { isRuntimeTensor } from "../../runtime/types.js";
+import type { RuntimeValue } from "../../runtime/types.js";
 import {
-  defineBuiltin,
-  unaryElemwiseCases,
-  unaryRealResultCases,
-  applyUnaryElemwise,
-  applyBinaryScalar,
+  isRuntimeChar,
+  isRuntimeComplexNumber,
+  isRuntimeSparseMatrix,
+  isRuntimeTensor,
+} from "../../runtime/types.js";
+import { RuntimeError } from "../../runtime/error.js";
+import { builtin } from "./builtin.js";
+import { builtinError, mustBeRealError, type NumericArg } from "./args.js";
+import {
+  floatArg,
+  hasImag,
+  mustBeFloatError,
+  notFullRealError,
+  realDenseArg,
+  realFloatArg,
+} from "./math-args.js";
+import {
   applyBinaryElemwise,
-  binaryNumberOnly,
-  binaryElemwiseMatch,
+  applyUnaryElemwise,
   makeTensor,
+  unaryElemwise,
+  unaryRealResult,
   type BuiltinHelp,
+  type UnaryElemwiseFns,
 } from "./types.js";
-import { isNonneg, type SignCategory } from "../../jitTypes.js";
 import {
   erfScalar,
   erfcScalar,
@@ -27,51 +46,150 @@ import { lanczosGamma } from "../../helpers/bessel.js";
 import { allocFloat64Array } from "../../runtime/alloc.js";
 import { OpUnary } from "../../ops/index.js";
 
-// ── Simple unary registration helper ────────────────────────────────────
+type Complex = { re: number; im: number };
+type ComplexFn = (re: number, im: number) => Complex;
+
+// ── Registration helpers ────────────────────────────────────────────────
+
+/** A floating-point unary element-wise builtin (sin, exp, sqrt, ...). */
+function floatUnary(
+  name: string,
+  fns: UnaryElemwiseFns,
+  opts: { mfile?: boolean; help?: BuiltinHelp } = {}
+): void {
+  const f = unaryElemwise(fns, name);
+  builtin({
+    name,
+    help: opts.help,
+    nargin: 1,
+    mfile: opts.mfile,
+    apply: args => f([floatArg(args[0])]),
+  });
+}
 
 function registerUnary(
   name: string,
   realFn: (x: number) => number,
-  complexFn: (re: number, im: number) => { re: number; im: number },
-  help?: BuiltinHelp
+  complexFn: ComplexFn,
+  mfile = false
 ): void {
-  defineBuiltin({
+  floatUnary(name, { realFn, complexFn }, { mfile });
+}
+
+/** A real-only floating-point unary builtin (erf, gamma, ...): complex
+ *  input raises `err`. */
+function realOnlyUnary(
+  name: string,
+  realFn: (x: number) => number,
+  err: () => RuntimeError = () => notFullRealError(name)
+): void {
+  const f = unaryElemwise(
+    { realFn, complexFn: () => ({ re: NaN, im: NaN }) },
+    name
+  );
+  builtin({
     name,
-    help,
-    cases: unaryElemwiseCases({ realFn, complexFn }, name),
+    nargin: 1,
+    apply: args => f([realFloatArg(args[0], err)]),
   });
 }
 
-// ── Trig ────────────────────────────────────────────────────────────────
+/** Element-wise binary builtin on real floating-point arguments. */
+function realFloatBinary(
+  name: string,
+  fn: (a: number, b: number) => number,
+  err: () => RuntimeError,
+  mfile = false
+): void {
+  builtin({
+    name,
+    nargin: 2,
+    mfile,
+    apply: args =>
+      applyBinaryElemwise(
+        [realFloatArg(args[0], err), realFloatArg(args[1], err)],
+        fn,
+        name
+      ),
+  });
+}
+
+// ── Complex helpers ─────────────────────────────────────────────────────
 
 // Guard 0*Inf=NaN on the imaginary axis: a pure-imaginary input
 // (sin(re)/cos(re) === 0) has a 0 lane, but cosh/sinh overflow to Inf
 // for large |im| and 0*Inf would poison it. C99 csin/ccos special-case
 // this; match it so all --opt levels agree.
-registerUnary("sin", Math.sin, (re, im) => {
+const cSin: ComplexFn = (re, im) => {
   const sr = Math.sin(re);
   const cr = Math.cos(re);
   return {
     re: sr === 0 ? 0 : sr * Math.cosh(im),
     im: cr === 0 ? 0 : cr * Math.sinh(im),
   };
-});
+};
 
-registerUnary("cos", Math.cos, (re, im) => {
+const cCos: ComplexFn = (re, im) => {
   const cr = Math.cos(re);
   const sr = Math.sin(re);
   return {
     re: cr === 0 ? 0 : cr * Math.cosh(im),
     im: sr === 0 ? 0 : -sr * Math.sinh(im),
   };
-});
+};
 
-registerUnary("tan", Math.tan, (re, im) => {
+const cTan: ComplexFn = (re, im) => {
   const denom = Math.cos(2 * re) + Math.cosh(2 * im);
   return { re: Math.sin(2 * re) / denom, im: Math.sinh(2 * im) / denom };
+};
+
+const cAtan: ComplexFn = (re, im) => {
+  // Real-valued input: clean real atan — avoids the spurious ±1e-17i
+  // residue (and the Inf/Inf NaN at large |re|) the complex formula
+  // leaves on the real axis.
+  if (im === 0) return { re: Math.atan(re), im: 0 };
+  // atan(z) = (i/2)·log((1 − iz)/(1 + iz)). MATLAB's branch for a
+  // pure-imaginary z with |z| > 1 is −π/2 + … (verified: atan(2i) =
+  // −1.5708 + 0.5493i); the libc/C99 Annex-G branch differs (+π/2), so
+  // the C runtime overrides its catan to match this.
+  const w1re = 1 + im,
+    w1im = -re;
+  const w2re = 1 - im,
+    w2im = re;
+  const denom = w2re * w2re + w2im * w2im;
+  const w3re = (w1re * w2re + w1im * w2im) / denom;
+  const w3im = (w1im * w2re - w1re * w2im) / denom;
+  const w4re = Math.log(Math.sqrt(w3re * w3re + w3im * w3im));
+  const w4im = Math.atan2(w3im, w3re);
+  return { re: -w4im / 2, im: w4re / 2 };
+};
+
+const cSinh: ComplexFn = (re, im) => ({
+  re: Math.sinh(re) * Math.cos(im),
+  im: Math.cosh(re) * Math.sin(im),
 });
 
-// Inverse trig (complex formulas from builtins/math.ts)
+const cCosh: ComplexFn = (re, im) => ({
+  re: Math.cosh(re) * Math.cos(im),
+  im: Math.sinh(re) * Math.sin(im),
+});
+
+const cTanh: ComplexFn = (re, im) => {
+  const denom = Math.cosh(2 * re) + Math.cos(2 * im);
+  return { re: Math.sinh(2 * re) / denom, im: Math.sin(2 * im) / denom };
+};
+
+const complexExp: ComplexFn = (re, im) => ({
+  re: Math.exp(re) * Math.cos(im),
+  im: Math.exp(re) * Math.sin(im),
+});
+
+function complexLog(re: number, im: number): Complex {
+  return {
+    re: Math.log(Math.hypot(re, im)),
+    im: Math.atan2(im, re),
+  };
+}
 
 // Kahan's formulation of complex asin/acos via A, B, and 2x/(a1+a2) to
 // avoid overflow in re^2 / im^2 and cancellation in a1-a2.  Preserves
@@ -111,462 +229,6 @@ function cAcos(re: number, im: number): { re: number; im: number } {
   const { beta, alpha, signY } = cAsinAcosCore(re, im);
   return { re: Math.acos(beta), im: -signY * acoshSafe(alpha) };
 }
-
-// asin/acos: maybe-complex — out-of-domain real inputs (|x| > 1) produce
-// complex results.
-defineBuiltin({
-  name: "asin",
-  cases: unaryElemwiseCases(
-    {
-      realFn: Math.asin,
-      complexFn: cAsin,
-      maybeComplex: true,
-      nativeOpCode: OpUnary.ASIN,
-    },
-    "asin"
-  ),
-});
-defineBuiltin({
-  name: "acos",
-  cases: unaryElemwiseCases(
-    {
-      realFn: Math.acos,
-      complexFn: cAcos,
-      maybeComplex: true,
-      nativeOpCode: OpUnary.ACOS,
-    },
-    "acos"
-  ),
-});
-registerUnary("atan", Math.atan, (re, im) => {
-  // Real-valued input: clean real atan — avoids the spurious ±1e-17i
-  // residue (and the Inf/Inf NaN at large |re|) the complex formula
-  // leaves on the real axis.
-  if (im === 0) return { re: Math.atan(re), im: 0 };
-  // atan(z) = (i/2)·log((1 − iz)/(1 + iz)). MATLAB's branch for a
-  // pure-imaginary z with |z| > 1 is −π/2 + … (verified: atan(2i) =
-  // −1.5708 + 0.5493i); the libc/C99 Annex-G branch differs (+π/2), so
-  // the C runtime overrides its catan to match this.
-  const w1re = 1 + im,
-    w1im = -re;
-  const w2re = 1 - im,
-    w2im = re;
-  const denom = w2re * w2re + w2im * w2im;
-  const w3re = (w1re * w2re + w1im * w2im) / denom;
-  const w3im = (w1im * w2re - w1re * w2im) / denom;
-  const w4re = Math.log(Math.sqrt(w3re * w3re + w3im * w3im));
-  const w4im = Math.atan2(w3im, w3re);
-  return { re: -w4im / 2, im: w4re / 2 };
-});
-
-// ── Hyperbolic ──────────────────────────────────────────────────────────
-
-registerUnary("sinh", Math.sinh, (re, im) => ({
-  re: Math.sinh(re) * Math.cos(im),
-  im: Math.cosh(re) * Math.sin(im),
-}));
-
-registerUnary("cosh", Math.cosh, (re, im) => ({
-  re: Math.cosh(re) * Math.cos(im),
-  im: Math.sinh(re) * Math.sin(im),
-}));
-
-registerUnary("tanh", Math.tanh, (re, im) => {
-  const denom = Math.cosh(2 * re) + Math.cos(2 * im);
-  return { re: Math.sinh(2 * re) / denom, im: Math.sin(2 * im) / denom };
-});
-
-// ── Exp / Log ───────────────────────────────────────────────────────────
-
-const complexExp = (re: number, im: number) => ({
-  re: Math.exp(re) * Math.cos(im),
-  im: Math.exp(re) * Math.sin(im),
-});
-
-defineBuiltin({
-  name: "exp",
-  cases: unaryElemwiseCases(
-    {
-      numberType: () => ({ kind: "number", sign: "positive" }),
-      booleanType: () => ({ kind: "number", sign: "positive" }),
-      tensorType: t => ({
-        kind: "tensor",
-        isComplex: t.isComplex,
-        shape: t.shape,
-        ndim: t.ndim,
-        ...(t.isComplex ? {} : { nonneg: true }),
-      }),
-      realFn: Math.exp,
-      complexFn: complexExp,
-    },
-    "exp"
-  ),
-});
-
-function complexLog(re: number, im: number): { re: number; im: number } {
-  return {
-    re: Math.log(Math.hypot(re, im)),
-    im: Math.atan2(im, re),
-  };
-}
-
-defineBuiltin({
-  name: "log",
-  cases: unaryElemwiseCases(
-    {
-      realFn: Math.log,
-      complexFn: complexLog,
-      maybeComplex: true,
-      nativeOpCode: OpUnary.LOG,
-    },
-    "log"
-  ),
-});
-
-const complexLog2 = (re: number, im: number) => ({
-  re: Math.log(Math.hypot(re, im)) / Math.LN2,
-  im: Math.atan2(im, re) / Math.LN2,
-});
-
-// log2: has special two-output frexp form, so uses defineBuiltin with custom cases
-defineBuiltin({
-  name: "log2",
-  cases: [
-    // [f, e] = log2(x) — frexp form (nargout > 1)
-    {
-      match: (argTypes, nargout) => {
-        if (argTypes.length !== 1 || nargout <= 1) return null;
-        const a = argTypes[0];
-        if (a.kind === "number" || a.kind === "boolean")
-          return [{ kind: "number" }, { kind: "number" }];
-        if (a.kind === "tensor" && a.isComplex !== true)
-          return [
-            { kind: "tensor", isComplex: false, shape: a.shape, ndim: a.ndim },
-            { kind: "tensor", isComplex: false, shape: a.shape, ndim: a.ndim },
-          ];
-        return null;
-      },
-      apply: args => {
-        function frexpScalar(x: number): { f: number; e: number } {
-          if (x === 0) return { f: 0, e: 0 };
-          if (!isFinite(x)) return { f: x, e: 0 };
-          const e = Math.floor(Math.log2(Math.abs(x))) + 1;
-          return { f: x / Math.pow(2, e), e };
-        }
-        const v = args[0];
-        if (typeof v === "boolean" || typeof v === "number") {
-          const { f, e } = frexpScalar(typeof v === "boolean" ? +v : v);
-          return [f, e];
-        }
-        if (isRuntimeTensor(v) && !v.imag) {
-          const n = v.data.length;
-          const fData = allocFloat64Array(n);
-          const eData = allocFloat64Array(n);
-          for (let i = 0; i < n; i++) {
-            const { f, e } = frexpScalar(v.data[i]);
-            fData[i] = f;
-            eData[i] = e;
-          }
-          return [
-            makeTensor(fData, undefined, v.shape.slice()),
-            makeTensor(eData, undefined, v.shape.slice()),
-          ];
-        }
-        throw new Error("log2: frexp form only supports real inputs");
-      },
-    },
-    // Single-output log2 (standard element-wise)
-    ...unaryElemwiseCases(
-      {
-        realFn: Math.log2,
-        complexFn: complexLog2,
-        maybeComplex: true,
-        nativeOpCode: OpUnary.LOG2,
-      },
-      "log2"
-    ),
-  ],
-});
-
-const complexLog10 = (re: number, im: number) => ({
-  re: Math.log(Math.hypot(re, im)) / Math.LN10,
-  im: Math.atan2(im, re) / Math.LN10,
-});
-
-defineBuiltin({
-  name: "log10",
-  cases: unaryElemwiseCases(
-    {
-      realFn: Math.log10,
-      complexFn: complexLog10,
-      maybeComplex: true,
-      nativeOpCode: OpUnary.LOG10,
-    },
-    "log10"
-  ),
-});
-
-// ── Abs ─────────────────────────────────────────────────────────────────
-
-defineBuiltin({
-  name: "abs",
-  cases: unaryRealResultCases(Math.abs, Math.hypot, "abs"),
-});
-
-// ── Sqrt ────────────────────────────────────────────────────────────────
-
-function complexSqrt(re: number, im: number): { re: number; im: number } {
-  // Pure-real input: compute directly to avoid polar-form roundoff
-  // (Math.sin(pi/2) isn't exactly 1, Math.cos(pi/2) isn't exactly 0).
-  if (im === 0) {
-    if (re >= 0) return { re: Math.sqrt(re), im: 0 };
-    return { re: 0, im: Math.sqrt(-re) };
-  }
-  // hypot keeps |z| finite when re*re or im*im would overflow.
-  const mag = Math.hypot(re, im);
-  if (mag === 0) return { re: 0, im: 0 };
-  const r = Math.sqrt(mag);
-  const angle = Math.atan2(im, re) / 2;
-  return { re: r * Math.cos(angle), im: r * Math.sin(angle) };
-}
-
-defineBuiltin({
-  name: "sqrt",
-  cases: unaryElemwiseCases(
-    {
-      numberType: a => {
-        if (isNonneg(a)) {
-          const outSign: SignCategory | undefined =
-            a.sign === "positive" ? "positive" : "nonneg";
-          return { kind: "number", sign: outSign };
-        }
-        return { kind: "complex_or_number" };
-      },
-      booleanType: () => ({ kind: "number", sign: "nonneg" }),
-      tensorType: t => {
-        if (t.isComplex === true)
-          return {
-            kind: "tensor",
-            isComplex: true,
-            shape: t.shape,
-            ndim: t.ndim,
-          };
-        if (t.nonneg)
-          return {
-            kind: "tensor",
-            isComplex: false,
-            shape: t.shape,
-            ndim: t.ndim,
-            nonneg: true,
-          };
-        return {
-          kind: "tensor",
-          isComplex: true,
-          shape: t.shape,
-          ndim: t.ndim,
-        };
-      },
-      realFn: x => (x >= 0 ? Math.sqrt(x) : NaN),
-      complexFn: complexSqrt,
-      maybeComplex: true,
-      nativeOpCode: OpUnary.SQRT,
-    },
-    "sqrt"
-  ),
-});
-
-// ── Realsqrt ────────────────────────────────────────────────────────────
-
-const REALSQRT_ERROR = "Realsqrt produced complex result.";
-
-defineBuiltin({
-  name: "realsqrt",
-  cases: unaryElemwiseCases(
-    {
-      numberType: a => ({
-        kind: "number",
-        sign: a.sign === "positive" ? "positive" : "nonneg",
-      }),
-      booleanType: () => ({ kind: "number", sign: "nonneg" }),
-      complexType: () => ({ kind: "number", sign: "nonneg" }),
-      tensorType: t => ({
-        kind: "tensor",
-        isComplex: false,
-        shape: t.shape,
-        ndim: t.ndim,
-        nonneg: true,
-      }),
-      realFn: x => {
-        if (x < 0) throw new Error(REALSQRT_ERROR);
-        return Math.sqrt(x);
-      },
-      complexFn: (re, im) => {
-        if (im !== 0 || re < 0) throw new Error(REALSQRT_ERROR);
-        return { re: Math.sqrt(re), im: 0 };
-      },
-    },
-    "realsqrt"
-  ),
-});
-
-// ── Sign ────────────────────────────────────────────────────────────────
-
-registerUnary("sign", Math.sign, (re, im) => {
-  // Use hypot so magnitude stays finite when re*re or im*im overflow.
-  const mag = Math.hypot(re, im);
-  if (mag === 0) return { re: 0, im: 0 };
-  return { re: re / mag, im: im / mag };
-});
-
-// ── Rounding ────────────────────────────────────────────────────────────
-
-function registerRounding(name: string, fn: (x: number) => number): void {
-  defineBuiltin({
-    name,
-    cases: unaryElemwiseCases(
-      {
-        numberType: a => ({
-          kind: "number",
-          ...(a.sign ? { sign: a.sign } : {}),
-        }),
-        booleanType: () => ({ kind: "number", sign: "nonneg" }),
-        tensorType: t => ({
-          kind: "tensor",
-          isComplex: t.isComplex,
-          shape: t.shape,
-          ndim: t.ndim,
-          ...(t.nonneg ? { nonneg: true } : {}),
-        }),
-        realFn: fn,
-        complexFn: (re, im) => ({ re: fn(re), im: fn(im) }),
-      },
-      name
-    ),
-  });
-}
-
-registerRounding("floor", Math.floor);
-registerRounding("ceil", Math.ceil);
-registerRounding("fix", Math.trunc);
-
-// MATLAB round: half away from zero (not JS half-toward-+inf)
-function matlabRound(x: number): number {
-  return Math.sign(x) * Math.round(Math.abs(x));
-}
-
-defineBuiltin({
-  name: "round",
-  cases: [
-    // Two-arg form: round(x, n) — must come before the single-arg cases
-    {
-      match: argTypes => {
-        if (argTypes.length !== 2) return null;
-        const a = argTypes[0];
-        const b = argTypes[1];
-        if (b.kind !== "number" && b.kind !== "boolean") return null;
-        switch (a.kind) {
-          case "number":
-            return [{ kind: "number", ...(a.sign ? { sign: a.sign } : {}) }];
-          case "boolean":
-            return [{ kind: "number", sign: "nonneg" }];
-          case "complex_or_number":
-            return [{ kind: "complex_or_number" }];
-          case "tensor":
-            return [
-              {
-                kind: "tensor",
-                isComplex: a.isComplex,
-                shape: a.shape,
-                ndim: a.ndim,
-                ...(a.nonneg ? { nonneg: true } : {}),
-              },
-            ];
-          default:
-            return null;
-        }
-      },
-      apply: args => {
-        const nArg = args[1];
-        const n = typeof nArg === "number" ? nArg : 0;
-        const scale = Math.pow(10, n);
-        function roundN(x: number): number {
-          return matlabRound(x * scale) / scale;
-        }
-        return applyUnaryElemwise(
-          args[0],
-          roundN,
-          (re, im) => ({ re: roundN(re), im: roundN(im) }),
-          "round"
-        );
-      },
-    },
-    // Single-arg form
-    ...unaryElemwiseCases(
-      {
-        numberType: a => ({
-          kind: "number",
-          ...(a.sign ? { sign: a.sign } : {}),
-        }),
-        booleanType: () => ({ kind: "number", sign: "nonneg" }),
-        tensorType: t => ({
-          kind: "tensor",
-          isComplex: t.isComplex,
-          shape: t.shape,
-          ndim: t.ndim,
-          ...(t.nonneg ? { nonneg: true } : {}),
-        }),
-        realFn: matlabRound,
-        complexFn: (re, im) => ({ re: matlabRound(re), im: matlabRound(im) }),
-      },
-      "round"
-    ),
-  ],
-});
-
-// ── Precision math: expm1, log1p ─────────────────────────────────────────
-
-registerUnary("expm1", Math.expm1, (re, im) => {
-  // expm1(z) = exp(z) - 1
-  const r = complexExp(re, im);
-  return { re: r.re - 1, im: r.im };
-});
-
-function complexLog1p(re: number, im: number): { re: number; im: number } {
-  // log1p(z) = log(1 + z)
-  return complexLog(1 + re, im);
-}
-
-defineBuiltin({
-  name: "log1p",
-  cases: unaryElemwiseCases(
-    { realFn: Math.log1p, complexFn: complexLog1p, maybeComplex: true },
-    "log1p"
-  ),
-});
-
-// ── Hypot ────────────────────────────────────────────────────────────────
-
-defineBuiltin({
-  name: "hypot",
-  cases: [
-    {
-      match: argTypes => binaryElemwiseMatch(argTypes),
-      apply: args => applyBinaryElemwise(args, Math.hypot, "hypot"),
-    },
-  ],
-});
-
-// ── Error functions ──────────────────────────────────────────────────────
-
-const noComplexFn = () => ({ re: NaN, im: NaN });
-
-registerUnary("erf", erfScalar, noComplexFn);
-registerUnary("erfc", erfcScalar, noComplexFn);
-registerUnary("erfinv", erfinvScalar, noComplexFn);
-registerUnary("erfcinv", erfcinvScalar, noComplexFn);
-registerUnary("erfcx", erfcxScalar, noComplexFn);
-
-// ── Complex helpers for inverse hyperbolic / reciprocal ──────────────
 
 function cRecip(re: number, im: number): { re: number; im: number } {
   // Smith's algorithm avoids spurious over/underflow in re*re + im*im.
@@ -649,322 +311,706 @@ function cAtanh(re: number, im: number): { re: number; im: number } {
   return { re: w4re / 2, im: w4im / 2 };
 }
 
-// ── Degree trig constants ────────────────────────────────────────────
+/** 1 / fn(z): the reciprocal functions (sec = 1/cos, ...). */
+function recipOf(fn: ComplexFn): ComplexFn {
+  return (re, im) => {
+    const r = fn(re, im);
+    return cRecip(r.re, r.im);
+  };
+}
 
 const deg2rad = Math.PI / 180;
 const rad2deg = 180 / Math.PI;
 
-// ── Reciprocal trig ──────────────────────────────────────────────────
+/** fn(z in degrees). */
+function fromDeg(fn: ComplexFn): ComplexFn {
+  return (re, im) => fn(re * deg2rad, im * deg2rad);
+}
 
-registerUnary("sec", (x: number) => 1 / Math.cos(x), noComplexFn);
-registerUnary("csc", (x: number) => 1 / Math.sin(x), noComplexFn);
-registerUnary("cot", (x: number) => 1 / Math.tan(x), noComplexFn);
-
-// ── Degree trig ──────────────────────────────────────────────────────
-
-registerUnary("sind", (x: number) => Math.sin(x * deg2rad), noComplexFn);
-registerUnary("cosd", (x: number) => Math.cos(x * deg2rad), noComplexFn);
-registerUnary("tand", (x: number) => Math.tan(x * deg2rad), noComplexFn);
-registerUnary("secd", (x: number) => 1 / Math.cos(x * deg2rad), noComplexFn);
-registerUnary("cscd", (x: number) => 1 / Math.sin(x * deg2rad), noComplexFn);
-registerUnary(
-  "cotd",
-  (x: number) => Math.cos(x * deg2rad) / Math.sin(x * deg2rad),
-  noComplexFn
-);
-
-// ── Inverse trig (degree output) ────────────────────────────────────
-
-registerUnary("atand", (x: number) => Math.atan(x) * rad2deg, noComplexFn);
-registerUnary("acotd", (x: number) => Math.atan(1 / x) * rad2deg, noComplexFn);
-
-// asind/acosd: may produce complex for |x| > 1
-function toDegComplex(
-  fn: (re: number, im: number) => { re: number; im: number }
-): (re: number, im: number) => { re: number; im: number } {
+/** fn(z) converted to degrees. */
+function toDegComplex(fn: ComplexFn): ComplexFn {
   return (re, im) => {
     const r = fn(re, im);
     return { re: r.re * rad2deg, im: r.im * rad2deg };
   };
 }
 
-defineBuiltin({
-  name: "asind",
-  cases: unaryElemwiseCases(
-    {
-      realFn: (x: number) => Math.asin(x) * rad2deg,
-      complexFn: toDegComplex(cAsin),
-      maybeComplex: true,
+// ── Trig ────────────────────────────────────────────────────────────────
+
+registerUnary("sin", Math.sin, cSin);
+registerUnary("cos", Math.cos, cCos);
+registerUnary("tan", Math.tan, cTan);
+
+// asin/acos: maybe-complex — out-of-domain real inputs (|x| > 1) produce
+// complex results.
+floatUnary("asin", {
+  realFn: Math.asin,
+  complexFn: cAsin,
+  maybeComplex: true,
+  nativeOpCode: OpUnary.ASIN,
+});
+floatUnary("acos", {
+  realFn: Math.acos,
+  complexFn: cAcos,
+  maybeComplex: true,
+  nativeOpCode: OpUnary.ACOS,
+});
+registerUnary("atan", Math.atan, cAtan);
+
+// ── Hyperbolic ──────────────────────────────────────────────────────────
+
+registerUnary("sinh", Math.sinh, cSinh);
+registerUnary("cosh", Math.cosh, cCosh);
+registerUnary("tanh", Math.tanh, cTanh);
+
+// ── Exp / Log ───────────────────────────────────────────────────────────
+
+registerUnary("exp", Math.exp, complexExp);
+
+floatUnary("log", {
+  realFn: Math.log,
+  complexFn: complexLog,
+  maybeComplex: true,
+  nativeOpCode: OpUnary.LOG,
+});
+
+const complexLog2 = (re: number, im: number) => ({
+  re: Math.log(Math.hypot(re, im)) / Math.LN2,
+  im: Math.atan2(im, re) / Math.LN2,
+});
+
+function frexpScalar(x: number): { f: number; e: number } {
+  if (x === 0) return { f: 0, e: 0 };
+  if (!isFinite(x)) return { f: x, e: 0 };
+  const e = Math.floor(Math.log2(Math.abs(x))) + 1;
+  return { f: x / Math.pow(2, e), e };
+}
+
+const log2Elemwise = unaryElemwise(
+  {
+    realFn: Math.log2,
+    complexFn: complexLog2,
+    maybeComplex: true,
+    nativeOpCode: OpUnary.LOG2,
+  },
+  "log2"
+);
+
+// log2 has a two-output form: [f, e] = log2(x) splits x into mantissa and
+// exponent (x = f .* 2.^e).
+builtin({
+  name: "log2",
+  nargin: 1,
+  nargout: 2,
+  apply: (args, nargout) => {
+    const x = floatArg(args[0]);
+    if (nargout <= 1) return log2Elemwise([x]);
+    const v = realFloatArg(
+      x,
+      () => new RuntimeError("log2: the two-output form requires real input")
+    );
+    if (typeof v === "number") {
+      const { f, e } = frexpScalar(v);
+      return [f, e];
+    }
+    const n = v.data.length;
+    const fData = allocFloat64Array(n);
+    const eData = allocFloat64Array(n);
+    for (let i = 0; i < n; i++) {
+      const { f, e } = frexpScalar(v.data[i]);
+      fData[i] = f;
+      eData[i] = e;
+    }
+    return [
+      makeTensor(fData, undefined, v.shape.slice()),
+      makeTensor(eData, undefined, v.shape.slice()),
+    ];
+  },
+});
+
+const complexLog10 = (re: number, im: number) => ({
+  re: Math.log(Math.hypot(re, im)) / Math.LN10,
+  im: Math.atan2(im, re) / Math.LN10,
+});
+
+floatUnary("log10", {
+  realFn: Math.log10,
+  complexFn: complexLog10,
+  maybeComplex: true,
+  nativeOpCode: OpUnary.LOG10,
+});
+
+// ── Abs ─────────────────────────────────────────────────────────────────
+
+builtin({
+  name: "abs",
+  nargin: 1,
+  apply: unaryRealResult(Math.abs, Math.hypot, "abs"),
+});
+
+// ── Sqrt ────────────────────────────────────────────────────────────────
+
+function complexSqrt(re: number, im: number): Complex {
+  // Pure-real input: compute directly to avoid polar-form roundoff
+  // (Math.sin(pi/2) isn't exactly 1, Math.cos(pi/2) isn't exactly 0).
+  if (im === 0) {
+    if (re >= 0) return { re: Math.sqrt(re), im: 0 };
+    return { re: 0, im: Math.sqrt(-re) };
+  }
+  // hypot keeps |z| finite when re*re or im*im would overflow.
+  const mag = Math.hypot(re, im);
+  if (mag === 0) return { re: 0, im: 0 };
+  const r = Math.sqrt(mag);
+  const angle = Math.atan2(im, re) / 2;
+  return { re: r * Math.cos(angle), im: r * Math.sin(angle) };
+}
+
+floatUnary("sqrt", {
+  realFn: x => (x >= 0 ? Math.sqrt(x) : NaN),
+  complexFn: complexSqrt,
+  maybeComplex: true,
+  nativeOpCode: OpUnary.SQRT,
+});
+
+// ── Realsqrt ────────────────────────────────────────────────────────────
+
+const realsqrtElemwise = unaryElemwise(
+  {
+    realFn: x => {
+      if (x < 0)
+        throw builtinError(
+          "MATLAB:realsqrt:complexResult",
+          "Realsqrt produced complex result."
+        );
+      return Math.sqrt(x);
     },
-    "asind"
+    complexFn: () => ({ re: NaN, im: NaN }),
+  },
+  "realsqrt"
+);
+
+builtin({
+  name: "realsqrt",
+  nargin: 1,
+  mfile: true,
+  apply: args => {
+    // MATLAB validates realness before the floating-point type.
+    if (isRuntimeChar(args[0])) throw mustBeFloatError();
+    const notReal = () =>
+      builtinError(
+        "MATLAB:validators:mustBeReal",
+        "Invalid argument at position 1. Value must be real."
+      );
+    let x: NumericArg;
+    try {
+      x = floatArg(args[0]);
+    } catch {
+      throw notReal();
+    }
+    return realsqrtElemwise([realFloatArg(x, notReal)]);
+  },
+});
+
+// ── Sign ────────────────────────────────────────────────────────────────
+
+builtin({
+  name: "sign",
+  nargin: 1,
+  apply: unaryElemwise(
+    {
+      realFn: Math.sign,
+      complexFn: (re, im) => {
+        // Use hypot so magnitude stays finite when re*re or im*im overflow.
+        const mag = Math.hypot(re, im);
+        if (mag === 0) return { re: 0, im: 0 };
+        return { re: re / mag, im: im / mag };
+      },
+    },
+    "sign"
   ),
 });
-defineBuiltin({
-  name: "acosd",
-  cases: unaryElemwiseCases(
-    {
-      realFn: (x: number) => Math.acos(x) * rad2deg,
-      complexFn: toDegComplex(cAcos),
-      maybeComplex: true,
-    },
-    "acosd"
-  ),
+
+// ── Rounding ────────────────────────────────────────────────────────────
+
+function registerRounding(name: string, fn: (x: number) => number): void {
+  builtin({
+    name,
+    nargin: 1,
+    apply: unaryElemwise(
+      { realFn: fn, complexFn: (re, im) => ({ re: fn(re), im: fn(im) }) },
+      name
+    ),
+  });
+}
+
+registerRounding("floor", Math.floor);
+registerRounding("ceil", Math.ceil);
+registerRounding("fix", Math.trunc);
+
+// MATLAB round: half away from zero (not JS half-toward-+inf)
+function matlabRound(x: number): number {
+  return Math.sign(x) * Math.round(Math.abs(x));
+}
+
+const roundElemwise = unaryElemwise(
+  {
+    realFn: matlabRound,
+    complexFn: (re, im) => ({ re: matlabRound(re), im: matlabRound(im) }),
+  },
+  "round"
+);
+
+function isNumericValue(v: RuntimeValue): boolean {
+  return (
+    typeof v === "number" ||
+    typeof v === "boolean" ||
+    isRuntimeTensor(v) ||
+    isRuntimeComplexNumber(v) ||
+    isRuntimeSparseMatrix(v) ||
+    isRuntimeChar(v)
+  );
+}
+
+/** The digit count N of round(X, N): a real integer scalar (not logical). */
+function roundDigitsArg(v: RuntimeValue): number {
+  const err = () =>
+    builtinError(
+      "MATLAB:round:SecondArg",
+      "Second argument must be a real integer scalar."
+    );
+  if (typeof v === "boolean" || (isRuntimeTensor(v) && v._isLogical))
+    throw err();
+  let a: NumericArg;
+  try {
+    a = floatArg(v);
+  } catch {
+    throw err();
+  }
+  if (hasImag(a)) throw err();
+  const d = realFloatArg(a, err);
+  const n = typeof d === "number" ? d : d.data.length === 1 ? d.data[0] : NaN;
+  if (!Number.isInteger(n)) throw err();
+  return n;
+}
+
+builtin({
+  name: "round",
+  // round(X), round(X, N), round(X, N, type), and the TieBreaker
+  // name-value pair (not supported).
+  nargin: [1, 5],
+  apply: args => {
+    if (args.length === 1) {
+      if (typeof args[0] === "string" || !isNumericValue(args[0]))
+        throw builtinError(
+          "MATLAB:round:FirstArg",
+          "First argument must be a numeric, logical, or char array."
+        );
+      return roundElemwise(args);
+    }
+    if (args.length > 3)
+      throw new RuntimeError("round: the TieBreaker option is not supported");
+    let x: NumericArg;
+    try {
+      x = floatArg(args[0]);
+    } catch {
+      throw builtinError(
+        "MATLAB:round:NonfloatMultipleArgs",
+        "First argument must be double or single with more than one input."
+      );
+    }
+    const n = roundDigitsArg(args[1]);
+    let significant = false;
+    if (args.length === 3) {
+      const t = args[2];
+      const s =
+        isRuntimeChar(t) || typeof t === "string"
+          ? (isRuntimeChar(t) ? t.value : t).toLowerCase()
+          : "";
+      if (s !== "decimals" && s !== "significant")
+        throw builtinError(
+          "MATLAB:round:ThirdArg",
+          "With 3 or 5 input arguments, the third input must be either 'decimals' or 'significant'."
+        );
+      significant = s === "significant";
+    }
+    const roundN = significant
+      ? (v: number): number => {
+          if (v === 0 || !isFinite(v)) return v;
+          const scale = Math.pow(
+            10,
+            n - Math.floor(Math.log10(Math.abs(v))) - 1
+          );
+          return matlabRound(v * scale) / scale;
+        }
+      : (() => {
+          const scale = Math.pow(10, n);
+          return (v: number): number => matlabRound(v * scale) / scale;
+        })();
+    return applyUnaryElemwise(
+      x,
+      roundN,
+      (re, im) => ({ re: roundN(re), im: roundN(im) }),
+      "round"
+    );
+  },
+});
+
+// ── Precision math: expm1, log1p ─────────────────────────────────────────
+
+registerUnary("expm1", Math.expm1, (re, im) => {
+  // expm1(z) = exp(z) - 1
+  const r = complexExp(re, im);
+  return { re: r.re - 1, im: r.im };
+});
+
+floatUnary("log1p", {
+  realFn: Math.log1p,
+  // log1p(z) = log(1 + z)
+  complexFn: (re, im) => complexLog(1 + re, im),
+  maybeComplex: true,
+});
+
+// ── Hypot ────────────────────────────────────────────────────────────────
+
+// hypot(a, b) = sqrt(abs(a).^2 + abs(b).^2), so complex input is reduced
+// to its magnitude first.
+const absOf = unaryRealResult(Math.abs, Math.hypot, "hypot");
+
+builtin({
+  name: "hypot",
+  nargin: 2,
+  apply: args =>
+    applyBinaryElemwise(
+      [absOf([floatArg(args[0])]), absOf([floatArg(args[1])])],
+      Math.hypot,
+      "hypot"
+    ),
+});
+
+// ── Error functions ──────────────────────────────────────────────────────
+
+realOnlyUnary("erf", erfScalar);
+realOnlyUnary("erfc", erfcScalar);
+realOnlyUnary("erfinv", erfinvScalar);
+realOnlyUnary("erfcinv", erfcinvScalar);
+realOnlyUnary("erfcx", erfcxScalar);
+
+// ── Reciprocal trig ──────────────────────────────────────────────────
+
+registerUnary("sec", (x: number) => 1 / Math.cos(x), recipOf(cCos), true);
+registerUnary("csc", (x: number) => 1 / Math.sin(x), recipOf(cSin), true);
+registerUnary("cot", (x: number) => 1 / Math.tan(x), recipOf(cTan), true);
+
+// ── Degree trig ──────────────────────────────────────────────────────
+
+registerUnary("sind", (x: number) => Math.sin(x * deg2rad), fromDeg(cSin));
+registerUnary("cosd", (x: number) => Math.cos(x * deg2rad), fromDeg(cCos));
+registerUnary("tand", (x: number) => Math.tan(x * deg2rad), fromDeg(cTan));
+registerUnary(
+  "secd",
+  (x: number) => 1 / Math.cos(x * deg2rad),
+  recipOf(fromDeg(cCos)),
+  true
+);
+registerUnary(
+  "cscd",
+  (x: number) => 1 / Math.sin(x * deg2rad),
+  recipOf(fromDeg(cSin)),
+  true
+);
+registerUnary(
+  "cotd",
+  (x: number) => Math.cos(x * deg2rad) / Math.sin(x * deg2rad),
+  recipOf(fromDeg(cTan)),
+  true
+);
+
+// ── Inverse trig (degree output) ────────────────────────────────────
+
+registerUnary(
+  "atand",
+  (x: number) => Math.atan(x) * rad2deg,
+  toDegComplex(cAtan)
+);
+registerUnary(
+  "acotd",
+  (x: number) => Math.atan(1 / x) * rad2deg,
+  toDegComplex(composeRecip(cAtan))
+);
+
+// asind/acosd: may produce complex for |x| > 1
+floatUnary("asind", {
+  realFn: (x: number) => Math.asin(x) * rad2deg,
+  complexFn: toDegComplex(cAsin),
+  maybeComplex: true,
+});
+floatUnary("acosd", {
+  realFn: (x: number) => Math.acos(x) * rad2deg,
+  complexFn: toDegComplex(cAcos),
+  maybeComplex: true,
 });
 
 // ── Inverse reciprocal trig ─────────────────────────────────────────
 
-defineBuiltin({
-  name: "asec",
-  cases: unaryElemwiseCases(
-    {
-      realFn: (x: number) => Math.acos(1 / x),
-      complexFn: composeRecip(cAcos),
-      maybeComplex: true,
-    },
-    "asec"
-  ),
+floatUnary("asec", {
+  realFn: (x: number) => Math.acos(1 / x),
+  complexFn: composeRecip(cAcos),
+  maybeComplex: true,
 });
-defineBuiltin({
-  name: "acsc",
-  cases: unaryElemwiseCases(
-    {
-      realFn: (x: number) => Math.asin(1 / x),
-      complexFn: composeRecip(cAsin),
-      maybeComplex: true,
-    },
-    "acsc"
-  ),
+floatUnary("acsc", {
+  realFn: (x: number) => Math.asin(1 / x),
+  complexFn: composeRecip(cAsin),
+  maybeComplex: true,
 });
-registerUnary("acot", (x: number) => Math.atan(1 / x), noComplexFn);
+registerUnary("acot", (x: number) => Math.atan(1 / x), composeRecip(cAtan));
 
 // ── Inverse reciprocal trig (degree output) ─────────────────────────
 
-defineBuiltin({
-  name: "asecd",
-  cases: unaryElemwiseCases(
-    {
-      realFn: (x: number) => Math.acos(1 / x) * rad2deg,
-      complexFn: toDegComplex(composeRecip(cAcos)),
-      maybeComplex: true,
-    },
-    "asecd"
-  ),
+floatUnary("asecd", {
+  realFn: (x: number) => Math.acos(1 / x) * rad2deg,
+  complexFn: toDegComplex(composeRecip(cAcos)),
+  maybeComplex: true,
 });
-defineBuiltin({
-  name: "acscd",
-  cases: unaryElemwiseCases(
-    {
-      realFn: (x: number) => Math.asin(1 / x) * rad2deg,
-      complexFn: toDegComplex(composeRecip(cAsin)),
-      maybeComplex: true,
-    },
-    "acscd"
-  ),
+floatUnary("acscd", {
+  realFn: (x: number) => Math.asin(1 / x) * rad2deg,
+  complexFn: toDegComplex(composeRecip(cAsin)),
+  maybeComplex: true,
 });
 
 // ── atan2d (binary) ─────────────────────────────────────────────────
 
-defineBuiltin({
-  name: "atan2d",
-  cases: [
-    {
-      match: argTypes => binaryNumberOnly(argTypes),
-      apply: args =>
-        applyBinaryScalar(args, (y, x) => Math.atan2(y, x) * rad2deg, "atan2d"),
-    },
-  ],
-});
+realFloatBinary(
+  "atan2d",
+  (y, x) => Math.atan2(y, x) * rad2deg,
+  mustBeRealError
+);
 
 // ── Inverse hyperbolic ──────────────────────────────────────────────
 
-defineBuiltin({
-  name: "asinh",
-  cases: unaryElemwiseCases(
-    { realFn: Math.asinh, complexFn: cAsinh, maybeComplex: true },
-    "asinh"
-  ),
+floatUnary("asinh", {
+  realFn: Math.asinh,
+  complexFn: cAsinh,
+  maybeComplex: true,
 });
-defineBuiltin({
-  name: "acosh",
-  cases: unaryElemwiseCases(
-    { realFn: Math.acosh, complexFn: cAcosh, maybeComplex: true },
-    "acosh"
-  ),
+floatUnary("acosh", {
+  realFn: Math.acosh,
+  complexFn: cAcosh,
+  maybeComplex: true,
 });
-defineBuiltin({
-  name: "atanh",
-  cases: unaryElemwiseCases(
-    { realFn: Math.atanh, complexFn: cAtanh, maybeComplex: true },
-    "atanh"
-  ),
+floatUnary("atanh", {
+  realFn: Math.atanh,
+  complexFn: cAtanh,
+  maybeComplex: true,
 });
 
 // ── Reciprocal hyperbolic ───────────────────────────────────────────
 
-registerUnary("sech", (x: number) => 1 / Math.cosh(x), noComplexFn);
-registerUnary("csch", (x: number) => 1 / Math.sinh(x), noComplexFn);
-registerUnary("coth", (x: number) => 1 / Math.tanh(x), noComplexFn);
+registerUnary("sech", (x: number) => 1 / Math.cosh(x), recipOf(cCosh), true);
+registerUnary("csch", (x: number) => 1 / Math.sinh(x), recipOf(cSinh), true);
+registerUnary("coth", (x: number) => 1 / Math.tanh(x), recipOf(cTanh), true);
 
 // ── Inverse reciprocal hyperbolic ───────────────────────────────────
 
-defineBuiltin({
-  name: "asech",
-  cases: unaryElemwiseCases(
-    {
-      realFn: (x: number) => Math.acosh(1 / x),
-      complexFn: composeRecip(cAcosh),
-      maybeComplex: true,
-    },
-    "asech"
-  ),
+floatUnary("asech", {
+  realFn: (x: number) => Math.acosh(1 / x),
+  complexFn: composeRecip(cAcosh),
+  maybeComplex: true,
 });
-defineBuiltin({
-  name: "acsch",
-  cases: unaryElemwiseCases(
-    {
-      realFn: (x: number) => Math.asinh(1 / x),
-      complexFn: composeRecip(cAsinh),
-      maybeComplex: true,
-    },
-    "acsch"
-  ),
+floatUnary("acsch", {
+  realFn: (x: number) => Math.asinh(1 / x),
+  complexFn: composeRecip(cAsinh),
+  maybeComplex: true,
 });
-defineBuiltin({
-  name: "acoth",
-  cases: unaryElemwiseCases(
-    {
-      realFn: (x: number) => Math.atanh(1 / x),
-      complexFn: composeRecip(cAtanh),
-      maybeComplex: true,
-    },
-    "acoth"
-  ),
+floatUnary("acoth", {
+  realFn: (x: number) => Math.atanh(1 / x),
+  complexFn: composeRecip(cAtanh),
+  maybeComplex: true,
 });
 
 // ── pow2, nextpow2 ──────────────────────────────────────────────────
 
-registerUnary("pow2", (x: number) => Math.pow(2, x), noComplexFn);
-registerUnary(
-  "nextpow2",
-  (x: number) => (x <= 0 ? 0 : Math.ceil(Math.log2(x))),
-  noComplexFn
+// pow2(X) = 2.^X; pow2(F, E) = F .* 2.^E (real only).
+const pow2Elemwise = unaryElemwise(
+  {
+    realFn: (x: number) => Math.pow(2, x),
+    complexFn: (re, im) => complexExp(re * Math.LN2, im * Math.LN2),
+  },
+  "pow2"
 );
+
+builtin({
+  name: "pow2",
+  nargin: [1, 2],
+  apply: args => {
+    if (args.length === 1) return pow2Elemwise([floatArg(args[0])]);
+    const err = () =>
+      new RuntimeError(
+        "pow2: complex input is not supported with two arguments"
+      );
+    return applyBinaryElemwise(
+      [realFloatArg(args[0], err), realFloatArg(args[1], err)],
+      (f, e) => f * Math.pow(2, e),
+      "pow2"
+    );
+  },
+});
+
+// nextpow2(X): the smallest integer p with 2^p >= abs(X).
+function nextpow2Scalar(x: number): number {
+  const a = Math.abs(x);
+  if (a === 0) return 0;
+  if (!isFinite(a)) return a;
+  return Math.ceil(Math.log2(a));
+}
+
+builtin({
+  name: "nextpow2",
+  nargin: 1,
+  mfile: true,
+  apply: unaryRealResult(
+    nextpow2Scalar,
+    (re, im) => nextpow2Scalar(Math.hypot(re, im)),
+    "nextpow2"
+  ),
+});
 
 // ── nthroot (binary) ────────────────────────────────────────────────
 
-defineBuiltin({
+builtin({
   name: "nthroot",
-  cases: [
-    {
-      match: argTypes => binaryElemwiseMatch(argTypes),
-      apply: args =>
-        applyBinaryElemwise(
-          args,
-          (x, n) => {
-            let result: number;
-            if (x < 0 && n % 2 !== 0) {
-              result = -Math.pow(-x, 1 / n);
-            } else {
-              result = Math.pow(x, 1 / n);
-            }
-            const rounded = Math.round(result);
-            if (
-              Math.abs(result - rounded) <
-              1e-10 * Math.max(1, Math.abs(rounded))
-            ) {
-              if (Math.pow(rounded, n) === x) return rounded;
-            }
-            return result;
-          },
-          "nthroot"
-        ),
-    },
-  ],
+  nargin: 2,
+  mfile: true,
+  apply: args => {
+    const err = () =>
+      builtinError("MATLAB:nthroot:ComplexInput", "Both X and N must be real.");
+    return applyBinaryElemwise(
+      [realDenseArg(args[0], err), realDenseArg(args[1], err)],
+      (x, n) => {
+        let result: number;
+        if (x < 0 && n % 2 !== 0) {
+          result = -Math.pow(-x, 1 / n);
+        } else {
+          result = Math.pow(x, 1 / n);
+        }
+        const rounded = Math.round(result);
+        if (
+          Math.abs(result - rounded) <
+          1e-10 * Math.max(1, Math.abs(rounded))
+        ) {
+          if (Math.pow(rounded, n) === x) return rounded;
+        }
+        return result;
+      },
+      "nthroot"
+    );
+  },
 });
 
 // ── gamma, factorial, beta ──────────────────────────────────────────
 
-registerUnary(
-  "gamma",
-  (x: number) => {
-    if (x === 0) return Infinity;
-    if (x < 0 && Math.floor(x) === x) return NaN;
-    if (x === Infinity) return Infinity;
-    if (x === -Infinity || Number.isNaN(x)) return NaN;
-    return lanczosGamma(x);
+realOnlyUnary("gamma", (x: number) => {
+  if (x === 0) return Infinity;
+  if (x < 0 && Math.floor(x) === x) return NaN;
+  if (x === Infinity) return Infinity;
+  if (x === -Infinity || Number.isNaN(x)) return NaN;
+  return lanczosGamma(x);
+});
+
+realOnlyUnary("gammaln", (x: number) => {
+  if (x < 0)
+    throw builtinError(
+      "MATLAB:gammaln:negativeVal",
+      "Input must be nonnegative."
+    );
+  if (Number.isNaN(x)) return NaN;
+  if (x === 0 || x === Infinity) return Infinity;
+  // Lanczos approximation in log-space
+  const g = 7;
+  const coef = [
+    0.99999999999980993, 676.5203681218851, -1259.1392167224028,
+    771.32342877765313, -176.61502916214059, 12.507343278686905,
+    -0.13857109526572012, 9.9843695780195716e-6, 1.5056327351493116e-7,
+  ];
+  const xx = x - 1;
+  let a = coef[0];
+  for (let i = 1; i < coef.length; i++) {
+    a += coef[i] / (xx + i);
+  }
+  const t = xx + g + 0.5;
+  return (
+    0.5 * Math.log(2 * Math.PI) + (xx + 0.5) * Math.log(t) - t + Math.log(a)
+  );
+});
+
+const factorialElemwise = unaryElemwise(
+  {
+    realFn: (n: number) => {
+      if (n < 0 || !Number.isFinite(n)) return NaN;
+      if (Number.isInteger(n) && n <= 20) {
+        let result = 1;
+        for (let i = 2; i <= n; i++) result *= i;
+        return result;
+      }
+      return lanczosGamma(n + 1);
+    },
+    complexFn: () => ({ re: NaN, im: NaN }),
   },
-  noComplexFn
+  "factorial"
 );
 
-registerUnary(
-  "gammaln",
-  (x: number) => {
-    if (x < 0) throw new Error("Input must be nonnegative.");
-    if (Number.isNaN(x)) return NaN;
-    if (x === 0 || x === Infinity) return Infinity;
-    // Lanczos approximation in log-space
-    const g = 7;
-    const coef = [
-      0.99999999999980993, 676.5203681218851, -1259.1392167224028,
-      771.32342877765313, -176.61502916214059, 12.507343278686905,
-      -0.13857109526572012, 9.9843695780195716e-6, 1.5056327351493116e-7,
-    ];
-    const xx = x - 1;
-    let a = coef[0];
-    for (let i = 1; i < coef.length; i++) {
-      a += coef[i] / (xx + i);
+builtin({
+  name: "factorial",
+  nargin: 1,
+  mfile: true,
+  apply: args => {
+    if (isRuntimeChar(args[0]))
+      throw builtinError(
+        "MATLAB:factorial:unsupportedType",
+        "Input must be numeric."
+      );
+    const err = () =>
+      builtinError(
+        "MATLAB:factorial:NNegativeInt",
+        "N must be an array of real non-negative integers."
+      );
+    let x: NumericArg;
+    try {
+      x = floatArg(args[0]);
+    } catch {
+      throw err();
     }
-    const t = xx + g + 0.5;
-    return (
-      0.5 * Math.log(2 * Math.PI) + (xx + 0.5) * Math.log(t) - t + Math.log(a)
+    return factorialElemwise([realFloatArg(x, err)]);
+  },
+});
+
+builtin({
+  name: "beta",
+  nargin: 2,
+  mfile: true,
+  apply: args => {
+    const err = () => notFullRealError("gammaln");
+    return applyBinaryElemwise(
+      [realFloatArg(args[0], err), realFloatArg(args[1], err)],
+      (x, y) => {
+        if (
+          (x === 0 || y === 0) &&
+          !(Number.isInteger(x) && x < 0) &&
+          !(Number.isInteger(y) && y < 0)
+        ) {
+          return Infinity;
+        }
+        const gx = lanczosGamma(x);
+        const gy = lanczosGamma(y);
+        const gxy = lanczosGamma(x + y);
+        if (!isFinite(gx) || !isFinite(gy)) {
+          if (!isFinite(gx) && !isFinite(gy)) return Infinity;
+          if (!isFinite(gxy)) return NaN;
+          return Infinity;
+        }
+        if (gxy === 0) return Infinity;
+        return (gx / gxy) * gy;
+      },
+      "beta"
     );
   },
-  noComplexFn
-);
-
-registerUnary(
-  "factorial",
-  (n: number) => {
-    if (n < 0 || !Number.isFinite(n)) return NaN;
-    if (Number.isInteger(n) && n <= 20) {
-      let result = 1;
-      for (let i = 2; i <= n; i++) result *= i;
-      return result;
-    }
-    return lanczosGamma(n + 1);
-  },
-  noComplexFn
-);
-
-defineBuiltin({
-  name: "beta",
-  cases: [
-    {
-      match: argTypes => binaryElemwiseMatch(argTypes),
-      apply: args =>
-        applyBinaryElemwise(
-          args,
-          (x, y) => {
-            if (
-              (x === 0 || y === 0) &&
-              !(Number.isInteger(x) && x < 0) &&
-              !(Number.isInteger(y) && y < 0)
-            ) {
-              return Infinity;
-            }
-            const gx = lanczosGamma(x);
-            const gy = lanczosGamma(y);
-            const gxy = lanczosGamma(x + y);
-            if (!isFinite(gx) || !isFinite(gy)) {
-              if (!isFinite(gx) && !isFinite(gy)) return Infinity;
-              if (!isFinite(gxy)) return NaN;
-              return Infinity;
-            }
-            if (gxy === 0) return Infinity;
-            return (gx / gxy) * gy;
-          },
-          "beta"
-        ),
-    },
-  ],
 });

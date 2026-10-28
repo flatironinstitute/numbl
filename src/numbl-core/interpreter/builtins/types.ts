@@ -386,21 +386,6 @@ export function makeTensor(
   return new RuntimeTensor(data, s, imag);
 }
 
-// ── Type rule helpers ───────────────────────────────────────────────────
-
-/** Type rule requiring two scalar numbers */
-export function binaryNumberOnly(argTypes: JitType[]): JitType[] | null {
-  if (argTypes.length !== 2) return null;
-  const k0 = argTypes[0].kind,
-    k1 = argTypes[1].kind;
-  if (
-    (k0 !== "number" && k0 !== "boolean") ||
-    (k1 !== "number" && k1 !== "boolean")
-  )
-    return null;
-  return [{ kind: "number" }];
-}
-
 // ── Apply helpers ───────────────────────────────────────────────────────
 
 /** Apply a unary element-wise function with complex support */
@@ -626,18 +611,6 @@ function applyUnaryRealResult(
   throw new Error(`${name}: unsupported argument type`);
 }
 
-/** Apply a binary scalar function */
-export function applyBinaryScalar(
-  args: RuntimeValue[],
-  fn: (a: number, b: number) => number,
-  name: string
-): RuntimeValue {
-  const a = typeof args[0] === "boolean" ? (args[0] ? 1 : 0) : args[0];
-  const b = typeof args[1] === "boolean" ? (args[1] ? 1 : 0) : args[1];
-  if (typeof a === "number" && typeof b === "number") return fn(a, b);
-  throw new Error(`${name}: expected two scalar numbers`);
-}
-
 /** Apply a binary element-wise function supporting scalars, tensors, and broadcast. */
 export function applyBinaryElemwise(
   args: RuntimeValue[],
@@ -682,21 +655,6 @@ export function applyBinaryElemwise(
   throw new Error(`${name}: unsupported argument types`);
 }
 
-/** Match a binary function accepting number/boolean/tensor args (no complex). */
-export function binaryElemwiseMatch(argTypes: JitType[]): JitType[] | null {
-  if (argTypes.length !== 2) return null;
-  const k0 = argTypes[0].kind,
-    k1 = argTypes[1].kind;
-  const ok = ["number", "boolean", "tensor"];
-  if (!ok.includes(k0) || !ok.includes(k1)) return null;
-  if (k0 === "tensor" || k1 === "tensor") {
-    return [{ kind: "tensor", isComplex: false }];
-  }
-  return [{ kind: "number" }];
-}
-
-// ── Combined resolve helpers ────────────────────────────────────────────
-
 // ── Case-based builtin definition ────────────────────────────────────
 
 /** A single case in a builtin's dispatch table. Bundles type-level matching
@@ -730,20 +688,6 @@ export function defineBuiltin(opts: {
   });
 }
 
-// ── Unary element-wise case builder ──────────────────────────────────
-
-type NumberJitType = Extract<JitType, { kind: "number" }>;
-type BooleanJitType = Extract<JitType, { kind: "boolean" }>;
-type ComplexJitType = Extract<JitType, { kind: "complex_or_number" }>;
-type TensorJitType = Extract<JitType, { kind: "tensor" }>;
-
-interface UnaryElemwiseSpec extends UnaryElemwiseFns {
-  numberType?: (a: NumberJitType) => JitType | null;
-  booleanType?: (a: BooleanJitType) => JitType | null;
-  complexType?: (a: ComplexJitType) => JitType | null;
-  tensorType?: (a: TensorJitType) => JitType | null;
-}
-
 export interface UnaryElemwiseFns {
   realFn: (x: number) => number;
   complexFn: (re: number, im: number) => { re: number; im: number };
@@ -753,100 +697,6 @@ export interface UnaryElemwiseFns {
    * so that e.g. sqrt/log can run in native C on the common all-in-domain
    * case, then fall back for NaN entries only. */
   nativeOpCode?: number;
-}
-
-/** Generate cases for a unary element-wise builtin. Each accepted kind gets
- *  its own case that bundles the type rule with the corresponding apply. */
-export function unaryElemwiseCases(
-  spec: UnaryElemwiseSpec,
-  name: string
-): BuiltinCase[] {
-  const applyFn = spec.maybeComplex
-    ? (args: RuntimeValue[]) =>
-        applyUnaryElemwiseMaybeComplex(
-          args[0],
-          spec.realFn,
-          spec.complexFn,
-          name,
-          spec.nativeOpCode
-        )
-    : (args: RuntimeValue[]) =>
-        applyUnaryElemwise(args[0], spec.realFn, spec.complexFn, name);
-
-  const cases: BuiltinCase[] = [];
-
-  // number/boolean case
-  const numRule = spec.numberType ?? (() => ({ kind: "number" }) as JitType);
-  const boolRule = spec.booleanType ?? (() => ({ kind: "number" }) as JitType);
-  cases.push({
-    match: argTypes => {
-      if (argTypes.length !== 1) return null;
-      const a = argTypes[0];
-      if (a.kind === "number") {
-        const out = numRule(a);
-        return out ? [out] : null;
-      }
-      if (a.kind === "boolean") {
-        const out = boolRule(a);
-        return out ? [out] : null;
-      }
-      return null;
-    },
-    apply: applyFn,
-  });
-
-  // complex_or_number case
-  const cplxRule =
-    spec.complexType ?? (() => ({ kind: "complex_or_number" }) as JitType);
-  cases.push({
-    match: argTypes => {
-      if (argTypes.length !== 1) return null;
-      if (argTypes[0].kind !== "complex_or_number") return null;
-      const out = cplxRule(argTypes[0] as ComplexJitType);
-      return out ? [out] : null;
-    },
-    apply: applyFn,
-  });
-
-  // tensor case
-  const tensorRule =
-    spec.tensorType ??
-    ((a: TensorJitType) =>
-      ({
-        kind: "tensor",
-        isComplex: a.isComplex,
-        shape: a.shape,
-        ndim: a.ndim,
-      }) as JitType);
-  cases.push({
-    match: argTypes => {
-      if (argTypes.length !== 1) return null;
-      if (argTypes[0].kind !== "tensor") return null;
-      const out = tensorRule(argTypes[0] as TensorJitType);
-      return out ? [out] : null;
-    },
-    apply: applyFn,
-  });
-
-  // sparse_matrix case — convert to dense tensor, result is dense tensor
-  cases.push({
-    match: argTypes => {
-      if (argTypes.length !== 1) return null;
-      if (argTypes[0].kind !== "sparse_matrix") return null;
-      const sp = argTypes[0];
-      const shape =
-        sp.m !== undefined && sp.n !== undefined ? [sp.m, sp.n] : undefined;
-      const out = tensorRule({
-        kind: "tensor",
-        isComplex: sp.isComplex,
-        shape,
-      } as TensorJitType);
-      return out ? [out] : null;
-    },
-    apply: applyFn,
-  });
-
-  return cases;
 }
 
 // ── Apply-only element-wise helpers (for builtin()) ─────────────────────
@@ -912,62 +762,4 @@ export function unaryPredicate(
     t._isLogical = true;
     return t;
   };
-}
-
-/** Shorthand: build cases where all kinds return always-real output. */
-export function unaryRealResultCases(
-  realFn: (x: number) => number,
-  complexFn: (re: number, im: number) => number,
-  name: string
-): BuiltinCase[] {
-  const applyFn = (args: RuntimeValue[]) =>
-    applyUnaryRealResult(args[0], realFn, complexFn, name);
-  return [
-    {
-      match: argTypes => {
-        if (argTypes.length !== 1) return null;
-        const k = argTypes[0].kind;
-        if (k === "number" || k === "boolean" || k === "complex_or_number")
-          return [{ kind: "number", sign: "nonneg" as const }];
-        return null;
-      },
-      apply: applyFn,
-    },
-    {
-      match: argTypes => {
-        if (argTypes.length !== 1) return null;
-        const a = argTypes[0];
-        if (a.kind !== "tensor") return null;
-        return [
-          {
-            kind: "tensor" as const,
-            isComplex: false,
-            shape: a.shape,
-            ndim: a.ndim,
-            nonneg: true,
-          },
-        ];
-      },
-      apply: applyFn,
-    },
-    {
-      match: argTypes => {
-        if (argTypes.length !== 1) return null;
-        if (argTypes[0].kind !== "sparse_matrix") return null;
-        const sp = argTypes[0];
-        return [
-          {
-            kind: "tensor" as const,
-            isComplex: false,
-            shape:
-              sp.m !== undefined && sp.n !== undefined
-                ? [sp.m, sp.n]
-                : undefined,
-            nonneg: true,
-          },
-        ];
-      },
-      apply: applyFn,
-    },
-  ];
 }

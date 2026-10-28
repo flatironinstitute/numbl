@@ -1,32 +1,25 @@
 /**
- * Interpreter IBuiltins for FFT functions:
- * fft, ifft, fftshift, ifftshift.
- *
- * Reuses the same algorithmic implementations as the legacy builtins.
+ * FFT builtins: fft, ifft, fftshift, ifftshift.
  */
 
-import type { RuntimeValue } from "../../runtime/types.js";
+import type {
+  RuntimeComplexNumber,
+  RuntimeTensor,
+  RuntimeValue,
+} from "../../runtime/types.js";
 import {
+  isRuntimeChar,
   isRuntimeComplexNumber,
   isRuntimeNumber,
+  isRuntimeSparseMatrix,
+  isRuntimeString,
   isRuntimeTensor,
 } from "../../runtime/types.js";
 import { RTV, RuntimeError } from "../../runtime/index.js";
-import type { JitType } from "../../jitTypes.js";
-import { defineBuiltin } from "./types.js";
+import { builtin } from "./builtin.js";
+import { builtinError, realScalarArg } from "./args.js";
 import { getLapackBridge } from "../../native/lapack-bridge.js";
 import { allocFloat64Array, withScratch } from "../../runtime/alloc.js";
-
-// ── Type helpers ──────────────────────────────────────────────────────────
-
-function isNumericJitType(t: JitType): boolean {
-  return (
-    t.kind === "number" ||
-    t.kind === "boolean" ||
-    t.kind === "complex_or_number" ||
-    t.kind === "tensor"
-  );
-}
 
 // ── FFT algorithm ─────────────────────────────────────────────────────────
 
@@ -191,12 +184,39 @@ function isFiberConjugateSymmetric(
   return true;
 }
 
-function parseScalarArg(v: RuntimeValue | undefined): number | undefined {
+/** A scalar size/dimension argument of fft/ifft/fftshift: undefined when
+ *  absent or [], otherwise a real scalar; `err` is raised for anything
+ *  else (complex, non-scalar, non-numeric). */
+function scalarOptArg(
+  v: RuntimeValue | undefined,
+  err: () => RuntimeError
+): number | undefined {
   if (v === undefined) return undefined;
-  if (isRuntimeNumber(v)) return v;
   if (isRuntimeTensor(v) && v.data.length === 0) return undefined;
-  if (isRuntimeTensor(v) && v.data.length === 1) return v.data[0];
-  throw new RuntimeError("fft: n and dim arguments must be scalars");
+  try {
+    return realScalarArg(v);
+  } catch {
+    throw err();
+  }
+}
+
+/** The data argument of fft/ifft: numeric or logical (char, sparse and
+ *  other types are rejected, as in MATLAB). */
+function fftDataArg(
+  v: RuntimeValue
+): number | RuntimeComplexNumber | RuntimeTensor {
+  if (typeof v === "boolean") return v ? 1 : 0;
+  if (isRuntimeNumber(v) || isRuntimeComplexNumber(v) || isRuntimeTensor(v))
+    return v;
+  if (isRuntimeSparseMatrix(v))
+    throw builtinError(
+      "MATLAB:fftfcn:SparseInputType",
+      "Sparse matrices are not supported."
+    );
+  throw builtinError(
+    "MATLAB:fftfcn:InvalidInputType",
+    "Invalid data type. First argument must be double, single, int8, uint8, int16, uint16, int32, uint32, or logical."
+  );
 }
 
 function applyFFTAlongDim(
@@ -321,11 +341,17 @@ function applyFFTAlongDim(
 }
 
 function applyFFT(args: RuntimeValue[], inverse: boolean): RuntimeValue {
-  if (args.length < 1)
-    throw new RuntimeError("fft: requires at least 1 argument");
-  const x = args[0];
-  const nArg = parseScalarArg(args[1]);
-  const dimArg = parseScalarArg(args[2]);
+  const x = fftDataArg(args[0]);
+  const nArg = scalarOptArg(args[1], () =>
+    builtinError(
+      "MATLAB:fftfcn:lengthNotNonNegInt",
+      "FFT length must be a nonnegative integer scalar."
+    )
+  );
+  const dimArg = scalarOptArg(
+    args[2],
+    () => new RuntimeError("fft: dim must be a positive integer scalar")
+  );
 
   if (isRuntimeNumber(x) || isRuntimeComplexNumber(x)) {
     const xre = isRuntimeNumber(x) ? x : x.re;
@@ -359,8 +385,6 @@ function applyFFT(args: RuntimeValue[], inverse: boolean): RuntimeValue {
     return RTV.tensor(outD, [n, 1], outI);
   }
 
-  if (!isRuntimeTensor(x))
-    throw new RuntimeError("fft: input must be a numeric array");
   const shape = x.shape;
   const ndim = shape.length;
   let dim: number;
@@ -428,13 +452,18 @@ function circshiftAlongDim(
 }
 
 function applyFFTShift(args: RuntimeValue[], inverse: boolean): RuntimeValue {
-  if (args.length < 1)
-    throw new RuntimeError("fftshift: requires at least 1 argument");
   const x = args[0];
-  const dimArg = parseScalarArg(args[1]);
-  if (isRuntimeNumber(x) || isRuntimeComplexNumber(x)) return x;
+  const name = inverse ? "ifftshift" : "fftshift";
+  const dimArg = scalarOptArg(args[1], () =>
+    builtinError(
+      `MATLAB:${name}:DimNotPosInt`,
+      "DIM must be a positive integer."
+    )
+  );
+  if (typeof x === "boolean" || isRuntimeNumber(x) || isRuntimeComplexNumber(x))
+    return x;
   if (!isRuntimeTensor(x))
-    throw new RuntimeError("fftshift: input must be numeric");
+    throw new RuntimeError(`${name}: input must be numeric or logical`);
   const shape = x.shape;
   const dims: number[] =
     dimArg !== undefined
@@ -451,77 +480,46 @@ function applyFFTShift(args: RuntimeValue[], inverse: boolean): RuntimeValue {
     curData = result.outData;
     curImag = result.outImag;
   }
-  return RTV.tensor(curData, [...shape], curImag);
+  const out = RTV.tensor(curData, [...shape], curImag);
+  if (x._isLogical) out._isLogical = true;
+  return out;
 }
 
 // ── Registration ──────────────────────────────────────────────────────────
 
-defineBuiltin({
+builtin({
   name: "fft",
-  cases: [
-    {
-      match: argTypes => {
-        if (argTypes.length < 1 || argTypes.length > 3) return null;
-        if (!isNumericJitType(argTypes[0])) return null;
-        return [{ kind: "tensor", isComplex: true }];
-      },
-      apply: args => withScratch(() => applyFFT(args, false)),
-    },
-  ],
+  nargin: [1, 3],
+  apply: args => withScratch(() => applyFFT(args, false)),
 });
 
-defineBuiltin({
+builtin({
   name: "ifft",
-  cases: [
-    {
-      match: argTypes => {
-        if (argTypes.length < 1 || argTypes.length > 3) return null;
-        if (!isNumericJitType(argTypes[0])) return null;
-        return [{ kind: "tensor", isComplex: true }];
-      },
-      apply: args => withScratch(() => applyFFT(args, true)),
-    },
-  ],
+  // ifft(Y, n, dim, symflag); only 'nonsymmetric' (the default) is supported
+  nargin: [1, 4],
+  apply: args => {
+    let rest = args;
+    const last = args[args.length - 1];
+    if (args.length >= 2 && (isRuntimeChar(last) || isRuntimeString(last))) {
+      const f = (isRuntimeChar(last) ? last.value : String(last)).toLowerCase();
+      if (f !== "nonsymmetric")
+        throw new RuntimeError(`ifft: the '${f}' option is not supported`);
+      rest = args.slice(0, -1);
+    }
+    return withScratch(() => applyFFT(rest, true));
+  },
 });
 
-defineBuiltin({
+builtin({
   name: "fftshift",
-  cases: [
-    {
-      match: argTypes => {
-        if (argTypes.length < 1 || argTypes.length > 2) return null;
-        if (!isNumericJitType(argTypes[0])) return null;
-        const a = argTypes[0];
-        if (a.kind === "tensor")
-          return [{ kind: "tensor", isComplex: a.isComplex }];
-        if (a.kind === "number" || a.kind === "boolean")
-          return [{ kind: "number" }];
-        if (a.kind === "complex_or_number")
-          return [{ kind: "complex_or_number" }];
-        return null;
-      },
-      apply: args => withScratch(() => applyFFTShift(args, false)),
-    },
-  ],
+  nargin: [1, 2],
+  mfile: true,
+  apply: args => withScratch(() => applyFFTShift(args, false)),
 });
 
-defineBuiltin({
+builtin({
   name: "ifftshift",
-  cases: [
-    {
-      match: argTypes => {
-        if (argTypes.length < 1 || argTypes.length > 2) return null;
-        if (!isNumericJitType(argTypes[0])) return null;
-        const a = argTypes[0];
-        if (a.kind === "tensor")
-          return [{ kind: "tensor", isComplex: a.isComplex }];
-        if (a.kind === "number" || a.kind === "boolean")
-          return [{ kind: "number" }];
-        if (a.kind === "complex_or_number")
-          return [{ kind: "complex_or_number" }];
-        return null;
-      },
-      apply: args => withScratch(() => applyFFTShift(args, true)),
-    },
-  ],
+  nargin: [1, 2],
+  mfile: true,
+  apply: args => withScratch(() => applyFFTShift(args, true)),
 });

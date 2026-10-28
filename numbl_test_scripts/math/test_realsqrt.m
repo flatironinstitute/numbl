@@ -20,10 +20,11 @@ w = rs_helper(abs(cos(1:5)));
 assert(isreal(w));
 assert(max(abs(w - realsqrt(abs(cos(1:5))))) < 1e-15);
 
-% Negative or complex input is an error.
+% Negative or complex input is an error (complex input fails argument
+% validation, before any square root is taken).
 rs_expect_error(@() realsqrt(-1));
 rs_expect_error(@() realsqrt([1 -4 9]));
-rs_expect_error(@() realsqrt(1i));
+rs_expect_error(@() realsqrt(1i), 'Value must be real');
 for k = 1:3
   rs_expect_error(@() rs_helper(-k * [1 2 3]));
 end
@@ -34,13 +35,16 @@ function y = rs_helper(x)
   y = realsqrt(x .* x .* x) ./ abs(x);
 end
 
-function rs_expect_error(f)
+function rs_expect_error(f, msg)
+  if nargin < 2
+    msg = 'Realsqrt produced complex result';
+  end
   threw = false;
   try
     f();
   catch err
     threw = true;
-    assert(contains(err.message, 'Realsqrt produced complex result'));
+    assert(contains(err.message, msg));
   end
   assert(threw);
 end
