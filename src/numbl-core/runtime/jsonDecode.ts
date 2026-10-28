@@ -110,7 +110,7 @@ function convertJsonArray(arr: unknown[]): RuntimeValue {
         }
         return RTV.struct(fields);
       });
-      return RTV.structArray(fieldNames, elements);
+      return RTV.structArray(fieldNames, elements, [elements.length, 1]);
     }
 
     // Different fields → cell array of structs

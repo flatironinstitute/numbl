@@ -29,8 +29,10 @@ import {
   isRuntimeClassInstance,
   isRuntimeClassInstanceArray,
   isRuntimeDictionary,
+  isRuntimeStringArray,
   kstr,
 } from "../runtime/types.js";
+import { valueShape } from "./utils.js";
 import { incref, decref } from "./refcount.js";
 import {
   getIBuiltin,
@@ -561,11 +563,14 @@ function arrayfunCellfunImpl(
     throw new RuntimeError(`${name}: first argument must be a function`);
   };
 
-  // Helper to get the i-th element from an input array (cell, tensor, or struct array)
+  // Helper to get the i-th element from an input array (cell, tensor,
+  // struct array, object array or string array)
   const getElem = (arr: RuntimeValue, i: number): unknown => {
     if (isRuntimeCell(arr)) return arr.data[i];
     if (isRuntimeTensor(arr)) return arr.data[i];
-    if (isRuntimeStructArray(arr)) return arr.elements[i];
+    if (isRuntimeStructArray(arr) || isRuntimeClassInstanceArray(arr))
+      return arr.elements[i];
+    if (isRuntimeStringArray(arr)) return arr.data[i];
     return arr; // scalar - broadcast
   };
 
@@ -573,7 +578,9 @@ function arrayfunCellfunImpl(
   const getLen = (arr: RuntimeValue): number => {
     if (isRuntimeCell(arr)) return arr.data.length;
     if (isRuntimeTensor(arr)) return arr.data.length;
-    if (isRuntimeStructArray(arr)) return arr.elements.length;
+    if (isRuntimeStructArray(arr) || isRuntimeClassInstanceArray(arr))
+      return arr.elements.length;
+    if (isRuntimeStringArray(arr)) return arr.data.length;
     return 1;
   };
 
@@ -615,14 +622,13 @@ function arrayfunCellfunImpl(
   if (
     isRuntimeCell(arrArg) ||
     isRuntimeStructArray(arrArg) ||
+    isRuntimeClassInstanceArray(arrArg) ||
+    isRuntimeStringArray(arrArg) ||
     extraInputs.length > 0 ||
     nargout > 1
   ) {
     const len = getLen(arrArg);
-    const shape =
-      isRuntimeCell(arrArg) || isRuntimeTensor(arrArg)
-        ? [...arrArg.shape]
-        : [1, len];
+    const shape = [...valueShape(arrArg)];
 
     // Handle multiple outputs
     if (nargout > 1) {

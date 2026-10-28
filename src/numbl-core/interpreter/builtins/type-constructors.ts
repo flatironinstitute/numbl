@@ -785,7 +785,7 @@ builtin({
       if (isRuntimeStruct(a) || isRuntimeStructArray(a)) return a;
       // struct([]) → 0x0 empty struct array with no fields
       if (isRuntimeTensor(a) && a.data.length === 0)
-        return RTV.structArray([], []);
+        return RTV.structArray([], [], [0, 0]);
       if (isRuntimeClassInstance(a) || isRuntimeClassInstanceArray(a))
         throw new RuntimeError("struct: object input is not supported");
       throw invalidConversion("struct", a);
@@ -802,6 +802,7 @@ builtin({
     // cell values must all have the same number of elements.
     let arrayLen = -1;
     let arrayArg = 0;
+    let arrayShape: number[] = [1, 1];
     for (let i = 0; i < args.length; i += 2) {
       const nameArg = args[i];
       if (
@@ -823,6 +824,7 @@ builtin({
         if (arrayLen === -1) {
           arrayLen = len;
           arrayArg = i + 2;
+          arrayShape = val.shape.slice();
         } else if (len !== arrayLen)
           throw builtinError(
             "MATLAB:StructConversion:DimensionMismatch",
@@ -852,9 +854,9 @@ builtin({
       }
       elements.push(RTV.struct(fields));
     }
-    // 1x1 result (all cell values have one element) is a scalar struct
+    // The result has the size of the cell values; 1x1 is a scalar struct.
     if (elements.length === 1) return elements[0];
-    return RTV.structArray(fieldNames, elements);
+    return RTV.structArray(fieldNames, elements, arrayShape);
   },
 });
 

@@ -295,7 +295,8 @@ builtin({
       return s.length === 0 ? 0 : Math.max(...s);
     }
     if (isRuntimeString(v)) return 1;
-    if (isRuntimeStructArray(v)) return v.elements.length;
+    if (isRuntimeStructArray(v))
+      return v.elements.length === 0 ? 0 : Math.max(...v.shape);
     if (isRuntimeClassInstanceArray(v))
       return v.elements.length === 0 ? 0 : Math.max(...v.shape);
     if (isRuntimeStringArray(v))
@@ -308,9 +309,7 @@ builtin({
   name: "ndims",
   nargin: 1,
   apply: args => {
-    const v = args[0];
-    if (isRuntimeTensor(v)) return Math.max(2, v.shape.length);
-    return 2;
+    return Math.max(2, valueShape(args[0]).length);
   },
 });
 

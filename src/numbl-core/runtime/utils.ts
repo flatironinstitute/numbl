@@ -27,7 +27,7 @@ export function valueShape(v: RuntimeValue): number[] {
     return v.shape ?? (v.value.length === 0 ? [0, 0] : [1, v.value.length]);
   if (isRuntimeSparseMatrix(v)) return [v.m, v.n];
   if (isRuntimeCell(v)) return v.shape;
-  if (isRuntimeStructArray(v)) return [1, v.elements.length];
+  if (isRuntimeStructArray(v)) return v.shape;
   if (isRuntimeClassInstanceArray(v)) return [...v.shape];
   if (isRuntimeStringArray(v)) return [...v.shape];
   return [1, 1];

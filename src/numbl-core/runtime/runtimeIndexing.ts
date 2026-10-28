@@ -33,18 +33,23 @@ import {
   isRuntimeSparseMatrix,
   isRuntimeDictionary,
   isRuntimeStringArray,
-  stringArrayValue,
   type RuntimeClassInstanceArray,
+  type RuntimeStructArray,
+  type RuntimeStringArray,
   type RuntimeClassInstance,
   type RuntimeStruct,
   type RuntimeTensor,
   type RuntimeChar,
   RuntimeCell,
 } from "../runtime/types.js";
-import { stringArraySubscript, cellBraceElements } from "./indexing.js";
+import {
+  cellBraceElements,
+  stringBraceElements,
+  hasFieldOrder,
+} from "./indexing.js";
 import { isShared } from "./refcount.js";
 import { scalarSubsOffset } from "./indexPlan.js";
-import { matlabNumToString, numel, valueShape } from "./utils.js";
+import { numel, valueShape } from "./utils.js";
 import { dictLookup, dictInsertSingle, dictRemove } from "./dictionary.js";
 import { COLON_SENTINEL, END_SENTINEL } from "./sentinels.js";
 import {
@@ -155,9 +160,9 @@ export function index(
   skipSubsref: boolean | string = false
 ): unknown {
   // ── Fast paths: one or more in-range integer scalar subscripts into a
-  // tensor, or one into a cell (paren) or a single-row char. These skip
-  // resolveIndices and the planner; anything else, including errors,
-  // takes the general path.
+  // tensor, struct array, object array or string array, or one into a
+  // cell (paren) or a single-row char. These skip resolveIndices and the
+  // planner; anything else, including errors, takes the general path.
   if (typeof base === "object" && base !== null) {
     const kind = (base as { kind?: string }).kind;
     if (kind === "tensor") {
@@ -171,6 +176,18 @@ export function index(
         if (t._isLogical === true) return t.data[lin] !== 0;
         return t.data[lin];
       }
+    } else if (kind === "struct_array") {
+      const sa = base as RuntimeStructArray;
+      const lin = scalarSubsOffset(sa.shape, sa.elements.length, indices);
+      if (lin >= 0) return sa.elements[lin];
+    } else if (kind === "class_instance_array") {
+      const oa = base as RuntimeClassInstanceArray;
+      const lin = scalarSubsOffset(oa.shape, oa.elements.length, indices);
+      if (lin >= 0) return oa.elements[lin];
+    } else if (kind === "string_array") {
+      const sa = base as RuntimeStringArray;
+      const lin = scalarSubsOffset(sa.shape, sa.data.length, indices);
+      if (lin >= 0) return sa.data[lin];
     } else if (indices.length === 1 && typeof indices[0] === "number") {
       const i = indices[0];
       if (kind === "cell") {
@@ -210,10 +227,6 @@ export function index(
       skipSubsref === true ||
       (typeof skipSubsref === "string" && mv.className === skipSubsref);
     return classInstanceParenIndex(rt, mv, base, indices, nargout, skip);
-  }
-  // Class instance array indexing: arr(i)
-  if (isRuntimeClassInstanceArray(mv)) {
-    return classInstanceArrayParenIndex(mv, indices);
   }
   // Dictionary paren indexing: d(key)
   if (isRuntimeDictionary(mv)) {
@@ -257,104 +270,11 @@ function classInstanceParenIndex(
     }
   }
 
-  // Default: scalar class instance indexing.
-  // F(1), F(:), F(1,1), F(:,1), F(1,:), F(:,:) etc. all return F itself.
-  {
-    let valid = true;
-    for (const rawIdx of indices) {
-      if (rawIdx === COLON_SENTINEL) continue;
-      const idx = ensureRuntimeValue(rawIdx);
-      if (isRuntimeNumber(idx) && Math.round(idx) === 1) continue;
-      valid = false;
-      break;
-    }
-    if (valid) return base;
-  }
-  throw new RuntimeError(`Index exceeds class instance dimensions`);
-}
-
-/** Resolve one raw subscript against a dimension of `dimSize` to a list of
- *  0-based indices. Supports `:`, scalar numbers, numeric vectors, and
- *  logical masks. */
-function resolveObjSubscript(raw: unknown, dimSize: number): number[] {
-  if (raw === COLON_SENTINEL) {
-    return Array.from({ length: dimSize }, (_, i) => i);
-  }
-  if (typeof raw === "number") return [Math.round(raw) - 1];
-  const rv = ensureRuntimeValue(raw);
-  if (isRuntimeNumber(rv)) return [Math.round(toNumber(rv)) - 1];
-  if (isRuntimeLogical(rv)) return rv ? [0] : [];
-  if (isRuntimeTensor(rv)) {
-    if (rv._isLogical) {
-      const out: number[] = [];
-      for (let k = 0; k < rv.data.length; k++) if (rv.data[k]) out.push(k);
-      return out;
-    }
-    return Array.from(rv.data, x => Math.round(x) - 1);
-  }
-  throw new RuntimeError("Invalid index type for class instance array");
-}
-
-/** Build a class instance array (or unwrap to a scalar instance). */
-function makeObjResult(
-  className: string,
-  elements: import("../runtime/types.js").RuntimeClassInstance[],
-  shape: [number, number]
-): unknown {
-  if (elements.length === 1) return elements[0];
-  return RTV.classInstanceArray(className, elements, shape);
-}
-
-/** Handle arr(k) / arr(i,j) on a class instance array — returns element(s). */
-function classInstanceArrayParenIndex(
-  mv: RuntimeClassInstanceArray,
-  indices: unknown[]
-): unknown {
-  const [rows, cols] = mv.shape;
-  const total = mv.elements.length;
-
-  // Two-subscript indexing: arr(i, j), column-major.
-  if (indices.length === 2) {
-    const ri = resolveObjSubscript(indices[0], rows);
-    const ci = resolveObjSubscript(indices[1], cols);
-    const selected: import("../runtime/types.js").RuntimeClassInstance[] = [];
-    for (const j of ci) {
-      if (j < 0 || j >= cols)
-        throw new RuntimeError("Index exceeds array bounds");
-      for (const i of ri) {
-        if (i < 0 || i >= rows)
-          throw new RuntimeError("Index exceeds array bounds");
-        selected.push(mv.elements[j * rows + i]);
-      }
-    }
-    return makeObjResult(mv.className, selected, [ri.length, ci.length]);
-  }
-
-  if (indices.length !== 1) {
-    throw new RuntimeError(
-      "Class instance arrays support one- or two-subscript indexing"
-    );
-  }
-
-  const idx = indices[0];
-  if (idx === COLON_SENTINEL) {
-    // arr(:) returns a column vector of all elements (column-major order).
-    return makeObjResult(mv.className, mv.elements.slice(), [total, 1]);
-  }
-  const linear = resolveObjSubscript(idx, total);
-  const selected: import("../runtime/types.js").RuntimeClassInstance[] = [];
-  for (const i of linear) {
-    if (i < 0 || i >= total)
-      throw new RuntimeError("Index exceeds array bounds");
-    selected.push(mv.elements[i]);
-  }
-  // Linear indexing of a vector preserves the source orientation; otherwise
-  // (a matrix indexed linearly) MATLAB returns a row.
-  const isColumn = cols === 1 && rows !== 1;
-  const shape: [number, number] = isColumn
-    ? [selected.length, 1]
-    : [1, selected.length];
-  return makeObjResult(mv.className, selected, shape);
+  // Default: built-in indexing of a 1x1 object.
+  return mIndex(
+    mv,
+    resolveIndices(indices, endResolver(rt, mv, indices.length))
+  );
 }
 
 /** Resolve raw index arguments for a class instance before passing to subsref.
@@ -458,29 +378,11 @@ export function indexCell(
   // String brace indexing: str{i} extracts the element as a char vector
   // (MATLAB: ["one" "two"]{2} -> 'two'; "abc"{1} -> 'abc').
   if (isRuntimeString(mv) || isRuntimeStringArray(mv)) {
-    const idxMvals = resolveIndices(
-      indices,
-      endResolver(rt, mv, indices.length)
+    const elems = stringBraceElements(
+      mv,
+      resolveIndices(indices, endResolver(rt, mv, indices.length))
     );
-    const elems = isRuntimeString(mv) ? [mv] : mv.data;
-    const shape: [number, number] = isRuntimeString(mv) ? [1, 1] : mv.shape;
-    let lin: number;
-    if (idxMvals.length === 1) {
-      lin = Math.round(toNumber(idxMvals[0])) - 1;
-    } else if (idxMvals.length === 2) {
-      const r = Math.round(toNumber(idxMvals[0])) - 1;
-      const c = Math.round(toNumber(idxMvals[1])) - 1;
-      if (r < 0 || r >= shape[0] || c < 0 || c >= shape[1])
-        throw new RuntimeError("Index exceeds array bounds");
-      lin = c * shape[0] + r;
-    } else {
-      throw new RuntimeError(
-        "String brace indexing supports 1 or 2 subscripts"
-      );
-    }
-    if (lin < 0 || lin >= elems.length)
-      throw new RuntimeError("Index exceeds array bounds");
-    return RTV.char(elems[lin]);
+    return elems.length === 1 ? elems[0] : elems;
   }
 
   if (!isRuntimeCell(mv)) throw new RuntimeError("Cell indexing on non-cell");
@@ -490,7 +392,9 @@ export function indexCell(
 }
 
 /**
- * Indexed assignment with support for struct arrays, cell deletion, and scalar expansion.
+ * Indexed assignment `base(indices) = rhs` (deletion when rhs is `[]`).
+ * `storeBack` marks the store-back of `base(indices).f = v`, which may add
+ * a field to a struct array.
  */
 export function indexStore(
   rt: Runtime,
@@ -500,34 +404,59 @@ export function indexStore(
   skipSubsasgn = false,
   storeBack = false
 ): unknown {
-  // ── Fast paths: real tensor, number RHS, scalar subscripts that are in
-  // range (unshared target, written in place) or append to a vector
-  // (`v(end+1) = x`). Everything else takes the general path.
-  if (
-    typeof rhs === "number" &&
-    typeof base === "object" &&
-    base !== null &&
-    (base as { kind?: string }).kind === "tensor"
-  ) {
-    const t = base as RuntimeTensor;
-    if (t.imag === undefined && t._isLogical !== true) {
-      if (!isShared(t)) {
-        const lin = scalarOffset(t, indices);
-        if (lin >= 0) {
-          t.data[lin] = rhs;
-          return t;
+  // ── Fast paths: one in-range scalar subscript into an unshared target
+  // that is written in place: a real tensor (number RHS, plus
+  // `v(end+1) = x` appends), or a struct/object array whose element is
+  // replaced by one with the same fields / class. Everything else takes
+  // the general path.
+  if (typeof base === "object" && base !== null) {
+    const kind = (base as { kind?: string }).kind;
+    if (kind === "tensor" && typeof rhs === "number") {
+      const t = base as RuntimeTensor;
+      if (t.imag === undefined && t._isLogical !== true) {
+        if (!isShared(t)) {
+          const lin = scalarOffset(t, indices);
+          if (lin >= 0) {
+            t.data[lin] = rhs;
+            return t;
+          }
+        }
+        if (indices.length === 1 && indices[0] === t.data.length + 1) {
+          const s = t.shape;
+          const n = t.data.length + 1;
+          const col = s.length === 2 && s[1] === 1 && s[0] !== 1;
+          if (col || n === 1 || (s.length === 2 && s[0] === 1)) {
+            const data = allocFloat64Array(n);
+            data.set(t.data);
+            data[n - 1] = rhs;
+            return RTV.tensorRaw(data, col ? [n, 1] : [1, n]);
+          }
         }
       }
-      if (indices.length === 1 && indices[0] === t.data.length + 1) {
-        const s = t.shape;
-        const n = t.data.length + 1;
-        const col = s.length === 2 && s[1] === 1 && s[0] !== 1;
-        if (col || n === 1 || (s.length === 2 && s[0] === 1)) {
-          const data = allocFloat64Array(n);
-          data.set(t.data);
-          data[n - 1] = rhs;
-          return RTV.tensorRaw(data, col ? [n, 1] : [1, n]);
-        }
+    } else if (
+      kind === "struct_array" &&
+      isRuntimeStruct(rhs as RuntimeValue) &&
+      !isShared(base)
+    ) {
+      const sa = base as RuntimeStructArray;
+      const lin = scalarSubsOffset(sa.shape, sa.elements.length, indices);
+      if (lin >= 0 && hasFieldOrder(rhs as RuntimeStruct, sa.fieldNames)) {
+        sa.bindElement(rt, lin, rhs as RuntimeStruct);
+        return sa;
+      }
+    } else if (
+      kind === "class_instance_array" &&
+      isRuntimeClassInstance(rhs as RuntimeValue) &&
+      !isShared(base)
+    ) {
+      const oa = base as RuntimeClassInstanceArray;
+      const lin = scalarSubsOffset(oa.shape, oa.elements.length, indices);
+      if (
+        lin >= 0 &&
+        (rhs as RuntimeClassInstance).className === oa.className
+      ) {
+        oa.bindElement(rt, lin, rhs as RuntimeClassInstance);
+        return oa;
       }
     }
   }
@@ -556,184 +485,16 @@ export function indexStore(
     }
     return dictInsertSingle(mv, key, rhsMv);
   }
-  // Struct array element assignment (also handles scalar struct auto-growth)
-  if (
-    indices.length === 1 &&
-    (isRuntimeStructArray(mv) ||
-      isRuntimeStruct(mv) ||
-      (isRuntimeTensor(mv) && mv.data.length === 0))
-  ) {
-    const rhsMv = ensureRuntimeValue(rhs);
-    if (isRuntimeStruct(rhsMv)) {
-      const idxVal = ensureRuntimeValue(indices[0]);
-      const k = Math.round(toNumber(idxVal)) - 1;
-      const existingElements = isRuntimeStructArray(mv)
-        ? [...mv.elements]
-        : isRuntimeStruct(mv)
-          ? [mv]
-          : [];
-      const existingFieldNames = isRuntimeStructArray(mv)
-        ? mv.fieldNames
-        : isRuntimeStruct(mv)
-          ? [...mv.fields.keys()]
-          : [];
-      const rhsFieldNames = [...rhsMv.fields.keys()];
-      // MATLAB: `s(k) = t` requires `t` to have the same field set as `s`
-      // (order may differ). Store-backs from `s(k).f = v` are exempt: they
-      // legitimately add a field to every element.
-      if (
-        !storeBack &&
-        (isRuntimeStructArray(mv) || isRuntimeStruct(mv)) &&
-        (rhsFieldNames.length !== existingFieldNames.length ||
-          rhsFieldNames.some(f => !existingFieldNames.includes(f)))
-      ) {
-        throw new RuntimeError(
-          "Subscripted assignment between dissimilar structures."
-        );
-      }
-      const allFieldNames = [
-        ...new Set([...existingFieldNames, ...rhsFieldNames]),
-      ];
-      // Every element must carry every field, in `allFieldNames` order.
-      // Elements needing a change get a fresh struct: the originals may be
-      // shared with another variable (copy-on-write).
-      const conform = (el: RuntimeStruct): RuntimeStruct => {
-        const keys = [...el.fields.keys()];
-        if (
-          keys.length === allFieldNames.length &&
-          keys.every((f, i) => f === allFieldNames[i])
-        )
-          return el;
-        return RTV.struct(
-          new Map(
-            allFieldNames.map(f => [
-              f,
-              el.fields.get(f) ?? RTV.tensor(allocFloat64Array(0), [0, 0]),
-            ])
-          )
-        );
-      };
-      for (let ei = 0; ei < existingElements.length; ei++) {
-        existingElements[ei] = conform(existingElements[ei]);
-      }
-      while (existingElements.length <= k) {
-        existingElements.push(
-          RTV.struct(
-            new Map(
-              allFieldNames.map(f => [
-                f,
-                RTV.tensor(allocFloat64Array(0), [0, 0]),
-              ])
-            )
-          )
-        );
-      }
-      existingElements[k] = conform(rhsMv);
-      return RTV.structArray(allFieldNames, existingElements);
-    }
-  }
-  // Struct array element deletion: sa(idx) = []
-  if (isRuntimeStructArray(mv) && indices.length === 1) {
-    const rhsMv = ensureRuntimeValue(rhs);
-    if (isRuntimeTensor(rhsMv) && rhsMv.data.length === 0) {
-      const idx = ensureRuntimeValue(indices[0]);
-      const toDelete = new Set<number>();
-      if (isRuntimeNumber(idx)) {
-        toDelete.add(Math.round(idx) - 1);
-      } else if (isRuntimeTensor(idx)) {
-        if (idx._isLogical) {
-          for (let i = 0; i < idx.data.length; i++) {
-            if (idx.data[i] !== 0) toDelete.add(i);
-          }
-        } else {
-          for (let i = 0; i < idx.data.length; i++)
-            toDelete.add(Math.round(idx.data[i]) - 1);
-        }
-      } else if (isRuntimeLogical(idx)) {
-        if (idx) toDelete.add(0);
-      }
-      const newElements = mv.elements.filter((_, i) => !toDelete.has(i));
-      return RTV.structArray(mv.fieldNames, newElements);
-    }
-  }
-  // Cell paren-indexed assignment
-  if (isRuntimeCell(mv)) {
-    const idxMvals = resolveIndices(
-      indices,
-      endResolver(rt, mv, indices.length)
-    );
-    const rhsMv = ensureRuntimeValue(rhs);
-    return mIndexStore(mv, idxMvals, rhsMv, true, rt);
-  }
-  // Struct scalar indexed assignment
-  if (isRuntimeStruct(mv)) {
-    return ensureRuntimeValue(rhs);
-  }
-  // Object-array assignment/growth: arr(k) = obj where the destination is an
-  // undefined/empty slot (empty tensor), an existing class-instance array, or
-  // a scalar instance being grown into an array (k >= 2). This is the
-  // old-style pattern `s.boundary(iside) = msh_cartesian(...)` (growing from
-  // an undefined field) and `arr(k) = obj` array building. Single-element
-  // replacement of a scalar instance (`obj(1) = other`, k === 0) is left to
-  // the subsasgn dispatch below so that custom/overloaded subsasgn and the
-  // in-method bypass semantics are preserved.
-  if (
-    indices.length === 1 &&
-    isRuntimeClassInstance(ensureRuntimeValue(rhs)) &&
-    // Object-array growth uses a numeric position. A char/string index (e.g. a
-    // key into a containers.Map whose value happens to be a class instance)
-    // must fall through to the subsasgn dispatch below, not be coerced to a
-    // number — `toNumber` on a multi-char value throws.
-    !isRuntimeChar(ensureRuntimeValue(indices[0]))
-  ) {
-    const k = Math.round(toNumber(ensureRuntimeValue(indices[0]))) - 1;
-    const growsArray =
-      isRuntimeClassInstanceArray(mv) ||
-      (isRuntimeTensor(mv) && mv.data.length === 0) ||
-      (isRuntimeClassInstance(mv) && k >= 1);
-    if (growsArray) {
-      if (k < 0) throw new RuntimeError("Index must be a positive integer");
-      const rhsInst = ensureRuntimeValue(rhs) as RuntimeClassInstance;
-      const existing = isRuntimeClassInstanceArray(mv)
-        ? [...mv.elements]
-        : isRuntimeClassInstance(mv)
-          ? [mv]
-          : [];
-      const className = isRuntimeClassInstanceArray(mv)
-        ? mv.className
-        : isRuntimeClassInstance(mv)
-          ? mv.className
-          : rhsInst.className;
-      // Pad any gap with default-constructed (empty-field) instances so the
-      // array stays contiguous (MATLAB pads object arrays this way).
-      while (existing.length < k) {
-        existing.push(
-          RTV.classInstance(className, [...rhsInst.fields.keys()], false)
-        );
-      }
-      existing[k] = rhsInst;
-      // Unwrap a single element back to a scalar instance (numbl's convention:
-      // a 1-element object array reads as a scalar).
-      if (existing.length === 1) return existing[0];
-      // Preserve orientation. An in-bounds assignment keeps the original 2-D
-      // shape; growth extends a column vector as a column and everything else
-      // as a row (matching MATLAB's vector-growth rule).
-      const origShape = isRuntimeClassInstanceArray(mv) ? mv.shape : null;
-      let shape: [number, number];
-      if (origShape && existing.length === origShape[0] * origShape[1]) {
-        shape = origShape;
-      } else if (origShape && origShape[1] === 1) {
-        shape = [existing.length, 1];
-      } else {
-        shape = [1, existing.length];
-      }
-      return RTV.classInstanceArray(className, existing, shape);
-    }
-  }
-  // Class instance paren-indexed assignment: dispatch to subsasgn if available
+  // A scalar object dispatches to its subsasgn overload, except when an
+  // object RHS grows it into an object array (`obj(k) = other`, k > 1).
   if (isRuntimeClassInstance(mv)) {
+    const rhsMv = ensureRuntimeValue(rhs);
+    const grows =
+      isRuntimeClassInstance(rhsMv) &&
+      indices.length === 1 &&
+      scalarIndexValue(indices[0]) > 1;
     const guardKey = `${mv.className}.subsasgn`;
-    if (!skipSubsasgn && !rt.activeAccessors.has(guardKey)) {
+    if (!grows && !skipSubsasgn && !rt.activeAccessors.has(guardKey)) {
       const subsasgnFn = rt.cachedResolveClassMethod(mv.className, "subsasgn");
       if (subsasgnFn) {
         const resolvedIndices = indices.map(i =>
@@ -746,24 +507,13 @@ export function indexStore(
         );
         rt.activeAccessors.add(guardKey);
         try {
-          const result = subsasgnFn(1, base, S, ensureRuntimeValue(rhs));
+          const result = subsasgnFn(1, base, S, rhsMv);
           return result !== undefined ? result : base;
         } finally {
           rt.activeAccessors.delete(guardKey);
         }
       }
     }
-    // No subsasgn or recursion guard active — just replace (fallback)
-    return ensureRuntimeValue(rhs);
-  }
-  // Sparse matrix indexed assignment — delegate to storeIntoRTValueIndex
-  if (isRuntimeSparseMatrix(mv)) {
-    const idxMvals = resolveIndices(
-      indices,
-      endResolver(rt, mv, indices.length)
-    );
-    const rhsMv = ensureRuntimeValue(rhs);
-    return mIndexStore(mv, idxMvals, rhsMv, false, rt);
   }
   // When the base is a scalar number and the RHS is a class instance or struct,
   // replace the variable entirely
@@ -773,17 +523,29 @@ export function indexStore(
       return rhsMv;
     }
   }
-  // String / string-array indexed assignment (element replacement, growth,
-  // deletion). A primitive string base is a 1x1 string array; an empty
-  // tensor base with a string RHS starts a fresh string array.
-  {
-    const rhsMv0 = ensureRuntimeValue(rhs);
-    const baseIsStr = isRuntimeString(mv) || isRuntimeStringArray(mv);
-    const baseEmpty = isRuntimeTensor(mv) && mv.data.length === 0;
-    const rhsIsStr = isRuntimeString(rhsMv0) || isRuntimeStringArray(rhsMv0);
-    if (baseIsStr || (baseEmpty && rhsIsStr)) {
-      return stringArrayIndexStore(rt, mv, indices, rhsMv0);
-    }
+  // Containers other than numeric/char arrays store directly.
+  if (
+    isRuntimeCell(mv) ||
+    isRuntimeStruct(mv) ||
+    isRuntimeStructArray(mv) ||
+    isRuntimeClassInstance(mv) ||
+    isRuntimeClassInstanceArray(mv) ||
+    isRuntimeString(mv) ||
+    isRuntimeStringArray(mv) ||
+    isRuntimeSparseMatrix(mv)
+  ) {
+    const idxMvals = resolveIndices(
+      indices,
+      endResolver(rt, mv, indices.length)
+    );
+    return mIndexStore(
+      mv,
+      idxMvals,
+      ensureRuntimeValue(rhs),
+      isRuntimeCell(mv),
+      rt,
+      storeBack
+    );
   }
   // Convert scalar number/logical/complex to 1x1 tensor for indexed assignment
   let wasScalar = false;
@@ -832,130 +594,15 @@ export function indexStore(
   return result;
 }
 
-/** Convert an assignment RHS to string elements, or null if unsupported. */
-function rhsToStringElems(rhsMv: RuntimeValue): string[] | null {
-  if (isRuntimeString(rhsMv)) return [rhsMv];
-  if (isRuntimeStringArray(rhsMv)) return rhsMv.data.slice();
-  if (isRuntimeChar(rhsMv)) {
-    const rows = rhsMv.shape ? rhsMv.shape[0] : 1;
-    if (rows <= 1) return [rhsMv.value];
-    const width = rhsMv.shape![1];
-    const out: string[] = [];
-    for (let r = 0; r < rows; r++)
-      out.push(rhsMv.value.slice(r * width, (r + 1) * width));
-    return out;
+/** The value of a numeric scalar subscript, else 0. */
+function scalarIndexValue(idx: unknown): number {
+  if (typeof idx === "number") return idx;
+  if (typeof idx === "object" && idx !== null) {
+    const v = idx as RuntimeValue;
+    if (isRuntimeTensor(v) && v.data.length === 1 && !v._isLogical)
+      return v.data[0];
   }
-  if (isRuntimeNumber(rhsMv)) return [matlabNumToString(rhsMv)];
-  if (isRuntimeLogical(rhsMv)) return [rhsMv ? "true" : "false"];
-  if (isRuntimeTensor(rhsMv))
-    return Array.from(rhsMv.data, d => matlabNumToString(d));
-  return null;
-}
-
-/** Indexed assignment where the destination is a string array (or a scalar
- *  string / empty tensor becoming one). Supports growth (gaps fill with ""
- *  — numbl has no <missing>) and deletion via s(idx) = []. */
-function stringArrayIndexStore(
-  rt: Runtime,
-  mv: RuntimeValue,
-  indices: unknown[],
-  rhsMv: RuntimeValue
-): RuntimeValue {
-  let data: string[];
-  let rows: number;
-  let cols: number;
-  if (isRuntimeStringArray(mv)) {
-    data = mv.data.slice();
-    [rows, cols] = mv.shape;
-  } else if (isRuntimeString(mv)) {
-    data = [mv];
-    rows = 1;
-    cols = 1;
-  } else {
-    data = [];
-    rows = 0;
-    cols = 0;
-  }
-
-  const idxMvals = resolveIndices(indices, endResolver(rt, mv, indices.length));
-
-  // Deletion: s(idx) = []
-  if (
-    isRuntimeTensor(rhsMv) &&
-    rhsMv.data.length === 0 &&
-    idxMvals.length === 1
-  ) {
-    const del = new Set(stringArraySubscript(idxMvals[0], data.length));
-    const kept = data.filter((_, i) => !del.has(i));
-    if (cols === 1 && rows > 1) return stringArrayValue(kept, [kept.length, 1]);
-    return stringArrayValue(kept, [1, kept.length]);
-  }
-
-  const rhsElems = rhsToStringElems(rhsMv);
-  if (rhsElems === null) {
-    throw new RuntimeError("Cannot assign this value into a string array");
-  }
-
-  if (idxMvals.length === 1) {
-    const positions = stringArraySubscript(idxMvals[0], data.length);
-    const maxPos = positions.length ? Math.max(...positions) : -1;
-    if (positions.some(p => p < 0)) {
-      throw new RuntimeError("Index must be a positive integer");
-    }
-    if (maxPos >= data.length) {
-      if (rows > 1 && cols > 1) {
-        throw new RuntimeError("Index exceeds array bounds");
-      }
-      while (data.length <= maxPos) data.push("");
-    }
-    if (rhsElems.length !== 1 && rhsElems.length !== positions.length) {
-      throw new RuntimeError(
-        "Unable to perform assignment because the left and right sides have a different number of elements"
-      );
-    }
-    positions.forEach((p, k) => {
-      data[p] = rhsElems.length === 1 ? rhsElems[0] : rhsElems[k];
-    });
-    if (rows > 1 && cols > 1) return stringArrayValue(data, [rows, cols]);
-    if (cols === 1 && rows > 1) return stringArrayValue(data, [data.length, 1]);
-    return stringArrayValue(data, [1, data.length]);
-  }
-
-  if (idxMvals.length === 2) {
-    const ri = stringArraySubscript(idxMvals[0], rows);
-    const ci = stringArraySubscript(idxMvals[1], cols);
-    if (ri.some(p => p < 0) || ci.some(p => p < 0)) {
-      throw new RuntimeError("Index must be a positive integer");
-    }
-    const newRows = Math.max(rows, ri.length ? Math.max(...ri) + 1 : 0);
-    const newCols = Math.max(cols, ci.length ? Math.max(...ci) + 1 : 0);
-    let grid = data;
-    if (newRows !== rows || newCols !== cols) {
-      grid = new Array<string>(newRows * newCols).fill("");
-      for (let c = 0; c < cols; c++) {
-        for (let r = 0; r < rows; r++) {
-          grid[c * newRows + r] = data[c * rows + r];
-        }
-      }
-    }
-    const count = ri.length * ci.length;
-    if (rhsElems.length !== 1 && rhsElems.length !== count) {
-      throw new RuntimeError(
-        "Unable to perform assignment because the left and right sides have a different number of elements"
-      );
-    }
-    let k = 0;
-    for (const c of ci) {
-      for (const r of ri) {
-        grid[c * newRows + r] =
-          rhsElems.length === 1 ? rhsElems[0] : rhsElems[k];
-        k++;
-      }
-    }
-    return stringArrayValue(grid, [newRows, newCols]);
-  }
-
-  throw new RuntimeError("String array assignment supports 1 or 2 subscripts");
+  return 0;
 }
 
 /**
@@ -980,6 +627,14 @@ export function indexCellStore(
     const cellVal = RTV.cell([rhsMv], [1, 1]);
     // Use dictInsertSingle to avoid expandValues unwrapping the cell
     return dictInsertSingle(mv, key, cellVal);
+  }
+  // str{k} = value sets one string element.
+  if (isRuntimeString(mv) || isRuntimeStringArray(mv)) {
+    const idxMvals = resolveIndices(
+      indices,
+      endResolver(rt, mv, indices.length)
+    );
+    return mIndexStore(mv, idxMvals, ensureRuntimeValue(rhs), true, rt);
   }
   if (!isRuntimeCell(mv)) mv = RTV.cell([], [0, 0]);
   const idxMvals = resolveIndices(indices, endResolver(rt, mv, indices.length));

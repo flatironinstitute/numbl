@@ -19,6 +19,7 @@ import {
   isRuntimeStructArray,
   isRuntimeStringArray,
   stringArrayValue,
+  structArrayValue,
   type RuntimeSparseMatrix,
   RuntimeChar,
   kstr,
@@ -98,7 +99,7 @@ export function horzcat(...values: RuntimeValue[]): RuntimeValue {
 
   // Struct / struct-array concatenation: [sA, sB]
   if (values.some(v => isRuntimeStruct(v) || isRuntimeStructArray(v))) {
-    return structCat(values);
+    return structCat(values, 1);
   }
 
   return catAlongDim(values, 1); // dim 2 = 0-based index 1
@@ -132,7 +133,7 @@ export function vertcat(...values: RuntimeValue[]): RuntimeValue {
 
   // Struct / struct-array concatenation: [sA; sB]
   if (values.some(v => isRuntimeStruct(v) || isRuntimeStructArray(v))) {
-    return structCat(values);
+    return structCat(values, 0);
   }
 
   return catAlongDim(values, 0); // dim 1 = 0-based index 0
@@ -294,51 +295,108 @@ function vertcatChars(values: RuntimeValue[]): RuntimeValue {
   return new RuntimeChar(out, [totalRows, cols ?? 0]);
 }
 
-/** Concatenate struct scalars and struct arrays into a flat struct array.
- *  numbl's RuntimeStructArray doesn't carry a shape, so both horzcat and
- *  vertcat produce a 1-D concatenated list.  All operands must have the
- *  same set of field names. */
-function structCat(values: RuntimeValue[]): RuntimeValue {
-  const elements: RuntimeStruct[] = [];
-  let fieldNames: string[] | null = null;
+/** Concatenate structs and struct arrays along dimension `dimIdx`
+ *  (0-based). Operands with no elements (including `[]`) are dropped; the
+ *  others must have the same field names (in any order; the first
+ *  operand's order is kept). */
+export function structCat(
+  values: RuntimeValue[],
+  dimIdx: number
+): RuntimeValue {
+  let names: string[] | null = null;
+  let emptyResult: RuntimeValue | null = null;
+  const parts: { data: RuntimeStruct[]; shape: readonly number[] }[] = [];
   for (const v of values) {
+    let data: RuntimeStruct[];
+    let shape: readonly number[];
+    let vNames: string[];
     if (isRuntimeStruct(v)) {
-      const keys = Array.from(v.fields.keys());
-      if (fieldNames === null) fieldNames = keys;
-      else if (!arraysEqual(fieldNames, keys)) {
-        throw new RuntimeError(
-          "Cannot concatenate structs with different field names"
-        );
-      }
-      elements.push(v);
+      data = [v];
+      shape = [1, 1];
+      vNames = Array.from(v.fields.keys());
     } else if (isRuntimeStructArray(v)) {
-      if (fieldNames === null) fieldNames = [...v.fieldNames];
-      else if (!arraysEqual(fieldNames, v.fieldNames)) {
-        throw new RuntimeError(
-          "Cannot concatenate struct arrays with different field names"
-        );
-      }
-      for (const e of v.elements) elements.push(e);
-    } else {
-      // Empty numeric [] is MATLAB's empty and is allowed in struct cats.
-      if (
-        isRuntimeTensor(v) &&
-        v.data.length === 0 &&
-        v.shape.every(d => d === 0)
-      ) {
+      if (v.elements.length === 0) {
+        emptyResult ??= v;
         continue;
       }
+      data = v.elements;
+      shape = v.shape;
+      vNames = v.fieldNames;
+    } else if (
+      (isRuntimeTensor(v) && v.data.length === 0) ||
+      (isRuntimeCell(v) && v.data.length === 0)
+    ) {
+      continue;
+    } else {
       throw new RuntimeError(`Cannot concatenate ${kstr(v)} into struct`);
     }
+    if (names === null) names = vNames;
+    else if (
+      vNames.length !== names.length ||
+      vNames.some(f => !names!.includes(f))
+    )
+      throw new RuntimeError(
+        "Names of fields in structure arrays being concatenated do not match."
+      );
+    parts.push({ data, shape });
   }
-  if (fieldNames === null) fieldNames = [];
-  return RTV.structArray(fieldNames, elements);
+  if (names === null) return emptyResult ?? RTV.structArray([], [], [0, 0]);
+  const order = names;
+  for (const p of parts)
+    p.data = p.data.map(el => {
+      let i = 0;
+      let same = el.fields.size === order.length;
+      if (same)
+        for (const k of el.fields.keys()) if (k !== order[i++]) same = false;
+      if (same) return el;
+      return RTV.struct(new Map(order.map(f => [f, el.fields.get(f)!])));
+    });
+  const r = catElements(parts, dimIdx);
+  return structArrayValue(names.slice(), r.data, r.shape);
 }
 
-function arraysEqual<T>(a: T[], b: T[]): boolean {
-  if (a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
-  return true;
+/** Concatenate column-major element arrays along dimension `dimIdx`
+ *  (0-based); all other dimensions must agree. */
+export function catElements<T>(
+  parts: { data: readonly T[]; shape: readonly number[] }[],
+  dimIdx: number
+): { data: T[]; shape: number[] } {
+  const ndim = Math.max(2, dimIdx + 1, ...parts.map(p => p.shape.length));
+  const shapes = parts.map(p => {
+    const s = [...p.shape];
+    while (s.length < ndim) s.push(1);
+    return s;
+  });
+  const refShape = shapes[0];
+  for (let i = 1; i < shapes.length; i++) {
+    for (let d = 0; d < ndim; d++) {
+      if (d === dimIdx) continue;
+      if (shapes[i][d] !== refShape[d])
+        throw new RuntimeError(
+          "Dimensions of arrays being concatenated are not consistent."
+        );
+    }
+  }
+  const resultShape = [...refShape];
+  resultShape[dimIdx] = shapes.reduce((s, sh) => s + sh[dimIdx], 0);
+  while (resultShape.length > 2 && resultShape[resultShape.length - 1] === 1)
+    resultShape.pop();
+  const data: T[] = new Array(numel(resultShape));
+  // Stride-based slab copies.
+  let inner = 1;
+  for (let d = 0; d < dimIdx; d++) inner *= refShape[d];
+  let numOuter = 1;
+  for (let d = dimIdx + 1; d < ndim; d++) numOuter *= refShape[d];
+  let dst = 0;
+  for (let outer = 0; outer < numOuter; outer++) {
+    for (let c = 0; c < parts.length; c++) {
+      const block = inner * shapes[c][dimIdx];
+      const src = outer * block;
+      const pd = parts[c].data;
+      for (let j = 0; j < block; j++) data[dst++] = pd[src + j];
+    }
+  }
+  return { data, shape: resultShape };
 }
 
 /** Convert a value to a sparse matrix for concatenation */
@@ -648,7 +706,10 @@ function isEmptyNonCellOperand(v: RuntimeValue): boolean {
   return false;
 }
 
-function cellCatAlongDim(values: RuntimeValue[], dimIdx: number): RuntimeCell {
+export function cellCatAlongDim(
+  values: RuntimeValue[],
+  dimIdx: number
+): RuntimeCell {
   // Convert inputs to cells: a non-cell operand is wrapped as a single 1x1
   // cell ([5, {'x'}] -> {5,'x'} — the value is preserved, not char-coerced).
   // MATLAB drops empty operands ('' / []) during concatenation, so skip them.
@@ -668,52 +729,6 @@ function cellCatAlongDim(values: RuntimeValue[], dimIdx: number): RuntimeCell {
   if (cells.length === 0) return RTV.cell([], [0, 0]);
   if (cells.length === 1) return cells[0];
 
-  const ndim = Math.max(2, ...cells.map(c => c.shape.length));
-
-  // Pad all shapes to ndim
-  const shapes = cells.map(c => {
-    const s = [...c.shape];
-    while (s.length < ndim) s.push(1);
-    return s;
-  });
-
-  // Verify all non-cat dimensions match
-  const refShape = shapes[0];
-  for (let i = 1; i < shapes.length; i++) {
-    for (let d = 0; d < ndim; d++) {
-      if (d === dimIdx) continue;
-      if (shapes[i][d] !== refShape[d])
-        throw new RuntimeError(
-          "Dimensions of arrays being concatenated are not consistent"
-        );
-    }
-  }
-
-  // Compute result shape
-  const resultShape = [...refShape];
-  resultShape[dimIdx] = shapes.reduce((s, sh) => s + sh[dimIdx], 0);
-  const totalElems = numel(resultShape);
-
-  const resultData: RuntimeValue[] = new Array(totalElems);
-
-  // Stride-based slab copies for cell concatenation
-  let strideDim = 1;
-  for (let d = 0; d < dimIdx; d++) strideDim *= resultShape[d];
-  let numOuter = 1;
-  for (let d = dimIdx + 1; d < ndim; d++) numOuter *= resultShape[d];
-
-  for (let outer = 0; outer < numOuter; outer++) {
-    let dstOff = outer * strideDim * resultShape[dimIdx];
-    for (let c = 0; c < cells.length; c++) {
-      const srcDimSize = shapes[c][dimIdx];
-      const blockSize = strideDim * srcDimSize;
-      const srcOff = outer * blockSize;
-      for (let j = 0; j < blockSize; j++) {
-        resultData[dstOff + j] = cells[c].data[srcOff + j];
-      }
-      dstOff += blockSize;
-    }
-  }
-
-  return RTV.cell(resultData, resultShape);
+  const r = catElements(cells, dimIdx);
+  return RTV.cell(r.data, r.shape);
 }

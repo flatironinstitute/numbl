@@ -286,23 +286,25 @@ builtin({
       A = RTV.tensor(allocFloat64Array([A ? 1 : 0]), [1, 1]);
     }
     // MATLAB num2cell wraps each element of ANY array — including struct
-    // and object arrays — in a cell. Struct arrays are modelled as 1xN in
-    // numbl (matching size()). RTV.cell increfs its contents, so sharing
-    // the existing elements is safe.
+    // and object arrays — in a cell. RTV.cell increfs its contents, so
+    // sharing the existing elements is safe.
     const dimArg = args.length > 1 ? Math.round(toNumber(args[1])) : undefined;
     if (isRuntimeStruct(A) || isRuntimeClassInstance(A)) {
       return RTV.cell([A], [1, 1]);
     }
     if (isRuntimeStructArray(A)) {
       const fieldNames = A.fieldNames;
+      if (dimArg === undefined) return RTV.cell([...A.elements], A.shape);
+      if (A.shape.length > 2)
+        throw new RuntimeError("num2cell: N-d struct arrays are not supported");
       return num2cellElements(
         A.elements,
-        [1, A.elements.length],
+        [A.shape[0], A.shape[1]],
         dimArg,
-        els =>
+        (els, shape) =>
           els.length === 1
             ? els[0]
-            : RTV.structArray(fieldNames, els as RuntimeStruct[])
+            : RTV.structArray(fieldNames, els as RuntimeStruct[], shape)
       );
     }
     if (isRuntimeClassInstanceArray(A)) {
@@ -401,7 +403,7 @@ builtin({
         elements.push(RTV.struct(fields));
       }
       if (elements.length === 1) return elements[0];
-      return RTV.structArray(fieldNames, elements);
+      return RTV.structArray(fieldNames, elements, [elements.length, 1]);
     } else if (dim === 2) {
       const nRows = shape[0];
       const nCols = shape.length >= 2 ? shape[1] : 1;
@@ -418,7 +420,7 @@ builtin({
         elements.push(RTV.struct(fields));
       }
       if (elements.length === 1) return elements[0];
-      return RTV.structArray(fieldNames, elements);
+      return RTV.structArray(fieldNames, elements, [elements.length, 1]);
     }
     throw new RuntimeError("cell2struct: dim must be 1 or 2");
   },
@@ -431,6 +433,16 @@ builtin({
   nargin: 1,
   apply: args => {
     const s = args[0];
+    if (isRuntimeStructArray(s)) {
+      // nFields x size(s): each element's field values form one column.
+      const nf = s.fieldNames.length;
+      const cellData: RuntimeValue[] = [];
+      for (const el of s.elements)
+        for (const f of s.fieldNames) cellData.push(el.fields.get(f)!);
+      const shape = [nf, ...s.shape];
+      while (shape.length > 2 && shape[shape.length - 1] === 1) shape.pop();
+      return RTV.cell(cellData, shape);
+    }
     if (!isRuntimeStruct(s))
       throw new RuntimeError("struct2cell: argument must be a struct");
     const keys = Array.from(s.fields.keys());
@@ -548,7 +560,7 @@ builtin({
         for (const name of names) newFields.delete(name);
         return RTV.struct(newFields);
       });
-      return RTV.structArray(newFieldNames, newElements);
+      return RTV.structArray(newFieldNames, newElements, v.shape.slice());
     }
     if (!isRuntimeStruct(v))
       throw new RuntimeError("rmfield: first argument must be a struct");

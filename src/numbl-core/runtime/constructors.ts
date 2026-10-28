@@ -167,9 +167,10 @@ export const RTV = {
 
   structArray(
     fieldNames: string[],
-    elements: RuntimeStruct[]
+    elements: RuntimeStruct[],
+    shape?: number[]
   ): RuntimeStructArray {
-    return new RuntimeStructArray(fieldNames, elements);
+    return new RuntimeStructArray(fieldNames, elements, shape);
   },
 
   sparseMatrix(

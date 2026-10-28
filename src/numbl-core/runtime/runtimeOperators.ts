@@ -46,6 +46,9 @@ import {
   isRuntimeChar,
   isRuntimeSparseMatrix,
   isRuntimeStringArray,
+  isRuntimeStructArray,
+  isRuntimeClassInstanceArray,
+  type RuntimeClassInstance,
   stringArrayValue,
 } from "../runtime/types.js";
 import { END_SENTINEL } from "./sentinels.js";
@@ -409,6 +412,31 @@ export function forIter(v: unknown): unknown[] {
       out.push(
         stringArrayValue(mv.data.slice(c * rows, (c + 1) * rows), [rows, 1])
       );
+    }
+    return out;
+  }
+  if (isRuntimeStructArray(mv) || isRuntimeClassInstanceArray(mv)) {
+    // Iterate columns; a column of one element is the element itself.
+    const rows = mv.shape[0];
+    const n = mv.elements.length;
+    const out: RuntimeValue[] = [];
+    for (let c = 0; rows > 0 && c * rows < n; c++) {
+      const col = mv.elements.slice(c * rows, (c + 1) * rows);
+      if (rows === 1) out.push(col[0]);
+      else if (isRuntimeStructArray(mv))
+        out.push(
+          RTV.structArray(mv.fieldNames.slice(), col as RuntimeStruct[], [
+            rows,
+            1,
+          ])
+        );
+      else
+        out.push(
+          RTV.classInstanceArray(mv.className, col as RuntimeClassInstance[], [
+            rows,
+            1,
+          ])
+        );
     }
     return out;
   }

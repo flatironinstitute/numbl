@@ -95,9 +95,18 @@ function valuesEqualSimple(a: RuntimeValue, b: RuntimeValue): boolean {
     }
     return true;
   }
-  if (isRuntimeStructArray(a) && isRuntimeStructArray(b)) {
-    if (a.elements.length !== b.elements.length) return false;
-    return a.elements.every((el, i) => valuesEqualSimple(el, b.elements[i]));
+  if (isRuntimeStructArray(a) || isRuntimeStructArray(b)) {
+    const as = structElements(a);
+    const bs = structElements(b);
+    if (as === null || bs === null) return false;
+    if (as.shape.length !== bs.shape.length) return false;
+    for (let i = 0; i < as.shape.length; i++)
+      if (as.shape[i] !== bs.shape[i]) return false;
+    if (as.names.length !== bs.names.length) return false;
+    if (as.names.some(f => !bs.names.includes(f))) return false;
+    for (let i = 0; i < as.elems.length; i++)
+      if (!valuesEqualSimple(as.elems[i], bs.elems[i])) return false;
+    return true;
   }
   // Objects of the same class compare by their property values (a handle
   // object only equals itself).
@@ -119,6 +128,19 @@ function valuesEqualSimple(a: RuntimeValue, b: RuntimeValue): boolean {
     return true;
   }
   return false;
+}
+
+/** A struct or struct array as field names, elements and shape. */
+function structElements(v: RuntimeValue): {
+  names: string[];
+  elems: RuntimeValue[];
+  shape: number[];
+} | null {
+  if (isRuntimeStruct(v))
+    return { names: [...v.fields.keys()], elems: [v], shape: [1, 1] };
+  if (isRuntimeStructArray(v))
+    return { names: v.fieldNames, elems: v.elements, shape: v.shape };
+  return null;
 }
 
 function textValue(v: RuntimeValue): string | null {

@@ -219,6 +219,22 @@ export class RuntimeStringArray extends Refcounted {
   }
 }
 
+/** Build a struct-array result, collapsing 1x1 to the scalar struct. */
+export function structArrayValue(
+  fieldNames: string[],
+  elements: RuntimeStruct[],
+  shape: number[]
+): RuntimeValue {
+  if (
+    elements.length === 1 &&
+    shape.length === 2 &&
+    shape[0] === 1 &&
+    shape[1] === 1
+  )
+    return elements[0];
+  return new RuntimeStructArray(fieldNames, elements, shape);
+}
+
 /** Build a string-array result, collapsing 1x1 to the primitive string
  *  representation used for string scalars throughout the runtime. */
 export function stringArrayValue(
@@ -447,6 +463,18 @@ export class RuntimeClassInstanceArray extends Refcounted {
     );
   }
 
+  /** Replace element at idx, decref-old / incref-new. */
+  bindElement(
+    rt: RefcountRuntime,
+    idx: number,
+    value: RuntimeClassInstance
+  ): void {
+    const old = this.elements[idx];
+    incref(value);
+    this.elements[idx] = value;
+    if (old !== undefined) decref(rt, old);
+  }
+
   protected _destroy(rt: RefcountRuntime): void {
     for (const el of this.elements) decref(rt, el);
   }
@@ -502,20 +530,38 @@ export class RuntimeGraphicsHandle extends Refcounted {
 export class RuntimeStructArray extends Refcounted {
   readonly kind = "struct_array" as const;
   fieldNames: string[];
+  /** Elements in column-major order; each carries every field, in
+   *  `fieldNames` order. */
   elements: RuntimeStruct[];
+  /** MATLAB size (at least 2-D); its product is `elements.length`. */
+  shape: number[];
 
-  constructor(fieldNames: string[], elements: RuntimeStruct[]) {
+  constructor(
+    fieldNames: string[],
+    elements: RuntimeStruct[],
+    shape?: number[]
+  ) {
     super();
     this.fieldNames = fieldNames;
     this.elements = elements;
+    this.shape = shape ?? [1, elements.length];
     for (const el of elements) incref(el);
   }
 
   shallowClone(): RuntimeStructArray {
     return new RuntimeStructArray(
       this.fieldNames.slice(),
-      this.elements.slice()
+      this.elements.slice(),
+      this.shape.slice()
     );
+  }
+
+  /** Replace element at idx, decref-old / incref-new. */
+  bindElement(rt: RefcountRuntime, idx: number, value: RuntimeStruct): void {
+    const old = this.elements[idx];
+    incref(value);
+    this.elements[idx] = value;
+    if (old !== undefined) decref(rt, old);
   }
 
   protected _destroy(rt: RefcountRuntime): void {

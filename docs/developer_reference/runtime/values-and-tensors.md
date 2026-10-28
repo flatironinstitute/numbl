@@ -13,7 +13,7 @@ The runtime universe. A union of primitives plus refcounted classes:
 - `RuntimeComplexNumber` — complex scalar.
 - `RuntimeCell` — heterogeneous cell array.
 - `RuntimeStruct` — scalar struct.
-- `RuntimeStructArray` — struct array (separate type from scalar struct).
+- `RuntimeStructArray` — struct array (separate type from scalar struct): column-major `elements` (each carrying every field, in `fieldNames` order) plus an N-d `shape`. Results that may be 1×1 are built with `structArrayValue(fieldNames, elements, shape)`, which returns the scalar struct.
 - `RuntimeClassInstance` — scalar `classdef` instance. A `classdef Foo < <builtin>` instance keeps its underlying built-in value in `_builtinData`; an enumeration member additionally sets `_enumMember` (the member name), with `_builtinData` holding the superclass value. Enumeration semantics (member access, `ClassName(x)` conversion, `==`/`~=`/`switch`/`isequal`) live in `runtime/runtimeEnum.ts` and run on the interpreter only — the JIT declines enumeration classes.
 - `RuntimeClassInstanceArray` — class-instance array (separate type from scalar instance).
 - `RuntimeFunction` / function handle — callable reference.
