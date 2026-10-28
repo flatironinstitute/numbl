@@ -23,7 +23,7 @@ Chains of any depth collapse in one forward sweep per body. The pass returns a n
 
 When a fused assign needs a runtime shape guard (dynamic extents) and the guard fails, the fallback evaluates the nested RHS through the broadcasting helpers with each interior tensor in a block-local temp that is freed after the assign (`emitFusedFallback` in `emitStmt.ts`).
 
-On a `y = a.*b + c.*d - e` loop over 2M-element vectors (`benchmarks/fused_chain_bench.m`), inlining reduces the per-statement cost at `--opt 2` by roughly 2.5×, mainly by removing the allocation and memory traffic of the intermediate tensors.
+On a `y = a.*b + c.*d - e` loop over 2M-element vectors, inlining reduces the per-statement cost at `--opt 2` by roughly 2.5×, mainly by removing the allocation and memory traffic of the intermediate tensors. The `ew_arith` case of `npm run bench` times the same statement.
 
 ## How it works
 

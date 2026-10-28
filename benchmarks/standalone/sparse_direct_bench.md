@@ -14,9 +14,9 @@ internally uses a minimum degree ordering and Cholesky), `lu(A)`, and a
 ## How to run
 
 ```bash
-npx tsx src/cli.ts run benchmarks/sparse_direct_bench.m --no-native   # pure TypeScript, as in the browser
-npx tsx src/cli.ts run benchmarks/sparse_direct_bench.m               # with the native addon (only affects dense fallbacks)
-matlab -batch "run('benchmarks/sparse_direct_bench.m')"
+npx tsx src/cli.ts run benchmarks/standalone/sparse_direct_bench.m --no-native   # pure TypeScript, as in the browser
+npx tsx src/cli.ts run benchmarks/standalone/sparse_direct_bench.m               # with the native addon (only affects dense fallbacks)
+matlab -batch "run('benchmarks/standalone/sparse_direct_bench.m')"
 ```
 
 ## Results (pure TypeScript, `--no-native`, Node 24, 2026-09-02)

@@ -45,6 +45,31 @@ MATLAB may segfault on exit. This is a known MATLAB issue unrelated to the test;
 
 Both suites run under Vitest in the coverage command, so coverage numbers reflect the union of the two suites. When increasing coverage, pick the form of test that fits the code best: unit for surgical logic, integration for user-visible behavior.
 
+## Benchmarks
+
+`npm run bench` (`benchmarks/bench.ts`) answers "how fast is operation X at size N under each execution mode". The cases are MATLAB templates in `benchmarks/cases.ts`: element-wise chains (real and complex), `sum` and `cumsum` along each dimension, `A*B`, `A\b`, `fft`, `sort`, a vectorized gather, indexing loops, scalar and complex-scalar loops, struct and cell loops, and a sparse plate time step. Sizes run from about 1e2 to 1e7 elements (matrix dimensions 16 to 1000 for the dense linear algebra). The modes are `opt0`, `opt1` and `opt2` (the last only when `cc` and koffi are available), each also with `--no-native` (`opt0-nonative`, ...; skipped for the pure scalar loops, which never reach the addon).
+
+For each mode the runner starts one numbl process that runs the cases in turn; if the process dies, the remaining cases run in a new one. Each operation is wrapped in a generated kernel function that repeats it `inner` times between `tic` and `toc`, with `inner` chosen so that a batch takes about 20 ms. The reported time is the median over 5 batches divided by `inner`, that is, the steady-state cost of the operation inside a loop in a function body. Process start-up (a trivial script) and the first call at each size (which includes JIT compilation; the C-JIT cache starts empty unless `--warm-cjit` is given) are reported separately. Note that for small sizes, per-call costs such as copying arguments into a C-JIT kernel are amortized over the batch. Larger sizes are skipped once a call is predicted to exceed 3 s (`--max-call`). The runner also records a checksum of each result, so the summary flags modes that disagree, and the JIT declines and warnings printed while each kernel ran.
+
+```bash
+npm run bench                                  # full matrix (tens of minutes)
+npm run bench -- --quick                       # 7 cases, 2 sizes, opt0/1/2, 3 reps
+npm run bench -- --case 'sum_*,matmul' --size 1e4,600 --mode opt1,opt2 --reps 7
+npm run bench -- --list                        # cases, sizes and modes
+npm run bench -- --cli dist-cli/cli.js         # time a built CLI (faster start-up)
+npm run bench -- report <result.json>          # regenerate the markdown summary
+```
+
+Results go to `benchmarks/results/local/` (not committed) unless `--out` is given: a JSON file with the machine (CPU, cores, OS, Node, numbl version and commit, whether the native addon loaded, the `cc` version and any `OPENBLAS_NUM_THREADS`/`OMP_NUM_THREADS` setting) and every entry, and a markdown summary next to it. A baseline for one machine is committed under `benchmarks/results/`. Compare two results with
+
+```bash
+npm run bench -- compare <base.json> <new.json> [--threshold 0.15]
+```
+
+which prints the geometric-mean time ratio per mode and the entries that got slower or faster by more than the threshold, and exits with status 1 if any entry regressed or newly fails. Comparisons are only meaningful on the same machine, and timings on a busy machine are noisy: rerun flagged cases with `--case` and more `--reps` before drawing conclusions. The benchmarks are not run in CI.
+
+`benchmarks/standalone/` holds two larger workloads that are run by hand: `sparse_direct_bench.m` (sparse direct solvers on a plate operator, see its `.md`) and `chunkie_helmholtz_starfish.m` (a Helmholtz boundary integral solve with the chunkie package, installed through mip on the first run).
+
 ## Browser tests
 
 Playwright specs (`tests-browser/`, `npm run test:browser`) cover flows that can only be checked end to end: the IDE, the `numbl/browser` session, the plot gallery and the in-browser test runner. They are separate from the core test suites and run against a built web app (`npm run build`, plus `npm run build:browser`).
