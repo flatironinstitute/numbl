@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect } from "react";
 import {
   Box,
   Typography,
@@ -48,7 +48,7 @@ import {
 import { validateProjectName } from "../utils/validation";
 import { makeShareHash } from "../utils/shareUrl.js";
 import type { Project } from "../db/schema";
-import { getAllIBuiltinNames } from "../numbl-core/interpreter/builtins/index.js";
+import { BUILTIN_FUNCTION_NAMES } from "../builtinNames.gen.js";
 
 interface ProjectWithMetadata extends Project {
   fileCount: number;
@@ -100,10 +100,7 @@ export function ProjectListPage() {
     path: "/",
   });
 
-  const builtinCount = useMemo(
-    () => getAllIBuiltinNames().filter(n => !n.startsWith("__")).length,
-    []
-  );
+  const builtinCount = BUILTIN_FUNCTION_NAMES.length;
 
   useEffect(() => {
     loadProjects();

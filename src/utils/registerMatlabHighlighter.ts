@@ -6,15 +6,13 @@
  */
 import { Light as SyntaxHighlighter } from "react-syntax-highlighter";
 import baseMatlab from "react-syntax-highlighter/dist/esm/languages/hljs/matlab";
-import { getAllIBuiltinNames } from "../numbl-core/interpreter/builtins/index.js";
+import { BUILTIN_FUNCTION_NAMES } from "../builtinNames.gen.js";
 
 let registered = false;
 
 export function registerMatlabHighlighter(): void {
   if (registered) return;
   registered = true;
-
-  const allBuiltins = getAllIBuiltinNames().filter(n => !n.startsWith("__"));
 
   // Wrap the base matlab language definition and merge our builtins into its
   // built_in keyword list.
@@ -26,7 +24,7 @@ export function registerMatlabHighlighter(): void {
     const merged = Array.from(
       new Set([
         ...existingBuiltIns.split(/\s+/).filter(Boolean),
-        ...allBuiltins,
+        ...BUILTIN_FUNCTION_NAMES,
       ])
     ).join(" ");
     return {

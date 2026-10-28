@@ -38,6 +38,9 @@ jobs:
       - name: Check stdlib bundle is in sync
         run: npm run bundle:stdlib:check
 
+      - name: Check generated builtin names are in sync
+        run: npm run gen:builtin-names:check
+
   test:
     name: Test
     runs-on: ubuntu-latest

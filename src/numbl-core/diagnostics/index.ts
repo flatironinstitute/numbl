@@ -12,9 +12,12 @@ import { SyntaxError } from "../parser/errors.js";
 import type { WorkspaceFile } from "../workspace/index.js";
 import { CompilationErrors } from "./errors.js";
 
-interface DiagnosticInfo {
+export interface DiagnosticInfo {
   message: string;
   errorType: "syntax" | "runtime" | "unknown";
+  /** MATLAB error identifier (e.g. "MATLAB:undefinedFunction"); empty or
+   *  absent when the error has none. */
+  identifier?: string;
   file: string | null;
   line: number | null;
   snippet: string | null;
@@ -122,6 +125,7 @@ function diagnoseError(
     return {
       message: error.message,
       errorType: "runtime",
+      identifier: error.identifier,
       file: error.file,
       line: error.line,
       snippet,

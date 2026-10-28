@@ -124,6 +124,7 @@ function workerDiagnostics(
   return diagnoseErrors(error, code, fileName, wsFiles).map(d => ({
     message: d.message,
     errorType: d.errorType,
+    identifier: d.identifier || undefined,
     file: d.file,
     line: d.line,
     snippet: d.snippet,
@@ -321,9 +322,17 @@ function handleRun(msg: RunMessage): void {
     const generatedJS = (error as { generatedJS?: string } | null)?.generatedJS;
     const workspaceRep = workspaceRepFor(code, activeFileName);
     const vfsChanges = adapter.getChanges();
-    for (const diag of diags) {
-      post({ type: "error", ...diag, generatedJS, workspaceRep, vfsChanges });
-    }
+    diags.forEach((diag, i) => {
+      const last = i === diags.length - 1;
+      post({
+        type: "error",
+        ...diag,
+        last,
+        generatedJS,
+        workspaceRep,
+        vfsChanges: last ? vfsChanges : undefined,
+      });
+    });
   }
 }
 

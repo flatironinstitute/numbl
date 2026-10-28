@@ -3,6 +3,11 @@ import { spawn } from "child_process";
 import { mkdtemp, mkdir, writeFile, rm } from "fs/promises";
 import { dirname, join } from "path";
 import { tmpdir } from "os";
+import {
+  decodeStreamMessage,
+  encodeStreamMessage,
+  type StreamMessage,
+} from "../src/streamProtocol.js";
 
 interface ServerOptions {
   port: number;
@@ -180,8 +185,28 @@ async function handleExecute(
       "X-Accel-Buffering": "no",
     });
 
-    const sendEvent = (data: Record<string, unknown>) => {
-      res.write(`data: ${JSON.stringify(data)}\n\n`);
+    const sendEvent = (msg: StreamMessage) => {
+      res.write(`data: ${encodeStreamMessage(msg)}\n\n`);
+    };
+    // Relay one line of the CLI's --stream output. Paths are reported
+    // relative to the project (the temp dir is an implementation detail);
+    // a line that is not a stream message is passed on as output.
+    const tempPrefix = tempDir + "/";
+    const relPath = (p: string | null) =>
+      p?.startsWith(tempPrefix) ? p.slice(tempPrefix.length) : p;
+    const relayLine = (line: string) => {
+      const msg = decodeStreamMessage(line);
+      if (!msg) {
+        sendEvent({ type: "output", text: line + "\n" });
+        return;
+      }
+      if (msg.type === "error") {
+        msg.file = relPath(msg.file);
+        for (const frame of msg.callStack ?? []) {
+          frame.callerFile = relPath(frame.callerFile);
+        }
+      }
+      sendEvent(msg);
     };
 
     const _tempDir = tempDir;
@@ -203,6 +228,9 @@ async function handleExecute(
         },
       });
 
+      // No interactive input: input() reads EOF and returns "".
+      child.stdin?.end();
+
       req.on("close", () => {
         if (!child.killed) child.kill("SIGTERM");
       });
@@ -220,13 +248,7 @@ async function handleExecute(
         const lines = stdoutBuffer.split("\n");
         stdoutBuffer = lines.pop() || "";
         for (const line of lines) {
-          if (!line.trim()) continue;
-          try {
-            const msg = JSON.parse(line);
-            sendEvent(msg);
-          } catch {
-            sendEvent({ type: "output", text: line + "\n" });
-          }
+          if (line.trim()) relayLine(line);
         }
       });
 
@@ -236,19 +258,15 @@ async function handleExecute(
 
       child.on("close", code => {
         clearTimeout(timeout);
-        if (stdoutBuffer.trim()) {
-          try {
-            const msg = JSON.parse(stdoutBuffer);
-            sendEvent(msg);
-          } catch {
-            sendEvent({ type: "output", text: stdoutBuffer });
-          }
-        }
+        if (stdoutBuffer.trim()) relayLine(stdoutBuffer);
         if (timedOut) {
           sendEvent({
             type: "error",
             message: `Execution timed out after ${timeoutMs}ms`,
             errorType: "runtime",
+            file: null,
+            line: null,
+            snippet: null,
             timedOut: true,
           });
         }
@@ -262,7 +280,10 @@ async function handleExecute(
         sendEvent({
           type: "error",
           message: `Failed to start process: ${error.message}`,
-          errorType: "runtime",
+          errorType: "unknown",
+          file: null,
+          line: null,
+          snippet: null,
         });
         sendEvent({ type: "close", success: false });
         res.end();
