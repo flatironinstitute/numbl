@@ -4,7 +4,7 @@ import { cSqrt } from "./_complex_fold.js";
 
 /** `sqrt(x)`: real input that's provably non-negative stays on the
  *  real path; everything else lifts to the complex path
- *  (`mtoc2_csqrt` for scalars, `mtoc2_tensor_sqrt_complex` for
+ *  (`jit_csqrt` for scalars, `jit_tensor_sqrt_complex` for
  *  tensors). Matches MATLAB: `sqrt(-1)` returns `0 + 1i`,
  *  `sqrt([-1 4])` returns `[0+1i, 2]`.
  *
@@ -19,7 +19,7 @@ export const sqrt = defineUnaryRealMath({
   signRule: t => (signIsPositive(t.sign) ? "positive" : "nonneg"),
   realDomainOk: t => signIsNonneg(t.sign),
   complex: {
-    cFnComplex: "mtoc2_csqrt",
+    cFnComplex: "jit_csqrt",
     jsFnComplex: cSqrt,
     liftOnDomainMiss: true,
   },

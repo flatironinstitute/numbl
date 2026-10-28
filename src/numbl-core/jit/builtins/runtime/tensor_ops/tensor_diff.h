@@ -1,4 +1,4 @@
-/* mtoc2 runtime helper: first-order difference `diff(A)` / `diff(A, 1, dim)`.
+/* JIT runtime helper: first-order difference `diff(A)` / `diff(A, 1, dim)`.
  *
  * Mirrors numbl's `diffOnce` (helpers/reduction/cumulative.ts): a
  * forward difference `out[i] = in[i+1] - in[i]` along the operating
@@ -16,7 +16,7 @@
 
 #include <stdlib.h>
 
-static mtoc2_tensor_t mtoc2_tensor_diff(mtoc2_tensor_t a, int dim) {
+static jit_tensor_t jit_tensor_diff(jit_tensor_t a, int dim) {
   int opDim;
   if (dim > 0) {
     opDim = dim - 1;
@@ -27,19 +27,19 @@ static mtoc2_tensor_t mtoc2_tensor_diff(mtoc2_tensor_t a, int dim) {
   }
   long dimSize = (opDim < a.ndim) ? a.dims[opDim] : 1;
 
-  long newDims[MTOC2_MAX_NDIM];
+  long newDims[JIT_MAX_NDIM];
   int newNdim = a.ndim;
   for (int i = 0; i < a.ndim; i++) newDims[i] = a.dims[i];
 
   if (dimSize <= 1) {
     if (opDim < newNdim) newDims[opDim] = 0;
     while (newNdim > 2 && newDims[newNdim - 1] == 1) newNdim--;
-    return mtoc2_tensor_alloc_nd(newNdim, newDims);
+    return jit_tensor_alloc_nd(newNdim, newDims);
   }
 
   newDims[opDim] = dimSize - 1;
   while (newNdim > 2 && newDims[newNdim - 1] == 1) newNdim--;
-  mtoc2_tensor_t out = mtoc2_tensor_alloc_nd(newNdim, newDims);
+  jit_tensor_t out = jit_tensor_alloc_nd(newNdim, newDims);
 
   long innerCount = 1;
   for (int d = 0; d < opDim; d++) innerCount *= a.dims[d];

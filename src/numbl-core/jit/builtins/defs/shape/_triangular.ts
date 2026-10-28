@@ -64,10 +64,10 @@ function resolveK(name: string, argTypes: Type[]): number {
 interface TriangularSpec {
   /** Source-level name (registry key). */
   name: string;
-  /** C runtime helper name for real-input (e.g. `"mtoc2_tensor_triu"`). */
+  /** C runtime helper name for real-input (e.g. `"jit_tensor_triu"`). */
   cHelper: string;
   /** C runtime helper name for complex-input
-   *  (e.g. `"mtoc2_tensor_triu_complex"`). */
+   *  (e.g. `"jit_tensor_triu_complex"`). */
   cHelperComplex: string;
   /** Keep predicate matching numbl's `triPart` (column-major i,j). */
   keep(i: number, j: number, k: number): boolean;
@@ -181,17 +181,17 @@ export function defineTriangular(spec: TriangularSpec): Builtin {
 
     if (isScalar(a)) {
       if (a.isComplex) {
-        useRuntime("mtoc2_cscalar");
-        return keep(0, 0, k) ? argsC[0] : `mtoc2_cmake(0.0, 0.0)`;
+        useRuntime("jit_cscalar");
+        return keep(0, 0, k) ? argsC[0] : `jit_cmake(0.0, 0.0)`;
       }
       return keep(0, 0, k) ? argsC[0] : "0.0";
     }
 
     if (a.isComplex) {
-      useRuntime("mtoc2_tensor_triangular");
+      useRuntime("jit_tensor_triangular");
       return `${cHelperComplex}(${argsC[0]}, ${k}L)`;
     }
-    useRuntime("mtoc2_tensor_triangular");
+    useRuntime("jit_tensor_triangular");
     return `${cHelper}(${argsC[0]}, ${k}L)`;
   }
 
@@ -201,17 +201,17 @@ export function defineTriangular(spec: TriangularSpec): Builtin {
 
     if (isScalar(a)) {
       if (a.isComplex) {
-        useRuntime("mtoc2_cscalar");
-        return keep(0, 0, k) ? argsJs[0] : `mtoc2_cmake(0, 0)`;
+        useRuntime("jit_cscalar");
+        return keep(0, 0, k) ? argsJs[0] : `jit_cmake(0, 0)`;
       }
       return keep(0, 0, k) ? argsJs[0] : "0";
     }
 
     if (a.isComplex) {
-      useRuntime("mtoc2_tensor_triangular");
+      useRuntime("jit_tensor_triangular");
       return `${cHelperComplex}(${argsJs[0]}, ${k})`;
     }
-    useRuntime("mtoc2_tensor_triangular");
+    useRuntime("jit_tensor_triangular");
     return `${cHelper}(${argsJs[0]}, ${k})`;
   }
 

@@ -129,32 +129,32 @@ export const meshgrid: Builtin = {
     );
   },
   emitC({ argsC, argTypes, nargout, outArgsC, useRuntime }) {
-    useRuntime("mtoc2_meshgrid");
+    useRuntime("jit_meshgrid");
     if (nargout === 1) {
       const x = argsC[0];
       const y = argsC.length >= 2 ? argsC[1] : argsC[0];
-      return `mtoc2_meshgrid_x(${x}, ${y})`;
+      return `jit_meshgrid_x(${x}, ${y})`;
     }
     // Multi-output: 1-arg shorthand uses a dedicated helper that takes
     // a single source vector; 2-arg uses the full helper with both.
     const outs = outArgsC ?? [];
     if (argTypes.length === 1) {
-      return `mtoc2_meshgrid_1arg(${argsC[0]}, ${outs.join(", ")})`;
+      return `jit_meshgrid_1arg(${argsC[0]}, ${outs.join(", ")})`;
     }
-    return `mtoc2_meshgrid(${argsC[0]}, ${argsC[1]}, ${outs.join(", ")})`;
+    return `jit_meshgrid(${argsC[0]}, ${argsC[1]}, ${outs.join(", ")})`;
   },
   emitJs({ argsJs, argTypes, nargout, useRuntime }) {
-    useRuntime("mtoc2_meshgrid");
+    useRuntime("jit_meshgrid");
     if (nargout === 1) {
       const x = argsJs[0];
       const y = argsJs.length >= 2 ? argsJs[1] : argsJs[0];
-      return `mtoc2_meshgrid_x(${x}, ${y})`;
+      return `jit_meshgrid_x(${x}, ${y})`;
     }
     // JS multi-output: helper returns `{X, Y}`; destructure inline so
     // the emitJs multi-assign wrapper can spread it.
     if (argTypes.length === 1) {
-      return `(o => [o.X, o.Y])(mtoc2_meshgrid_1arg(${argsJs[0]}))`;
+      return `(o => [o.X, o.Y])(jit_meshgrid_1arg(${argsJs[0]}))`;
     }
-    return `(o => [o.X, o.Y])(mtoc2_meshgrid(${argsJs[0]}, ${argsJs[1]}))`;
+    return `(o => [o.X, o.Y])(jit_meshgrid(${argsJs[0]}, ${argsJs[1]}))`;
   },
 };

@@ -17,7 +17,7 @@
 % `Math.round(toNumber(a))`. JIT should round to match the reference.
 %
 % JIT ENGAGEMENT: CONFIRMED. opt2 --dump-c (941 lines) call site is
-%   mtoc2_reshape_nd(x, 2, (long[]){(long)(n), -1L}).
+%   jit_reshape_nd(x, 2, (long[]){(long)(n), -1L}).
 function s = f(vals, k, x)
   n = vals(k);
   r = reshape(x, n, []);

@@ -162,7 +162,7 @@ export function registerClassDef(
   for (const m of s.members) {
     switch (m.type) {
       case "Properties": {
-        // Property-block attributes. mtoc2 doesn't enforce visibility,
+        // Property-block attributes. The JIT doesn't enforce visibility,
         // so `Access` / `GetAccess` / `SetAccess` / `Hidden` are
         // accepted silently — matches numbl, which ignores them in
         // `extractClassInfo`. `Dependent` strips per-instance storage
@@ -312,7 +312,7 @@ export function registerClassDef(
             // but reads/writes are intercepted by `get.X` / `set.X`)
             // are accepted. The storage stays — matching numbl, which
             // always routes through the accessor when one exists and
-            // ignores the field even if present. mtoc2's lowerer /
+            // ignores the field even if present. The JIT's lowerer /
             // interpreter already do this dispatch.
             //
             // No recursion guard in v1: a getter that reads its own
@@ -415,7 +415,7 @@ export function registerClassDef(
         );
       }
       if (methodName === s.name) {
-        // MATLAB allows a constructor in an external file; mtoc2's
+        // MATLAB allows a constructor in an external file; the JIT's
         // type-inference path keys off the classdef-file constructor,
         // so we reject this for now.
         throw new UnsupportedConstruct(

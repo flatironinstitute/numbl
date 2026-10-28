@@ -8,5 +8,5 @@ export const tanh = defineUnaryRealMath({
   cFnReal: "tanh",
   jsFn: Math.tanh,
   signRule: t => t.sign,
-  complex: { cFnComplex: "mtoc2_ctanh", jsFnComplex: cTanh },
+  complex: { cFnComplex: "jit_ctanh", jsFnComplex: cTanh },
 });

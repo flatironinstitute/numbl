@@ -76,8 +76,8 @@ function fillConstBuiltin(
   const shape = defineShapeConstructor(
     name,
     value,
-    "mtoc2_tensor_fill_nd",
-    "mtoc2_tensor_fill_square",
+    "jit_tensor_fill_nd",
+    "jit_tensor_fill_square",
     { minArgs: 0, cFillValue: cLiteral }
   );
   return {

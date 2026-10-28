@@ -1,8 +1,8 @@
-/* mtoc2 runtime helper: reshape a real tensor to an N-D shape.
+/* JIT runtime helper: reshape a real tensor to an N-D shape.
  *
- * Receives the input tensor by value (`mtoc2_tensor_t`) plus a
+ * Receives the input tensor by value (`jit_tensor_t`) plus a
  * caller-supplied dim list (`ndim`, `dims`). Allocates a fresh
- * output tensor via `mtoc2_tensor_alloc_nd` and copies the input's
+ * output tensor via `jit_tensor_alloc_nd` and copies the input's
  * column-major buffer wholesale — reshape is a layout reinterpret,
  * so the linear element order is unchanged.
  *
@@ -19,17 +19,17 @@
  * mismatch it prints to stderr and aborts, matching numbl's
  * runtime-error surface.
  *
- * Real-only — mtoc2's tensor side is real-only today; the type
+ * Real-only — the JIT's tensor side is real-only today; the type
  * lattice rejects complex inputs at lowering. The output's `imag`
- * is NULL, set by `mtoc2_tensor_alloc_nd`.
+ * is NULL, set by `jit_tensor_alloc_nd`.
  */
 
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
 
-static mtoc2_tensor_t mtoc2_reshape_nd(
-    mtoc2_tensor_t in, int ndim, const long *dims) {
+static jit_tensor_t jit_reshape_nd(
+    jit_tensor_t in, int ndim, const long *dims) {
   size_t in_total = 1;
   for (int i = 0; i < in.ndim; i++) in_total *= (size_t)in.dims[i];
   /* Scan for at most one `-1` infer slot and the product of the
@@ -40,32 +40,32 @@ static mtoc2_tensor_t mtoc2_reshape_nd(
     if (dims[i] == -1) {
       if (infer_idx != -1) {
         fprintf(stderr,
-          "mtoc2: reshape: at most one '[]' auto-infer slot allowed\n");
+          "C-JIT: reshape: at most one '[]' auto-infer slot allowed\n");
         abort();
       }
       infer_idx = i;
     } else if (dims[i] < 0) {
       fprintf(stderr,
-        "mtoc2: reshape: dim %d must be a non-negative integer "
+        "C-JIT: reshape: dim %d must be a non-negative integer "
         "(got %ld)\n", i + 1, dims[i]);
       abort();
     } else {
       explicit_prod *= (size_t)dims[i];
     }
   }
-  long resolved_dims[MTOC2_MAX_NDIM];
+  long resolved_dims[JIT_MAX_NDIM];
   for (int i = 0; i < ndim; i++) resolved_dims[i] = dims[i];
   size_t out_total;
   if (infer_idx != -1) {
     if (explicit_prod == 0 && in_total != 0) {
       fprintf(stderr,
-        "mtoc2: reshape: input has %zu elements but the explicit dims "
+        "C-JIT: reshape: input has %zu elements but the explicit dims "
         "around '[]' multiply to 0\n", in_total);
       abort();
     }
     if (explicit_prod > 0 && in_total % explicit_prod != 0) {
       fprintf(stderr,
-        "mtoc2: reshape: input has %zu elements, not divisible by %zu "
+        "C-JIT: reshape: input has %zu elements, not divisible by %zu "
         "(the explicit dims around '[]')\n", in_total, explicit_prod);
       abort();
     }
@@ -76,12 +76,12 @@ static mtoc2_tensor_t mtoc2_reshape_nd(
     out_total = explicit_prod;
     if (in_total != out_total) {
       fprintf(stderr,
-        "mtoc2: reshape: number of elements must not change "
+        "C-JIT: reshape: number of elements must not change "
         "(in=%zu, out=%zu)\n", in_total, out_total);
       abort();
     }
   }
-  mtoc2_tensor_t out = mtoc2_tensor_alloc_nd(ndim, resolved_dims);
+  jit_tensor_t out = jit_tensor_alloc_nd(ndim, resolved_dims);
   if (out_total > 0)
     memcpy(out.real, in.real, out_total * sizeof(double));
   return out;

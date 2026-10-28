@@ -7,8 +7,8 @@ import { cSign } from "./_complex_fold.js";
  *     The complex sign is itself complex. */
 export const signBuiltin = defineUnaryRealMath({
   name: "sign",
-  cFnReal: "mtoc2_signum",
+  cFnReal: "jit_signum",
   jsFn: Math.sign,
   signRule: t => t.sign,
-  complex: { cFnComplex: "mtoc2_csign", jsFnComplex: cSign },
+  complex: { cFnComplex: "jit_csign", jsFnComplex: cSign },
 });

@@ -7,7 +7,7 @@
  * MATLAB requires scalar operands for `||` and `&&`; numbl is more
  * permissive (routes both operands through `toBool` to accept
  * tensors — see `interpreter/interpreterExec.ts` lines 650–661,
- * `runtime/convert.ts:44`). mtoc2 v1 takes the MATLAB-strict path so
+ * `runtime/convert.ts:44`). The JIT takes the MATLAB-strict path so
  * the result type stays a scalar logical and the codegen stays
  * trivial (`(a) || (b)` / `(a) && (b)` in C, which short-circuits
  * natively).
@@ -17,7 +17,7 @@
  *   - LHS exact + truthy (for `||`) or falsy (for `&&`) → result is
  *     the LHS's logical value regardless of RHS. This honors
  *     short-circuit semantics at the type level so a runtime-only RHS
- *     doesn't pollute the result type. (mtoc2 always evaluates the
+ *     doesn't pollute the result type. (the JIT always evaluates the
  *     RHS at the type-system layer, but the fold value still skips
  *     it.)
  *   - otherwise → scalar logical, no exact.
@@ -44,7 +44,7 @@ function asScalarRealOrLogical(t: Type, what: string, surface: string): void {
   if (!isNumeric(t)) {
     throw new TypeError(
       `${what} must be a real or complex scalar (got ${typeToString(t)}); ` +
-        `'${surface}' requires scalar operands (numbl accepts tensors via toBool, but mtoc2 follows MATLAB)`
+        `'${surface}' requires scalar operands (numbl accepts tensors via toBool, but the JIT follows MATLAB)`
     );
   }
   if (t.elem !== "double" && t.elem !== "logical") {
@@ -55,7 +55,7 @@ function asScalarRealOrLogical(t: Type, what: string, surface: string): void {
   if (!isScalar(t)) {
     throw new TypeError(
       `${what} must be a scalar (got ${typeToString(t)}); ` +
-        `'${surface}' requires scalar operands (numbl accepts tensors via toBool, but mtoc2 follows MATLAB — use elementwise '|' / '&' when added)`
+        `'${surface}' requires scalar operands (numbl accepts tensors via toBool, but the JIT follows MATLAB — use elementwise '|' / '&' when added)`
     );
   }
 }
@@ -111,12 +111,12 @@ export function defineShortCircuit(
       const anyComplex =
         (argTypes[0] as NumericType).isComplex ||
         (argTypes[1] as NumericType).isComplex;
-      if (anyComplex) useRuntime("mtoc2_cscalar");
+      if (anyComplex) useRuntime("jit_cscalar");
       const lhs = (argTypes[0] as NumericType).isComplex
-        ? `mtoc2_cnonzero(${argsC[0]})`
+        ? `jit_cnonzero(${argsC[0]})`
         : `(${argsC[0]})`;
       const rhs = (argTypes[1] as NumericType).isComplex
-        ? `mtoc2_cnonzero(${argsC[1]})`
+        ? `jit_cnonzero(${argsC[1]})`
         : `(${argsC[1]})`;
       // C's `||` / `&&` short-circuit and yield int 0/1; auto-promotes
       // to double when assigned to a double scalar slot.
@@ -126,17 +126,17 @@ export function defineShortCircuit(
       const aN = argTypes[0] as NumericType;
       const bN = argTypes[1] as NumericType;
       const anyComplex = aN.isComplex || bN.isComplex;
-      if (anyComplex) useRuntime("mtoc2_cscalar");
+      if (anyComplex) useRuntime("jit_cscalar");
       // Coerce each operand to a numbl-truthiness bool. The
       // representation depends on the operand's element type:
-      //   - complex → mtoc2_cnonzero (object would be JS-truthy)
+      //   - complex → jit_cnonzero (object would be JS-truthy)
       //   - logical → already a JS boolean, use directly
       //   - real double → `!== 0`, NOT `!!x`: `!!NaN` is `false` in JS
       //     but numbl treats a nonzero NaN as true. (`!== 0` would be
       //     wrong for a JS `false`, hence the per-type branch.)
       const coerce = (n: NumericType, x: string): string =>
         n.isComplex
-          ? `mtoc2_cnonzero(${x})`
+          ? `jit_cnonzero(${x})`
           : n.elem === "logical"
             ? `(${x})`
             : `((${x}) !== 0)`;

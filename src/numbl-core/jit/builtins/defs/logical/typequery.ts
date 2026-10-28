@@ -1,6 +1,6 @@
 /**
  * Static type / shape query builtins, each returning a logical (or, for
- * `ndims`, a double) scalar. mtoc2 always knows an argument's rank and
+ * `ndims`, a double) scalar. The JIT always knows an argument's rank and
  * element kind at type time, so the kind predicates and `ndims` fold to
  * a literal. `isrow` / `iscolumn` fold when the relevant dim is known
  * and otherwise emit a runtime check against the tensor's `ndim` /
@@ -62,7 +62,7 @@ export const islogical = kindPredicate(
 
 export const isfloat = kindPredicate(
   "isfloat",
-  // Floating-point: only double (mtoc2 has no single-precision lane).
+  // Floating-point: only double (the JIT has no single-precision lane).
   t => isNumeric(t) && t.elem === "double"
 );
 

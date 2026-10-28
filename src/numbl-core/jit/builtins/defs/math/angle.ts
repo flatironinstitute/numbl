@@ -50,16 +50,16 @@ export const angle: Builtin = {
   emitC({ argsC, argTypes, useRuntime }) {
     const a = argTypes[0] as NumericType;
     if (a.isComplex) {
-      useRuntime("mtoc2_cscalar");
-      return `mtoc2_cangle(${argsC[0]})`;
+      useRuntime("jit_cscalar");
+      return `jit_cangle(${argsC[0]})`;
     }
     return `atan2(0.0, ${argsC[0]})`;
   },
   emitJs({ argsJs, argTypes, useRuntime }) {
     const a = argTypes[0] as NumericType;
     if (a.isComplex) {
-      useRuntime("mtoc2_cscalar");
-      return `mtoc2_cangle(${argsJs[0]})`;
+      useRuntime("jit_cscalar");
+      return `jit_cangle(${argsJs[0]})`;
     }
     return `Math.atan2(0, ${argsJs[0]})`;
   },

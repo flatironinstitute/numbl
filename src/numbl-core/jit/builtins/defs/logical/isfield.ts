@@ -10,7 +10,7 @@
  *     non-struct branch just returns `false` so `isfield([], 'foo')`
  *     naturally yields `false`.
  *
- * mtoc2 restricts the second argument to a Char or String literal
+ * The JIT restricts the second argument to a Char or String literal
  * (`.exact` set) — sufficient for the common `isfield(s, 'name')` /
  * `isfield(s, "name")` shape. Runtime-only names would need a string
  * comparison against the (compile-time-known) struct field set, which

@@ -1,14 +1,14 @@
 // JS sibling of `tensor_flip.h`. Two helpers:
-//   - `mtoc2_tensor_flip(t, dimIdx)` — real-input variant.
-//   - `mtoc2_tensor_flip_complex(t, dimIdx)` — walks both lanes;
+//   - `jit_tensor_flip(t, dimIdx)` — real-input variant.
+//   - `jit_tensor_flip_complex(t, dimIdx)` — walks both lanes;
 //     if `imag` is undefined the output imag stays zero.
 // Out-of-range axis acts as a deep-copy no-op in both.
 
-import { mtoc2_tensor_alloc_nd } from "../tensor/tensor_alloc_nd.js";
-import { mtoc2_tensor_alloc_nd_complex } from "../tensor/tensor_alloc_nd_complex.js";
+import { jit_tensor_alloc_nd } from "../tensor/tensor_alloc_nd.js";
+import { jit_tensor_alloc_nd_complex } from "../tensor/tensor_alloc_nd_complex.js";
 
-export function mtoc2_tensor_flip(a, dimIdx) {
-  const r = mtoc2_tensor_alloc_nd(a.shape.length, a.shape);
+export function jit_tensor_flip(a, dimIdx) {
+  const r = jit_tensor_alloc_nd(a.shape.length, a.shape);
   const axisSize = dimIdx >= 0 && dimIdx < a.shape.length ? a.shape[dimIdx] : 1;
   if (axisSize <= 1) {
     r.data.set(a.data);
@@ -32,8 +32,8 @@ export function mtoc2_tensor_flip(a, dimIdx) {
   return r;
 }
 
-export function mtoc2_tensor_flip_complex(a, dimIdx) {
-  const r = mtoc2_tensor_alloc_nd_complex(a.shape.length, a.shape);
+export function jit_tensor_flip_complex(a, dimIdx) {
+  const r = jit_tensor_alloc_nd_complex(a.shape.length, a.shape);
   const im = a.imag;
   const axisSize = dimIdx >= 0 && dimIdx < a.shape.length ? a.shape[dimIdx] : 1;
   if (axisSize <= 1) {

@@ -3,7 +3,7 @@
 // `isreal` uses this for complex-typed tensors the JIT could not prove
 // real at compile time, so it reports realness by value — matching the
 // interpreter and the complex-scalar `v.im === 0` rule.
-export function mtoc2_tensor_imag_all_zero(a) {
+export function jit_tensor_imag_all_zero(a) {
   if (a.imag === undefined) return true;
   for (let i = 0; i < a.imag.length; i++) {
     if (a.imag[i] !== 0) return false;

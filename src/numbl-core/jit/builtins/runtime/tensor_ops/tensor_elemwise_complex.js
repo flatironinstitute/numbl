@@ -3,21 +3,16 @@
 // operands. Mirrors the real elemwise scaffold but each element is a
 // `{re, im}` pair carried by the `data` + `imag` lanes.
 
-import { mtoc2_tensor_alloc_nd_complex } from "../tensor/tensor_alloc_nd_complex.js";
-import {
-  mtoc2_cadd,
-  mtoc2_csub,
-  mtoc2_cmul,
-  mtoc2_cneg,
-} from "../system/cscalar.js";
-import { mtoc2_cdiv } from "../system/cdiv.js";
+import { jit_tensor_alloc_nd_complex } from "../tensor/tensor_alloc_nd_complex.js";
+import { jit_cadd, jit_csub, jit_cmul, jit_cneg } from "../system/cscalar.js";
+import { jit_cdiv } from "../system/cdiv.js";
 
 function cLaneOf(t, idx) {
   return { re: t.data[idx], im: t.imag != null ? t.imag[idx] : 0 };
 }
 
 function cTtKernel(a, b, fn) {
-  const r = mtoc2_tensor_alloc_nd_complex(a.shape.length, a.shape);
+  const r = jit_tensor_alloc_nd_complex(a.shape.length, a.shape);
   for (let i = 0; i < r.data.length; i++) {
     const v = fn(cLaneOf(a, i), cLaneOf(b, i));
     r.data[i] = v.re;
@@ -27,7 +22,7 @@ function cTtKernel(a, b, fn) {
 }
 
 function cTsKernel(a, s, fn) {
-  const r = mtoc2_tensor_alloc_nd_complex(a.shape.length, a.shape);
+  const r = jit_tensor_alloc_nd_complex(a.shape.length, a.shape);
   for (let i = 0; i < r.data.length; i++) {
     const v = fn(cLaneOf(a, i), s);
     r.data[i] = v.re;
@@ -37,7 +32,7 @@ function cTsKernel(a, s, fn) {
 }
 
 function cStKernel(s, a, fn) {
-  const r = mtoc2_tensor_alloc_nd_complex(a.shape.length, a.shape);
+  const r = jit_tensor_alloc_nd_complex(a.shape.length, a.shape);
   for (let i = 0; i < r.data.length; i++) {
     const v = fn(s, cLaneOf(a, i));
     r.data[i] = v.re;
@@ -60,7 +55,7 @@ function cBcastKernel(a, b, fn) {
     // broadcasts to 0, not Math.max's 1 (mirrors the C (adim==1)?bdim:adim).
     outShape[i] = ashape[i] === 1 ? bshape[i] : ashape[i];
   }
-  const r = mtoc2_tensor_alloc_nd_complex(ndim, outShape);
+  const r = jit_tensor_alloc_nd_complex(ndim, outShape);
   const aStrides = new Array(ndim);
   const bStrides = new Array(ndim);
   let as = 1;
@@ -114,7 +109,7 @@ function cTimesMixed(a, ar, b, br) {
       re: b.re === 0 ? 0 : b.re * a.re,
       im: b.im === 0 ? 0 : b.im * a.re,
     };
-  return mtoc2_cmul(a, b);
+  return jit_cmul(a, b);
 }
 
 function cRdivideMixed(a, ar, b, br) {
@@ -125,78 +120,78 @@ function cRdivideMixed(a, ar, b, br) {
       im: a.im === 0 ? 0 : a.im / b.re,
     };
   if (ar && b.im === 0) return { re: a.re / b.re, im: 0 };
-  return mtoc2_cdiv(ar ? { re: a.re, im: 0 } : a, b);
+  return jit_cdiv(ar ? { re: a.re, im: 0 } : a, b);
 }
 
 // ── plus ──────────────────────────────────────────────────────────────────
-export function mtoc2_tensor_plus_complex_tt(a, b) {
-  return cTtKernel(a, b, mtoc2_cadd);
+export function jit_tensor_plus_complex_tt(a, b) {
+  return cTtKernel(a, b, jit_cadd);
 }
-export function mtoc2_tensor_plus_complex_ts(a, s) {
-  return cTsKernel(a, s, mtoc2_cadd);
+export function jit_tensor_plus_complex_ts(a, s) {
+  return cTsKernel(a, s, jit_cadd);
 }
-export function mtoc2_tensor_plus_complex_bcast_tt(a, b) {
-  return cBcastKernel(a, b, mtoc2_cadd);
+export function jit_tensor_plus_complex_bcast_tt(a, b) {
+  return cBcastKernel(a, b, jit_cadd);
 }
 
 // ── minus ─────────────────────────────────────────────────────────────────
-export function mtoc2_tensor_minus_complex_tt(a, b) {
-  return cTtKernel(a, b, mtoc2_csub);
+export function jit_tensor_minus_complex_tt(a, b) {
+  return cTtKernel(a, b, jit_csub);
 }
-export function mtoc2_tensor_minus_complex_ts(a, s) {
-  return cTsKernel(a, s, mtoc2_csub);
+export function jit_tensor_minus_complex_ts(a, s) {
+  return cTsKernel(a, s, jit_csub);
 }
-export function mtoc2_tensor_minus_complex_st(s, a) {
-  return cStKernel(s, a, mtoc2_csub);
+export function jit_tensor_minus_complex_st(s, a) {
+  return cStKernel(s, a, jit_csub);
 }
-export function mtoc2_tensor_minus_complex_bcast_tt(a, b) {
-  return cBcastKernel(a, b, mtoc2_csub);
+export function jit_tensor_minus_complex_bcast_tt(a, b) {
+  return cBcastKernel(a, b, jit_csub);
 }
 
 // ── times ──────────────────────────────────────────────────────────────────
-export function mtoc2_tensor_times_complex_tt(a, b) {
+export function jit_tensor_times_complex_tt(a, b) {
   const ar = cActsReal(a),
     br = cActsReal(b);
   return cTtKernel(a, b, (x, y) => cTimesMixed(x, ar, y, br));
 }
-export function mtoc2_tensor_times_complex_ts(a, s) {
+export function jit_tensor_times_complex_ts(a, s) {
   const ar = cActsReal(a),
     sr = s.im === 0;
   return cTsKernel(a, s, (x, y) => cTimesMixed(x, ar, y, sr));
 }
-export function mtoc2_tensor_times_complex_bcast_tt(a, b) {
+export function jit_tensor_times_complex_bcast_tt(a, b) {
   const ar = cActsReal(a),
     br = cActsReal(b);
   return cBcastKernel(a, b, (x, y) => cTimesMixed(x, ar, y, br));
 }
 
 // ── rdivide ───────────────────────────────────────────────────────────────
-export function mtoc2_tensor_rdivide_complex_tt(a, b) {
+export function jit_tensor_rdivide_complex_tt(a, b) {
   const ar = cActsReal(a),
     br = cActsReal(b);
   return cTtKernel(a, b, (x, y) => cRdivideMixed(x, ar, y, br));
 }
-export function mtoc2_tensor_rdivide_complex_ts(a, s) {
+export function jit_tensor_rdivide_complex_ts(a, s) {
   const ar = cActsReal(a),
     sr = s.im === 0;
   return cTsKernel(a, s, (x, y) => cRdivideMixed(x, ar, y, sr));
 }
-export function mtoc2_tensor_rdivide_complex_st(s, a) {
+export function jit_tensor_rdivide_complex_st(s, a) {
   const sr = s.im === 0,
     ar = cActsReal(a);
   return cStKernel(s, a, (x, y) => cRdivideMixed(x, sr, y, ar));
 }
-export function mtoc2_tensor_rdivide_complex_bcast_tt(a, b) {
+export function jit_tensor_rdivide_complex_bcast_tt(a, b) {
   const ar = cActsReal(a),
     br = cActsReal(b);
   return cBcastKernel(a, b, (x, y) => cRdivideMixed(x, ar, y, br));
 }
 
 // ── uminus ────────────────────────────────────────────────────────────────
-export function mtoc2_tensor_uminus_complex(a) {
-  const r = mtoc2_tensor_alloc_nd_complex(a.shape.length, a.shape);
+export function jit_tensor_uminus_complex(a) {
+  const r = jit_tensor_alloc_nd_complex(a.shape.length, a.shape);
   for (let i = 0; i < r.data.length; i++) {
-    const v = mtoc2_cneg(cLaneOf(a, i));
+    const v = jit_cneg(cLaneOf(a, i));
     r.data[i] = v.re;
     r.imag[i] = v.im;
   }

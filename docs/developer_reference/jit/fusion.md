@@ -2,7 +2,7 @@
 
 Fusion collapses an element-wise tensor assignment into a single inline per-element loop instead of a chain of runtime-helper calls, each of which would allocate an intermediate tensor. The goal is fewer allocations, fewer passes over memory, and better cache behavior.
 
-**Fusion is a C-backend (`--opt 2`) optimization only.** The JS backend never fuses — it always routes tensor ops through the per-op runtime helpers (`mtoc2_tensor_<op>_tt` and friends in `tensor_elemwise_real.js`), which hand tensors of 1024 or more elements to the interpreter's element-wise kernels (the `$elemwise` host hook: native addon when loaded) and loop in JS below that. The pass lives in the JIT compiler's C codegen (`src/numbl-core/jit/codegen/emitTensorFused.ts`).
+**Fusion is a C-backend (`--opt 2`) optimization only.** The JS backend never fuses — it always routes tensor ops through the per-op runtime helpers (`jit_tensor_<op>_tt` and friends in `tensor_elemwise_real.js`), which hand tensors of 1024 or more elements to the interpreter's element-wise kernels (the `$elemwise` host hook: native addon when loaded) and loop in JS below that. The pass lives in the JIT compiler's C codegen (`src/numbl-core/jit/codegen/emitTensorFused.ts`).
 
 ## What is fused
 
@@ -32,9 +32,9 @@ The fused emitter walks the RHS expression and emits, for each output element, t
 There are two shape cases:
 
 - **Statically-equal shapes** — emit the loop directly.
-- **Same static dim _pattern_ but dynamic extents** (e.g. `ones(1,n) + ones(1,m)`) — guard the loop with a runtime shape-equality probe (`mtoc2_fused_shape_eq`); on mismatch it falls back to the broadcasting runtime helper.
+- **Same static dim _pattern_ but dynamic extents** (e.g. `ones(1,n) + ones(1,m)`) — guard the loop with a runtime shape-equality probe (`jit_fused_shape_eq`); on mismatch it falls back to the broadcasting runtime helper.
 
-If any multi-element operand has a statically-different shape from the target, the assignment falls back to the runtime-helper broadcast path (`mtoc2_tensor_<op>_bcast_tt(...)`) rather than fusing.
+If any multi-element operand has a statically-different shape from the target, the assignment falls back to the runtime-helper broadcast path (`jit_tensor_<op>_bcast_tt(...)`) rather than fusing.
 
 ## What breaks fusion
 

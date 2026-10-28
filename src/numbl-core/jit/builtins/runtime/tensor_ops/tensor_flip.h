@@ -1,4 +1,4 @@
-/* mtoc2 runtime helper: `flip(t, dimIdx)` — return a freshly-owned
+/* JIT runtime helper: `flip(t, dimIdx)` — return a freshly-owned
  * tensor with `t.real` mirrored along axis `dimIdx` (0-based).
  *
  * Numbl's reference is `flipAlongDim` in
@@ -8,18 +8,18 @@
  * axis backwards on the source and forward on the destination,
  * copying `strideDim`-element contiguous blocks.
  *
- * `flipud(t)` lowers to `mtoc2_tensor_flip(t, 0)`; `fliplr(t)` to
- * `mtoc2_tensor_flip(t, 1)`; `flip(t, k)` to
- * `mtoc2_tensor_flip(t, k - 1)`. The `dimIdx` is 0-based at the C
+ * `flipud(t)` lowers to `jit_tensor_flip(t, 0)`; `fliplr(t)` to
+ * `jit_tensor_flip(t, 1)`; `flip(t, k)` to
+ * `jit_tensor_flip(t, k - 1)`. The `dimIdx` is 0-based at the C
  * boundary so the runtime stays uniform across the three source-
- * level builtins. mtoc2 codegen converts MATLAB's 1-based `k` to
+ * level builtins. The JIT codegen converts MATLAB's 1-based `k` to
  * 0-based at the call site.
  *
  * Out-of-range `dimIdx` (≥ ndim) is a no-op flip — numbl returns
  * the input unchanged in that case (the "axis is size 1" rule). We
  * still allocate a fresh copy so the owned-value invariant holds.
  *
- * `mtoc2_tensor_flip_complex` is the sibling that walks both lanes;
+ * `jit_tensor_flip_complex` is the sibling that walks both lanes;
  * it tolerates `a.imag == NULL` (a real tensor that flowed in via a
  * complex-typed route) by zero-filling the output imag lane.
  */
@@ -27,11 +27,11 @@
 #include <string.h>
 #include <stdlib.h>
 
-static mtoc2_tensor_t mtoc2_tensor_flip(mtoc2_tensor_t a, long dimIdx) {
+static jit_tensor_t jit_tensor_flip(jit_tensor_t a, long dimIdx) {
   long total = 1;
   for (int i = 0; i < a.ndim; i++) total *= a.dims[i];
-  mtoc2_tensor_t r;
-  r.real = mtoc2_alloc((size_t)total * sizeof(double));
+  jit_tensor_t r;
+  r.real = jit_alloc((size_t)total * sizeof(double));
   r.imag = NULL;
   r.ndim = a.ndim;
   for (int i = 0; i < a.ndim; i++) r.dims[i] = a.dims[i];
@@ -66,14 +66,14 @@ static mtoc2_tensor_t mtoc2_tensor_flip(mtoc2_tensor_t a, long dimIdx) {
   return r;
 }
 
-static mtoc2_tensor_t mtoc2_tensor_flip_complex(mtoc2_tensor_t a, long dimIdx) {
+static jit_tensor_t jit_tensor_flip_complex(jit_tensor_t a, long dimIdx) {
   long total = 1;
   for (int i = 0; i < a.ndim; i++) total *= a.dims[i];
-  mtoc2_tensor_t r = mtoc2_tensor_alloc_nd_complex(a.ndim, a.dims);
+  jit_tensor_t r = jit_tensor_alloc_nd_complex(a.ndim, a.dims);
   int srcHasImag = (a.imag != NULL);
 
   long axisSize = (dimIdx >= 0 && dimIdx < (long)a.ndim) ? a.dims[dimIdx] : 1;
-  // See mtoc2_tensor_flip: total==0 must short-circuit before slab math to
+  // See jit_tensor_flip: total==0 must short-circuit before slab math to
   // avoid a 0/0 division when a dim below the axis is 0.
   if (axisSize <= 1 || total == 0) {
     if (total > 0) {

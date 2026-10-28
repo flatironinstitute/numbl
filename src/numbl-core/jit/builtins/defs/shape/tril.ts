@@ -18,7 +18,7 @@ import { defineTriangular } from "./_triangular.js";
 
 export const tril = defineTriangular({
   name: "tril",
-  cHelper: "mtoc2_tensor_tril",
-  cHelperComplex: "mtoc2_tensor_tril_complex",
+  cHelper: "jit_tensor_tril",
+  cHelperComplex: "jit_tensor_tril_complex",
   keep: (i, j, k) => i - j >= -k,
 });

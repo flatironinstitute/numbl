@@ -61,10 +61,10 @@ export const isreal: Builtin = {
     if (v === true) return "1.0";
     if (v === false) return "0.0";
     if (isNumeric(t) && t.isComplex && !isScalar(t)) {
-      useRuntime("mtoc2_tensor_imag_all_zero");
-      return `mtoc2_tensor_imag_all_zero(${argsC[0]})`;
+      useRuntime("jit_tensor_imag_all_zero");
+      return `jit_tensor_imag_all_zero(${argsC[0]})`;
     }
-    useRuntime("mtoc2_cscalar");
+    useRuntime("jit_cscalar");
     return `(cimag(${argsC[0]}) == 0.0)`;
   },
   emitJs({ argTypes, argsJs, useRuntime }) {
@@ -73,8 +73,8 @@ export const isreal: Builtin = {
     if (v === true) return "true";
     if (v === false) return "false";
     if (isNumeric(t) && t.isComplex && !isScalar(t)) {
-      useRuntime("mtoc2_tensor_imag_all_zero");
-      return `mtoc2_tensor_imag_all_zero(${argsJs[0]})`;
+      useRuntime("jit_tensor_imag_all_zero");
+      return `jit_tensor_imag_all_zero(${argsJs[0]})`;
     }
     return `(${argsJs[0]}.im === 0)`;
   },

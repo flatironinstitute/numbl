@@ -1,10 +1,9 @@
-/* mtoc2 runtime helpers: complex-tensor reductions.
+/* JIT runtime helpers: complex-tensor reductions.
  *
  * Sibling of `tensor_reduce_real.h`. Same `_all` / `_dim` shape per
  * op; each kernel walks both lanes and builds intermediate
- * `double _Complex` values through `mtoc2_cmake` / `mtoc2_c*` so the
- * c2js backend can translate the bodies straight (no bare
- * `<complex.h>` operators).
+ * `double _Complex` values through `jit_cmake` / `jit_c*` (no
+ * bare `<complex.h>` operators).
  *
  * Result types per op:
  *   sum / prod / mean         → complex (lane-pair accumulator)
@@ -31,36 +30,36 @@
 /* Shared with the real helper; defined inline here so this file is
  * standalone-includable (the runtime activator may pull the complex
  * snippet in independently of the real one). */
-static void mtoc2__squeeze_trailing_c(int *ndim, long *dims) {
+static void jit__squeeze_trailing_c(int *ndim, long *dims) {
   while (*ndim > 2 && dims[*ndim - 1] == 1) {
     (*ndim)--;
   }
 }
 
 /* Numeric (sum/prod/mean) reduction template — complex accumulator. */
-#define MTOC2_DEFINE_CACCUM_REDUCTION(name, INIT, ACCUM, FINALIZE)            \
-  static double _Complex mtoc2_##name##_complex_all(mtoc2_tensor_t a) {       \
+#define JIT_DEFINE_CACCUM_REDUCTION(name, INIT, ACCUM, FINALIZE)              \
+  static double _Complex jit_##name##_complex_all(jit_tensor_t a) {           \
     long n = 1;                                                               \
     for (int i = 0; i < a.ndim; i++) n *= a.dims[i];                          \
     double _Complex acc = (INIT);                                             \
     for (long i = 0; i < n; i++) {                                            \
       double aim = (a.imag != NULL) ? a.imag[i] : 0.0;                        \
-      double _Complex x = mtoc2_cmake(a.real[i], aim);                        \
+      double _Complex x = jit_cmake(a.real[i], aim);                          \
       acc = ACCUM(acc, x);                                                    \
     }                                                                         \
     return FINALIZE(acc, n);                                                  \
   }                                                                           \
                                                                               \
-  static mtoc2_tensor_t mtoc2_##name##_complex_dim(                           \
-      mtoc2_tensor_t a, int dim) {                                            \
+  static jit_tensor_t jit_##name##_complex_dim(                               \
+      jit_tensor_t a, int dim) {                                              \
     if (dim < 1) {                                                            \
-      fprintf(stderr, "mtoc2: " #name "_complex_dim: dim must be >= 1 (got %d)\n", dim); \
+      fprintf(stderr, "C-JIT: " #name "_complex_dim: dim must be >= 1 (got %d)\n", dim); \
       abort();                                                                \
     }                                                                         \
     if (dim > a.ndim) {                                                       \
       long total = 1;                                                         \
       for (int i = 0; i < a.ndim; i++) total *= a.dims[i];                    \
-      mtoc2_tensor_t out = mtoc2_tensor_alloc_nd_complex(a.ndim, a.dims);     \
+      jit_tensor_t out = jit_tensor_alloc_nd_complex(a.ndim, a.dims);         \
       memcpy(out.real, a.real, (size_t)total * sizeof(double));               \
       if (a.imag != NULL) {                                                   \
         memcpy(out.imag, a.imag, (size_t)total * sizeof(double));             \
@@ -75,12 +74,12 @@ static void mtoc2__squeeze_trailing_c(int *ndim, long *dims) {
     for (int i = 0; i < dimIdx; i++) before *= a.dims[i];                     \
     long after = 1;                                                           \
     for (int i = dimIdx + 1; i < a.ndim; i++) after *= a.dims[i];             \
-    long out_dims[MTOC2_MAX_NDIM];                                            \
+    long out_dims[JIT_MAX_NDIM];                                              \
     int out_ndim = a.ndim;                                                    \
     for (int i = 0; i < a.ndim; i++) out_dims[i] = a.dims[i];                 \
     out_dims[dimIdx] = 1;                                                     \
-    mtoc2__squeeze_trailing_c(&out_ndim, out_dims);                           \
-    mtoc2_tensor_t out = mtoc2_tensor_alloc_nd_complex(out_ndim, out_dims);   \
+    jit__squeeze_trailing_c(&out_ndim, out_dims);                             \
+    jit_tensor_t out = jit_tensor_alloc_nd_complex(out_ndim, out_dims);       \
     long slab = before * axis;                                                \
     for (long outer = 0; outer < after; outer++) {                            \
       long slabBase = outer * slab;                                           \
@@ -89,13 +88,13 @@ static void mtoc2__squeeze_trailing_c(int *ndim, long *dims) {
         for (long k = 0; k < axis; k++) {                                     \
           long off = slabBase + inner + k * before;                           \
           double aim = (a.imag != NULL) ? a.imag[off] : 0.0;                  \
-          double _Complex x = mtoc2_cmake(a.real[off], aim);                  \
+          double _Complex x = jit_cmake(a.real[off], aim);                    \
           acc = ACCUM(acc, x);                                                \
         }                                                                     \
         double _Complex fin = FINALIZE(acc, axis);                            \
         long dst = outer * before + inner;                                    \
-        out.real[dst] = mtoc2_creal(fin);                                     \
-        out.imag[dst] = mtoc2_cimag(fin);                                     \
+        out.real[dst] = jit_creal(fin);                                       \
+        out.imag[dst] = jit_cimag(fin);                                       \
       }                                                                       \
     }                                                                         \
     return out;                                                               \
@@ -104,7 +103,7 @@ static void mtoc2__squeeze_trailing_c(int *ndim, long *dims) {
 /* True when the tensor carries no imaginary content (NULL lane or every
  * element zero). Such a tensor is real in value — min/max must order by
  * value, not magnitude, to match the interpreter and MATLAB on real data. */
-static int mtoc2__creduce_all_imag_zero(mtoc2_tensor_t a) {
+static int jit__creduce_all_imag_zero(jit_tensor_t a) {
   if (a.imag == NULL) return 1;
   long n = 1;
   for (int i = 0; i < a.ndim; i++) n *= a.dims[i];
@@ -118,18 +117,18 @@ static int mtoc2__creduce_all_imag_zero(mtoc2_tensor_t a) {
  * When the whole tensor is real (all-zero imag) we order by value
  * instead. NaN-skip on either lane. Accumulator seed is NaN+NaN; first
  * non-NaN element captures, later non-NaN elements compare. */
-#define MTOC2_DEFINE_CMINMAX_REDUCTION(name, CMP)                              \
-  static int mtoc2__##name##_complex_better(                                  \
+#define JIT_DEFINE_CMINMAX_REDUCTION(name, CMP)                                \
+  static int jit__##name##_complex_better(                                    \
       double aRe, double aIm, double bRe, double bIm) {                       \
     double absA = hypot(aRe, aIm);                                            \
     double absB = hypot(bRe, bIm);                                            \
     if (absA != absB) return absA CMP absB;                                   \
     return atan2(aIm, aRe) CMP atan2(bIm, bRe);                               \
   }                                                                           \
-  static double _Complex mtoc2_##name##_complex_all(mtoc2_tensor_t a) {       \
+  static double _Complex jit_##name##_complex_all(jit_tensor_t a) {           \
     long n = 1;                                                               \
     for (int i = 0; i < a.ndim; i++) n *= a.dims[i];                          \
-    int realMode = mtoc2__creduce_all_imag_zero(a);                           \
+    int realMode = jit__creduce_all_imag_zero(a);                             \
     int found = 0;                                                            \
     double mRe = NAN, mIm = 0.0;                                              \
     for (long i = 0; i < n; i++) {                                            \
@@ -137,26 +136,26 @@ static int mtoc2__creduce_all_imag_zero(mtoc2_tensor_t a) {
       double xi = (a.imag != NULL) ? a.imag[i] : 0.0;                         \
       if (xr != xr || xi != xi) continue;                                     \
       int better = realMode ? (xr CMP mRe)                                    \
-                            : mtoc2__##name##_complex_better(xr, xi, mRe, mIm); \
+                            : jit__##name##_complex_better(xr, xi, mRe, mIm);   \
       if (!found || better) {                                                 \
         mRe = xr;                                                             \
         mIm = xi;                                                             \
         found = 1;                                                            \
       }                                                                       \
     }                                                                         \
-    return mtoc2_cmake(mRe, mIm);                                             \
+    return jit_cmake(mRe, mIm);                                               \
   }                                                                           \
                                                                               \
-  static mtoc2_tensor_t mtoc2_##name##_complex_dim(                           \
-      mtoc2_tensor_t a, int dim) {                                            \
+  static jit_tensor_t jit_##name##_complex_dim(                               \
+      jit_tensor_t a, int dim) {                                              \
     if (dim < 1) {                                                            \
-      fprintf(stderr, "mtoc2: " #name "_complex_dim: dim must be >= 1 (got %d)\n", dim); \
+      fprintf(stderr, "C-JIT: " #name "_complex_dim: dim must be >= 1 (got %d)\n", dim); \
       abort();                                                                \
     }                                                                         \
     if (dim > a.ndim) {                                                       \
       long total = 1;                                                         \
       for (int i = 0; i < a.ndim; i++) total *= a.dims[i];                    \
-      mtoc2_tensor_t out = mtoc2_tensor_alloc_nd_complex(a.ndim, a.dims);     \
+      jit_tensor_t out = jit_tensor_alloc_nd_complex(a.ndim, a.dims);         \
       memcpy(out.real, a.real, (size_t)total * sizeof(double));               \
       if (a.imag != NULL) {                                                   \
         memcpy(out.imag, a.imag, (size_t)total * sizeof(double));             \
@@ -171,14 +170,14 @@ static int mtoc2__creduce_all_imag_zero(mtoc2_tensor_t a) {
     for (int i = 0; i < dimIdx; i++) before *= a.dims[i];                     \
     long after = 1;                                                           \
     for (int i = dimIdx + 1; i < a.ndim; i++) after *= a.dims[i];             \
-    long out_dims[MTOC2_MAX_NDIM];                                            \
+    long out_dims[JIT_MAX_NDIM];                                              \
     int out_ndim = a.ndim;                                                    \
     for (int i = 0; i < a.ndim; i++) out_dims[i] = a.dims[i];                 \
     out_dims[dimIdx] = 1;                                                     \
-    mtoc2__squeeze_trailing_c(&out_ndim, out_dims);                           \
-    mtoc2_tensor_t out = mtoc2_tensor_alloc_nd_complex(out_ndim, out_dims);   \
+    jit__squeeze_trailing_c(&out_ndim, out_dims);                             \
+    jit_tensor_t out = jit_tensor_alloc_nd_complex(out_ndim, out_dims);       \
     long slab = before * axis;                                                \
-    int realMode = mtoc2__creduce_all_imag_zero(a);                           \
+    int realMode = jit__creduce_all_imag_zero(a);                             \
     for (long outer = 0; outer < after; outer++) {                            \
       long slabBase = outer * slab;                                           \
       for (long inner = 0; inner < before; inner++) {                         \
@@ -190,7 +189,7 @@ static int mtoc2__creduce_all_imag_zero(mtoc2_tensor_t a) {
           double xi = (a.imag != NULL) ? a.imag[off] : 0.0;                   \
           if (xr != xr || xi != xi) continue;                                 \
           int better = realMode ? (xr CMP mRe)                                \
-                                : mtoc2__##name##_complex_better(xr, xi, mRe, mIm); \
+                                : jit__##name##_complex_better(xr, xi, mRe, mIm);   \
           if (!found || better) {                                             \
             mRe = xr;                                                         \
             mIm = xi;                                                         \
@@ -206,9 +205,9 @@ static int mtoc2__creduce_all_imag_zero(mtoc2_tensor_t a) {
   }
 
 /* any/all template — real result; toBool per element (either lane
- * nonzero). Mirrors `MTOC2_DEFINE_LOGICAL_REDUCTION` shape. */
-#define MTOC2_DEFINE_CLOGICAL_REDUCTION(name, EMPTY_RESULT, SHORT_BODY)        \
-  static double mtoc2_##name##_complex_all(mtoc2_tensor_t a) {                \
+ * nonzero). Mirrors `JIT_DEFINE_LOGICAL_REDUCTION` shape. */
+#define JIT_DEFINE_CLOGICAL_REDUCTION(name, EMPTY_RESULT, SHORT_BODY)          \
+  static double jit_##name##_complex_all(jit_tensor_t a) {                    \
     long n = 1;                                                               \
     for (int i = 0; i < a.ndim; i++) n *= a.dims[i];                          \
     if (n == 0) return (double)(EMPTY_RESULT);                                \
@@ -222,19 +221,19 @@ static int mtoc2__creduce_all_imag_zero(mtoc2_tensor_t a) {
     return acc;                                                               \
   }                                                                           \
                                                                               \
-  static mtoc2_tensor_t mtoc2_##name##_complex_dim(                           \
-      mtoc2_tensor_t a, int dim) {                                            \
+  static jit_tensor_t jit_##name##_complex_dim(                               \
+      jit_tensor_t a, int dim) {                                              \
     if (dim < 1) {                                                            \
-      fprintf(stderr, "mtoc2: " #name "_complex_dim: dim must be >= 1 (got %d)\n", dim); \
+      fprintf(stderr, "C-JIT: " #name "_complex_dim: dim must be >= 1 (got %d)\n", dim); \
       abort();                                                                \
     }                                                                         \
     if (dim > a.ndim) {                                                       \
       long total = 1;                                                         \
       for (int i = 0; i < a.ndim; i++) total *= a.dims[i];                    \
-      long out_dims[MTOC2_MAX_NDIM];                                          \
+      long out_dims[JIT_MAX_NDIM];                                            \
       int out_ndim = a.ndim;                                                  \
       for (int i = 0; i < a.ndim; i++) out_dims[i] = a.dims[i];               \
-      mtoc2_tensor_t out = mtoc2_tensor_alloc_nd(out_ndim, out_dims);         \
+      jit_tensor_t out = jit_tensor_alloc_nd(out_ndim, out_dims);             \
       for (long i = 0; i < total; i++) {                                      \
         double xr = a.real[i];                                                \
         double xi = (a.imag != NULL) ? a.imag[i] : 0.0;                       \
@@ -248,12 +247,12 @@ static int mtoc2__creduce_all_imag_zero(mtoc2_tensor_t a) {
     for (int i = 0; i < dimIdx; i++) before *= a.dims[i];                     \
     long after = 1;                                                           \
     for (int i = dimIdx + 1; i < a.ndim; i++) after *= a.dims[i];             \
-    long out_dims[MTOC2_MAX_NDIM];                                            \
+    long out_dims[JIT_MAX_NDIM];                                              \
     int out_ndim = a.ndim;                                                    \
     for (int i = 0; i < a.ndim; i++) out_dims[i] = a.dims[i];                 \
     out_dims[dimIdx] = 1;                                                     \
-    mtoc2__squeeze_trailing_c(&out_ndim, out_dims);                           \
-    mtoc2_tensor_t out = mtoc2_tensor_alloc_nd(out_ndim, out_dims);           \
+    jit__squeeze_trailing_c(&out_ndim, out_dims);                             \
+    jit_tensor_t out = jit_tensor_alloc_nd(out_ndim, out_dims);               \
     long slab = before * axis;                                                \
     for (long outer = 0; outer < after; outer++) {                            \
       long slabBase = outer * slab;                                           \
@@ -273,19 +272,19 @@ static int mtoc2__creduce_all_imag_zero(mtoc2_tensor_t a) {
   }
 
 /* Accumulator-statement macros. */
-#define MTOC2_CACC_SUM(acc, x) mtoc2_cadd((acc), (x))
-#define MTOC2_CACC_PROD(acc, x) mtoc2_cmul((acc), (x))
-#define MTOC2_CFIN_ID(acc, n) (acc)
-#define MTOC2_CFIN_MEAN(acc, n) mtoc2_cdiv((acc), mtoc2_cmake((double)(n), 0.0))
+#define JIT_CACC_SUM(acc, x) jit_cadd((acc), (x))
+#define JIT_CACC_PROD(acc, x) jit_cmul((acc), (x))
+#define JIT_CFIN_ID(acc, n) (acc)
+#define JIT_CFIN_MEAN(acc, n) jit_cdiv((acc), jit_cmake((double)(n), 0.0))
 
-MTOC2_DEFINE_CACCUM_REDUCTION(sum, mtoc2_cmake(0.0, 0.0), MTOC2_CACC_SUM, MTOC2_CFIN_ID)
-MTOC2_DEFINE_CACCUM_REDUCTION(prod, mtoc2_cmake(1.0, 0.0), MTOC2_CACC_PROD, MTOC2_CFIN_ID)
-MTOC2_DEFINE_CACCUM_REDUCTION(mean, mtoc2_cmake(0.0, 0.0), MTOC2_CACC_SUM, MTOC2_CFIN_MEAN)
+JIT_DEFINE_CACCUM_REDUCTION(sum, jit_cmake(0.0, 0.0), JIT_CACC_SUM, JIT_CFIN_ID)
+JIT_DEFINE_CACCUM_REDUCTION(prod, jit_cmake(1.0, 0.0), JIT_CACC_PROD, JIT_CFIN_ID)
+JIT_DEFINE_CACCUM_REDUCTION(mean, jit_cmake(0.0, 0.0), JIT_CACC_SUM, JIT_CFIN_MEAN)
 
-MTOC2_DEFINE_CMINMAX_REDUCTION(min, <)
-MTOC2_DEFINE_CMINMAX_REDUCTION(max, >)
+JIT_DEFINE_CMINMAX_REDUCTION(min, <)
+JIT_DEFINE_CMINMAX_REDUCTION(max, >)
 
-MTOC2_DEFINE_CLOGICAL_REDUCTION(any, 0,
+JIT_DEFINE_CLOGICAL_REDUCTION(any, 0,
   if (x) { acc = 1.0; break; })
-MTOC2_DEFINE_CLOGICAL_REDUCTION(all, 1,
+JIT_DEFINE_CLOGICAL_REDUCTION(all, 1,
   if (!x) { acc = 0.0; break; })

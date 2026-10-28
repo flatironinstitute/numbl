@@ -113,7 +113,7 @@ export function lowerIndexSliceStore(
   // the tensor in MATLAB, which the JIT cannot model: it emits against the
   // pre-write static shape and cannot reallocate the buffer mid-spec. That is
   // handled at runtime rather than statically — both backends route a store's
-  // Scalar slot through the grow-aware bounds check (`mtoc2_idx_axis_grow`),
+  // Scalar slot through the grow-aware bounds check (`jit_idx_axis_grow`),
   // which bails to the interpreter (full MATLAB grow semantics) on an index
   // past the extent and still aborts on a genuine sub-1 index.
   //
@@ -149,7 +149,7 @@ export function lowerIndexSliceStore(
   // Codegen accepts only a scalar (broadcast) or a Var (per-slot copy)
   // as RHS. Scalars pass through; multi-element non-Var RHSs (a
   // TensorBuild, an IndexSlice, a MakeRange, a tensor-returning Call,
-  // a tensor Binary) hoist to a fresh `_mtoc2_t<N>` temp Assign so the
+  // a tensor Binary) hoist to a fresh `_jit_t<N>` temp Assign so the
   // temporary's lifetime is named and the codegen pipeline stays
   // uniform. Same ANF rule used by every other owned consume site.
   const hoists: IRStmt[] = [];

@@ -14,7 +14,7 @@
 % DIVERGING MODE: opt2 only (opt0 == opt1).
 %
 % CAUSE: src/numbl-core/jit/builtins/runtime/io/format_engine.h
-% mtoc2__emit_float defers %f/%e/%g to snprintf (half-to-even); the JS
+% jit__emit_float defers %f/%e/%g to snprintf (half-to-even); the JS
 % sibling format_engine.js uses toFixed/toExponential/toPrecision
 % (half-away). The reference interpreter (helpers/string.ts sprintfFormat)
 % is half-away. The C path must round half-away to match.

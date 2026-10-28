@@ -26,7 +26,7 @@ type FuncStmt = Extract<Stmt, { type: "Function" }>;
 
 /** `@name` — a named handle to a top-level user function. Builds the
  *  handle type, captures empty, and returns a HandleLit. Builtin
- *  targets (`@disp`, `@sin`) are rejected — mtoc2 v1 doesn't support
+ *  targets (`@disp`, `@sin`) are rejected — the JIT doesn't support
  *  them. Class methods (`@SomeClass.method`) aren't reachable via
  *  this AST (the parser emits a different shape for those). The
  *  workspace resolver finds local + cross-file function targets. */
@@ -353,7 +353,7 @@ export function dispatchHandleMultiAssign(
  *  Names that hit a registered builtin OR a top-level user function
  *  are NOT captures — they're function references resolved at the
  *  call site. A bare-Ident reference to such a name without a call
- *  is not yet meaningful in mtoc2 (only `@name` produces a handle),
+ *  is not yet meaningful in the JIT (only `@name` produces a handle),
  *  so we conservatively treat any in-scope variable as a capture.
  *
  *  Nested `@(...)` and `@name` inside the body do NOT contribute to

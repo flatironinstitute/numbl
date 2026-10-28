@@ -4,7 +4,7 @@
 % (CONCAT_CHECK_SNIPPET, the consistency guard).
 % opt0 (interp):  prints "4 8"   (correct)
 % opt1 (JS-JIT):  prints "4 8"   (correct, matches)
-% opt2 (C-JIT):   RuntimeError: mtoc2-c-jit compile failed
+% opt2 (C-JIT):   RuntimeError: C-JIT compile failed
 %                   error: #include expects "FILENAME" or <FILENAME>
 %                          #include math.h
 % DIVERGES: opt2 errors while opt0/opt1 succeed.

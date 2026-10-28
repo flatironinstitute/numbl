@@ -26,13 +26,13 @@ export const toc: Builtin = {
     return [scalarDouble("nonneg")];
   },
   emitC({ argsC, useRuntime }) {
-    useRuntime("mtoc2_tic_toc");
-    if (argsC.length === 1) return `mtoc2_toc_handle(${argsC[0]})`;
-    return "mtoc2_toc()";
+    useRuntime("jit_tic_toc");
+    if (argsC.length === 1) return `jit_toc_handle(${argsC[0]})`;
+    return "jit_toc()";
   },
   emitJs({ argsJs, useRuntime }) {
-    useRuntime("mtoc2_tic_toc");
-    if (argsJs.length === 1) return `mtoc2_toc_handle(${argsJs[0]})`;
-    return "mtoc2_toc()";
+    useRuntime("jit_tic_toc");
+    if (argsJs.length === 1) return `jit_toc_handle(${argsJs[0]})`;
+    return "jit_toc()";
   },
 };

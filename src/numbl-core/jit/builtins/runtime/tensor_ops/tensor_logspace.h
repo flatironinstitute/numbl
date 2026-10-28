@@ -1,4 +1,4 @@
-/* mtoc2 runtime helper: build a 1×n row tensor of n logarithmically-
+/* JIT runtime helper: build a 1×n row tensor of n logarithmically-
  * spaced values from 10^a to 10^b. Matches numbl's `logspace`:
  *
  *   - n <= 0  → 1×0 empty tensor.
@@ -13,11 +13,11 @@
 
 #include <math.h>
 
-static mtoc2_tensor_t mtoc2_tensor_logspace(double a, double b, long n) {
-  if (n <= 0) return mtoc2_tensor_alloc(1, 0);
+static jit_tensor_t jit_tensor_logspace(double a, double b, long n) {
+  if (n <= 0) return jit_tensor_alloc(1, 0);
   int isPi = (b == 3.141592653589793);
   double endVal = isPi ? 3.141592653589793 : pow(10.0, b);
-  mtoc2_tensor_t out = mtoc2_tensor_alloc(1, n);
+  jit_tensor_t out = jit_tensor_alloc(1, n);
   if (n == 1) {
     out.real[0] = endVal;
     return out;

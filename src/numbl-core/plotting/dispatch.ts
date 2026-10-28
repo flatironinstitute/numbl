@@ -18,10 +18,6 @@
  *   - `ishold` — reads `state.holdState`, but is a pure query (no
  *     instructions pushed); the Runtime can call `state.holdState`
  *     directly.
- *
- * Reusable from outside numbl: mtoc2 (the static-translation
- * sibling project) imports this function to render plots in its
- * browser IDE without reimplementing per-builtin logic.
  */
 
 import type { RuntimeValue } from "../runtime/types.js";
@@ -79,8 +75,7 @@ import { applyAxisCommand } from "./axisCommand.js";
 /** State carried by graphics ops that need to remember things between
  *  calls. `holdState` is read by `ishold()` so `hold on; if ishold ...`
  *  works; `tiledLayoutState` lets `nexttile` know where to place the
- *  next axes. The `Runtime` class implements this interface; mtoc2's
- *  browser viewer keeps its own instance. */
+ *  next axes. The `Runtime` class implements this interface. */
 export interface PlotDispatchState {
   holdState: boolean;
   tiledLayoutState: TiledLayoutState | null;
@@ -652,7 +647,7 @@ export const PLOT_DISPATCH_NAMES: ReadonlyArray<string> = [
  *    - `plotting/builtins.ts` (`drawnow`, `pause`, `ishold`, `set`)
  *
  *  These names belong here, alongside `PLOT_DISPATCH_NAMES`, because
- *  downstream consumers (mtoc2's translator, syntax highlighters,
+ *  downstream consumers (the JIT, syntax highlighters,
  *  doc generators) want to know the full "plot-script surface area"
  *  numbl tolerates — not just the renderable subset. Keeping the
  *  union in one place is the whole point of consolidating dispatch

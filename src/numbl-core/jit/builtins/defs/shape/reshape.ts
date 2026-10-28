@@ -5,10 +5,10 @@
  *   Form B — vector of dims:        reshape(A, [d1, d2, …, dN])
  *
  * Discipline (mirrors numbl's array-manipulation `reshape`):
- *   - 1 ≤ N ≤ MTOC2_MAX_NDIM (8). Trailing-singletons are stripped
+ *   - 1 ≤ N ≤ JIT_MAX_NDIM (8). Trailing-singletons are stripped
  *     down to a 2-axis minimum (numbl:
  *     `while (s.length>2 && s.last===1) s.pop()`), then padded back
- *     up to 2 axes if N=1 was given (mtoc2 represents every tensor
+ *     up to 2 axes if N=1 was given (the JIT represents every tensor
  *     as min-2D).
  *   - Form A — each `di` is a scalar real double; statically-known
  *     finite non-negative integers pin the corresponding axis, and
@@ -19,7 +19,7 @@
  *   - Form A allows at most one `[]` auto-infer slot. The translator
  *     fills it from `numel(A)` / `prod(other dims)` when both are
  *     known statically, else codegen passes `-1L` to
- *     `mtoc2_reshape_nd` which computes the slot at runtime. Form B
+ *     `jit_reshape_nd` which computes the slot at runtime. Form B
  *     still rejects the placeholder (the dim vector itself must be a
  *     static constant; a single `[]` inside the bracket is ambiguous).
  *   - Input `A` must be a real numeric (scalar or tensor); complex /
@@ -28,7 +28,7 @@
  *     every new dim are statically known; deferred to the runtime
  *     helper otherwise.
  *
- * Codegen routes through the per-op runtime helper `mtoc2_reshape_nd`
+ * Codegen routes through the per-op runtime helper `jit_reshape_nd`
  * (declared in `src/codegen/runtime/tensor_reshape_nd.h`), which
  * already accepts a runtime `(int ndim, const long *dims)` pair plus
  * an optional `-1L` auto-infer sentinel. The result is freshly owned,
@@ -40,7 +40,7 @@ import { TypeError, UnsupportedConstruct } from "../../../lowering/errors.js";
 import {
   DIM_ONE,
   EXACT_ARRAY_MAX_ELEMENTS,
-  MTOC2_MAX_NDIM,
+  JIT_MAX_NDIM,
   tensorComplex,
   tensorComplexFromDims,
   tensorDouble,
@@ -55,7 +55,7 @@ import {
 import type { DimInfo, Type } from "../../../lowering/types.js";
 import type { Builtin } from "../../registry.js";
 
-const MAX_DIM_ARGS = MTOC2_MAX_NDIM;
+const MAX_DIM_ARGS = JIT_MAX_NDIM;
 import {
   exactComplex,
   exactComplexArray,
@@ -219,14 +219,14 @@ function exactShape(r: ResolvedNewShape): number[] | undefined {
 
 /** Emit the C `long` expression for one axis. `dimArgsC` is sliced
  *  from the full Call argsC so its index 0 maps to `axes[*].argIndex
- *  = 0`. The `[]` auto-infer slot emits `-1L` — `mtoc2_reshape_nd`
+ *  = 0`. The `[]` auto-infer slot emits `-1L` — `jit_reshape_nd`
  *  scans for the sentinel and fills it from `in_total / prod(others)`. */
 function dimC(axis: ResolvedAxis, dimArgsC: string[]): string {
   if (axis.kind === "exact") return `${axis.value}L`;
   if (axis.kind === "infer") return `-1L`;
   // A non-integer dim is an error (MATLAB + interpreter validateDim), not
-  // a silent truncation. mtoc2_check_dim validates then converts to long.
-  return `mtoc2_check_dim(${dimArgsC[axis.argIndex]})`;
+  // a silent truncation. jit_check_dim validates then converts to long.
+  return `jit_check_dim(${dimArgsC[axis.argIndex]})`;
 }
 
 export const reshape: Builtin = {
@@ -354,8 +354,8 @@ export const reshape: Builtin = {
       : [tensorDoubleFromDims(dims)];
   },
   emitC({ argsC, argTypes, useRuntime }) {
-    useRuntime("mtoc2_reshape_nd");
-    useRuntime("mtoc2_reshape_nd_complex");
+    useRuntime("jit_reshape_nd");
+    useRuntime("jit_reshape_nd_complex");
     const resolved = resolveNewShape(argTypes.slice(1));
     const newShape = exactShape(resolved);
 
@@ -365,7 +365,7 @@ export const reshape: Builtin = {
 
     const a = argTypes[0];
     const isComplex = isNumeric(a) && a.isComplex;
-    const fn = isComplex ? "mtoc2_reshape_nd_complex" : "mtoc2_reshape_nd";
+    const fn = isComplex ? "jit_reshape_nd_complex" : "jit_reshape_nd";
     const dimArgsC = argsC.slice(1);
     if (resolved.axes.some(ax => ax.kind === "dynamic")) {
       useRuntime(CHECK_DIM_SNIPPET);
@@ -390,14 +390,14 @@ export const reshape: Builtin = {
           ? String(axis.value)
           : axis.kind === "infer"
             ? "-1"
-            : `mtoc2_check_dim(${dimArgsJs[axis.argIndex]})`
+            : `jit_check_dim(${dimArgsJs[axis.argIndex]})`
       )
       .join(", ");
     if (isNumeric(a) && a.isComplex) {
-      useRuntime("mtoc2_reshape_nd_complex");
-      return `mtoc2_reshape_nd_complex(${argsJs[0]}, ${resolved.axes.length}, [${dimList}])`;
+      useRuntime("jit_reshape_nd_complex");
+      return `jit_reshape_nd_complex(${argsJs[0]}, ${resolved.axes.length}, [${dimList}])`;
     }
-    useRuntime("mtoc2_reshape_nd");
-    return `mtoc2_reshape_nd(${argsJs[0]}, ${resolved.axes.length}, [${dimList}])`;
+    useRuntime("jit_reshape_nd");
+    return `jit_reshape_nd(${argsJs[0]}, ${resolved.axes.length}, [${dimList}])`;
   },
 };

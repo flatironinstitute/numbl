@@ -1,27 +1,27 @@
 // JS sibling of `disp_tensor.h`. Real-only tensor display, mirroring
 // numbl's `format2DSlice` for the 2-D path and numbl's page-by-page
 // rendering for ndim > 2. Each cell is formatted via
-// `mtoc2_format_double`; columns are padded to their widest element;
+// `jit_format_double`; columns are padded to their widest element;
 // rows are separated by `\n`, columns by 3 spaces, indented by 3
 // spaces.
 
-import { mtoc2_format_double } from "./format_double.js";
+import { jit_format_double } from "./format_double.js";
 
 // Mirrors numbl's `runtime/display.ts` format2DSlice: matrices
 // wider/taller than 20 are truncated to the first/last 10 with a
 // "Columns 1 through N" header and a "..." elision row/column. Without
 // this the JIT printed every element on one line, diverging from the
 // interpreter.
-const MTOC2_MAX_DISPLAY_ROWS = 20;
-const MTOC2_MAX_DISPLAY_COLS = 20;
+const JIT_MAX_DISPLAY_ROWS = 20;
+const JIT_MAX_DISPLAY_COLS = 20;
 
 function disp_real_slice(data, offset, rows, cols) {
-  const truncRows = rows > MTOC2_MAX_DISPLAY_ROWS;
-  const truncCols = cols > MTOC2_MAX_DISPLAY_COLS;
-  const rHi = Math.ceil(MTOC2_MAX_DISPLAY_ROWS / 2);
-  const rLo = Math.floor(MTOC2_MAX_DISPLAY_ROWS / 2);
-  const cHi = Math.ceil(MTOC2_MAX_DISPLAY_COLS / 2);
-  const cLo = Math.floor(MTOC2_MAX_DISPLAY_COLS / 2);
+  const truncRows = rows > JIT_MAX_DISPLAY_ROWS;
+  const truncCols = cols > JIT_MAX_DISPLAY_COLS;
+  const rHi = Math.ceil(JIT_MAX_DISPLAY_ROWS / 2);
+  const rLo = Math.floor(JIT_MAX_DISPLAY_ROWS / 2);
+  const cHi = Math.ceil(JIT_MAX_DISPLAY_COLS / 2);
+  const cLo = Math.floor(JIT_MAX_DISPLAY_COLS / 2);
   const showRows = [];
   if (truncRows) {
     for (let i = 0; i < rHi; i++) showRows.push(i);
@@ -48,7 +48,7 @@ function disp_real_slice(data, offset, rows, cols) {
     const row = [];
     let ci = 0;
     for (const c of showCols) {
-      const text = mtoc2_format_double(data[offset + r + c * rows]);
+      const text = jit_format_double(data[offset + r + c * rows]);
       row.push(text);
       if (text.length > colWidths[ci]) colWidths[ci] = text.length;
       ci++;
@@ -72,7 +72,7 @@ function disp_real_slice(data, offset, rows, cols) {
   }
 }
 
-export function mtoc2_disp_tensor(t) {
+export function jit_disp_tensor(t) {
   // Mirrors numbl: empty tensors print nothing.
   if (!t || !t.shape || t.shape.length === 0) return;
   const rows = t.shape[0] ?? 1;
@@ -83,7 +83,7 @@ export function mtoc2_disp_tensor(t) {
   // 1-element tensors print as bare scalars (no column-aligned
   // indent) — matches numbl's `runtime/display.ts:128` special case.
   if (total === 1) {
-    $write(mtoc2_format_double(t.data[0]) + "\n");
+    $write(jit_format_double(t.data[0]) + "\n");
     return;
   }
 

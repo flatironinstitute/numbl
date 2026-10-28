@@ -373,7 +373,7 @@ export function binaryOpBuiltin(op: BinaryOperation, span: Span): string {
       return "power";
     default:
       // The remaining BinaryOperation cases (LeftDiv / ElemLeftDiv) are
-      // valid numbl operators that mtoc2 doesn't yet support. Surface
+      // valid numbl operators that the JIT doesn't yet support. Surface
       // as a span-attributed UnsupportedConstruct so the CLI prints the
       // source location of the offending operator instead of an internal
       // "unmapped op" error.
@@ -392,7 +392,7 @@ export function unaryOpBuiltin(op: UnaryOperation, span: Span): string {
       return "uplus";
     case UnaryOperation.Transpose:
     case UnaryOperation.NonConjugateTranspose:
-      // For real-typed inputs (mtoc2 v1) `.'` and `'` are identical.
+      // For real-typed inputs `.'` and `'` are identical.
       // When complex lands, `'` will route to a separate `ctranspose`.
       return "transpose";
     case UnaryOperation.Not:

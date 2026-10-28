@@ -175,11 +175,11 @@ function defineFlip(opts: {
         opts.fixedAxis
       );
       if (a.isComplex) {
-        useRuntime("mtoc2_tensor_flip");
-        return `mtoc2_tensor_flip_complex(${argsC[0]}, ${axisIdx}L)`;
+        useRuntime("jit_tensor_flip");
+        return `jit_tensor_flip_complex(${argsC[0]}, ${axisIdx}L)`;
       }
-      useRuntime("mtoc2_tensor_flip");
-      return `mtoc2_tensor_flip(${argsC[0]}, ${axisIdx}L)`;
+      useRuntime("jit_tensor_flip");
+      return `jit_tensor_flip(${argsC[0]}, ${axisIdx}L)`;
     },
     emitJs({ argsJs, argTypes, useRuntime }) {
       const a = argTypes[0] as NumericType;
@@ -190,11 +190,11 @@ function defineFlip(opts: {
         opts.fixedAxis
       );
       if (a.isComplex) {
-        useRuntime("mtoc2_tensor_flip");
-        return `mtoc2_tensor_flip_complex(${argsJs[0]}, ${axisIdx})`;
+        useRuntime("jit_tensor_flip");
+        return `jit_tensor_flip_complex(${argsJs[0]}, ${axisIdx})`;
       }
-      useRuntime("mtoc2_tensor_flip");
-      return `mtoc2_tensor_flip(${argsJs[0]}, ${axisIdx})`;
+      useRuntime("jit_tensor_flip");
+      return `jit_tensor_flip(${argsJs[0]}, ${axisIdx})`;
     },
   };
 }

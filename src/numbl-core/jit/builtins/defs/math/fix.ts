@@ -11,5 +11,5 @@ export const fix = defineUnaryRealMath({
   // JS has no `Math.fix`; the textual form for emitJs uses `Math.trunc`.
   jsExpr: arg => `Math.trunc(${arg})`,
   signRule: roundingSignRule(true, true),
-  complex: { cFnComplex: "mtoc2_cfix", jsFnComplex: cFix },
+  complex: { cFnComplex: "jit_cfix", jsFnComplex: cFix },
 });

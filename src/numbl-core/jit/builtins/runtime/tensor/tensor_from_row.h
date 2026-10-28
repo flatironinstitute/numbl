@@ -6,8 +6,8 @@
 
 #include <string.h>
 
-static mtoc2_tensor_t mtoc2_tensor_from_row(const double *data, long n) {
-  mtoc2_tensor_t out = mtoc2_tensor_alloc(1, n);
+static jit_tensor_t jit_tensor_from_row(const double *data, long n) {
+  jit_tensor_t out = jit_tensor_alloc(1, n);
   memcpy(out.real, data, (size_t)n * sizeof(double));
   return out;
 }

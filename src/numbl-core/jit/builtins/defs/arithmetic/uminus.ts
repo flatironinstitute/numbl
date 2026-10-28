@@ -82,16 +82,16 @@ export const uminus: Builtin = {
     const ty = argTypes[0] as NumericType;
     if (isMultiElement(ty)) {
       if (ty.isComplex) {
-        useRuntime("mtoc2_tensor_elemwise_complex");
-        useRuntime("mtoc2_cscalar");
-        return `mtoc2_tensor_uminus_complex(${argsC[0]})`;
+        useRuntime("jit_tensor_elemwise_complex");
+        useRuntime("jit_cscalar");
+        return `jit_tensor_uminus_complex(${argsC[0]})`;
       }
-      useRuntime("mtoc2_tensor_elemwise_real");
-      return `mtoc2_tensor_uminus(${argsC[0]})`;
+      useRuntime("jit_tensor_elemwise_real");
+      return `jit_tensor_uminus(${argsC[0]})`;
     }
     if (isNumeric(ty) && ty.isComplex) {
-      useRuntime("mtoc2_cscalar");
-      return `mtoc2_cneg(${argsC[0]})`;
+      useRuntime("jit_cscalar");
+      return `jit_cneg(${argsC[0]})`;
     }
     return `(-${argsC[0]})`;
   },
@@ -99,16 +99,16 @@ export const uminus: Builtin = {
     const ty = argTypes[0] as NumericType;
     if (isMultiElement(ty)) {
       if (ty.isComplex) {
-        useRuntime("mtoc2_tensor_elemwise_complex");
-        useRuntime("mtoc2_cscalar");
-        return `mtoc2_tensor_uminus_complex(${argsJs[0]})`;
+        useRuntime("jit_tensor_elemwise_complex");
+        useRuntime("jit_cscalar");
+        return `jit_tensor_uminus_complex(${argsJs[0]})`;
       }
-      useRuntime("mtoc2_tensor_elemwise_real");
-      return `mtoc2_tensor_uminus(${argsJs[0]})`;
+      useRuntime("jit_tensor_elemwise_real");
+      return `jit_tensor_uminus(${argsJs[0]})`;
     }
     if (isNumeric(ty) && ty.isComplex) {
-      useRuntime("mtoc2_cscalar");
-      return `mtoc2_cneg(${argsJs[0]})`;
+      useRuntime("jit_cscalar");
+      return `jit_cneg(${argsJs[0]})`;
     }
     return `(-${argsJs[0]})`;
   },

@@ -8,7 +8,7 @@
  *   - tensor            → logical tensor of same shape; element-wise
  *                         `(x == 0) ? 1 : 0`
  *
- * Type result is always logical (mtoc2's `NumericType.elem = "logical"`).
+ * Type result is always logical (the JIT's `NumericType.elem = "logical"`).
  * Sign is `nonneg` since outputs are in {0, 1}.
  */
 
@@ -120,16 +120,16 @@ export const notBuiltin: Builtin = {
     const a = argTypes[0] as NumericType;
     if (isMultiElement(a)) {
       if (a.isComplex) {
-        useRuntime("mtoc2_tensor_logical_real");
-        return `mtoc2_tensor_not_complex(${argsC[0]})`;
+        useRuntime("jit_tensor_logical_real");
+        return `jit_tensor_not_complex(${argsC[0]})`;
       }
-      useRuntime("mtoc2_tensor_logical_real");
-      return `mtoc2_tensor_not(${argsC[0]})`;
+      useRuntime("jit_tensor_logical_real");
+      return `jit_tensor_not(${argsC[0]})`;
     }
     if (a.isComplex) {
-      useRuntime("mtoc2_cscalar");
+      useRuntime("jit_cscalar");
       // Complex scalar is "false" iff both parts are exactly 0.
-      return `(!mtoc2_cnonzero(${argsC[0]}))`;
+      return `(!jit_cnonzero(${argsC[0]}))`;
     }
     // Scalar logical: `!x` is a C int (0 or 1).
     return `(!(${argsC[0]}))`;
@@ -138,15 +138,15 @@ export const notBuiltin: Builtin = {
     const a = argTypes[0] as NumericType;
     if (isMultiElement(a)) {
       if (a.isComplex) {
-        useRuntime("mtoc2_tensor_logical_real");
-        return `mtoc2_tensor_not_complex(${argsJs[0]})`;
+        useRuntime("jit_tensor_logical_real");
+        return `jit_tensor_not_complex(${argsJs[0]})`;
       }
-      useRuntime("mtoc2_tensor_logical_real");
-      return `mtoc2_tensor_not(${argsJs[0]})`;
+      useRuntime("jit_tensor_logical_real");
+      return `jit_tensor_not(${argsJs[0]})`;
     }
     if (a.isComplex) {
-      useRuntime("mtoc2_cscalar");
-      return `(!mtoc2_cnonzero(${argsJs[0]}))`;
+      useRuntime("jit_cscalar");
+      return `(!jit_cnonzero(${argsJs[0]}))`;
     }
     // A logical scalar is a JS boolean (`!b` is correct). A real double
     // must compare `=== 0` rather than use JS `!`, because `!NaN` is

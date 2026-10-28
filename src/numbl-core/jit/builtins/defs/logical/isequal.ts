@@ -11,7 +11,7 @@
  *   - char / string compare as text; structs compare field-by-field.
  *
  * The JIT covers the dominant real-numeric scalar/tensor combinations
- * inline / via the `mtoc2_isequal_*` helpers and rejects the rarer
+ * inline / via the `jit_isequal_*` helpers and rejects the rarer
  * combinations (complex tensors, char/string, struct/cell) with an
  * `UnsupportedConstruct` so the limitation is explicit.
  */
@@ -54,8 +54,8 @@ function pairC(
 ): string {
   const ka = classify(tA);
   const kb = classify(tB);
-  const useTensorHelper = () => useRuntime("mtoc2_isequal");
-  const useComplex = () => useRuntime("mtoc2_cscalar");
+  const useTensorHelper = () => useRuntime("jit_isequal");
+  const useComplex = () => useRuntime("jit_cscalar");
   // Real scalar vs real scalar.
   if (ka === "rs" && kb === "rs") return `(${aC} == ${bC} ? 1.0 : 0.0)`;
   // Complex scalar combinations.
@@ -74,11 +74,11 @@ function pairC(
   // Real scalar vs tensor.
   if (ka === "rs" && kb === "rt") {
     useTensorHelper();
-    return `mtoc2_isequal_st(${aC}, ${bC})`;
+    return `jit_isequal_st(${aC}, ${bC})`;
   }
   if (ka === "rt" && kb === "rs") {
     useTensorHelper();
-    return `mtoc2_isequal_st(${bC}, ${aC})`;
+    return `jit_isequal_st(${bC}, ${aC})`;
   }
   // Real scalar vs complex tensor → numbl: a complex tensor always
   // carries an imag lane, so a real scalar can never equal it.
@@ -89,24 +89,24 @@ function pairC(
   if (ka === "cs" && kb === "rt") {
     useTensorHelper();
     useComplex();
-    return `(cimag(${aC}) == 0.0 ? mtoc2_isequal_st(creal(${aC}), ${bC}) : 0.0)`;
+    return `(cimag(${aC}) == 0.0 ? jit_isequal_st(creal(${aC}), ${bC}) : 0.0)`;
   }
   if (ka === "rt" && kb === "cs") {
     useTensorHelper();
     useComplex();
-    return `(cimag(${bC}) == 0.0 ? mtoc2_isequal_st(creal(${bC}), ${aC}) : 0.0)`;
+    return `(cimag(${bC}) == 0.0 ? jit_isequal_st(creal(${bC}), ${aC}) : 0.0)`;
   }
   // Real tensor vs real tensor.
   if (ka === "rt" && kb === "rt") {
     useTensorHelper();
-    return `mtoc2_isequal_tt(${aC}, ${bC})`;
+    return `jit_isequal_tt(${aC}, ${bC})`;
   }
   // Real tensor vs complex tensor → never equal (numbl tensorsEqual).
   if ((ka === "rt" && kb === "ct") || (ka === "ct" && kb === "rt"))
     return `0.0`;
   throw new UnsupportedConstruct(
-    `'isequal' with these argument types is not yet supported by the AOT ` +
-      `backends (complex-tensor, char/string, struct or cell comparison); ` +
+    `'isequal' with these argument types is not yet supported by the JIT ` +
+      `(complex-tensor, char/string, struct or cell comparison); ` +
       `the interpreter handles it`
   );
 }
@@ -121,7 +121,7 @@ function pairJs(
 ): string {
   const ka = classify(tA);
   const kb = classify(tB);
-  const useTensorHelper = () => useRuntime("mtoc2_isequal");
+  const useTensorHelper = () => useRuntime("jit_isequal");
   // A logical *scalar* is a JS boolean; coerce it to a number so a
   // strict `===` against a numeric operand works (`true === 1` is
   // false in JS). Logical *tensors* are Float64-backed, so only scalars
@@ -139,29 +139,29 @@ function pairJs(
     return `(${aJs}.re === ${bJs}.re && ${aJs}.im === ${bJs}.im ? 1 : 0)`;
   if (ka === "rs" && kb === "rt") {
     useTensorHelper();
-    return `mtoc2_isequal_st(${aN}, ${bJs})`;
+    return `jit_isequal_st(${aN}, ${bJs})`;
   }
   if (ka === "rt" && kb === "rs") {
     useTensorHelper();
-    return `mtoc2_isequal_st(${bN}, ${aJs})`;
+    return `jit_isequal_st(${bN}, ${aJs})`;
   }
   if ((ka === "rs" && kb === "ct") || (ka === "ct" && kb === "rs")) return `0`;
   if (ka === "cs" && kb === "rt") {
     useTensorHelper();
-    return `(${aJs}.im === 0 ? mtoc2_isequal_st(${aJs}.re, ${bJs}) : 0)`;
+    return `(${aJs}.im === 0 ? jit_isequal_st(${aJs}.re, ${bJs}) : 0)`;
   }
   if (ka === "rt" && kb === "cs") {
     useTensorHelper();
-    return `(${bJs}.im === 0 ? mtoc2_isequal_st(${bJs}.re, ${aJs}) : 0)`;
+    return `(${bJs}.im === 0 ? jit_isequal_st(${bJs}.re, ${aJs}) : 0)`;
   }
   if (ka === "rt" && kb === "rt") {
     useTensorHelper();
-    return `mtoc2_isequal_tt(${aJs}, ${bJs})`;
+    return `jit_isequal_tt(${aJs}, ${bJs})`;
   }
   if ((ka === "rt" && kb === "ct") || (ka === "ct" && kb === "rt")) return `0`;
   throw new UnsupportedConstruct(
-    `'isequal' with these argument types is not yet supported by the AOT ` +
-      `backends (complex-tensor, char/string, struct or cell comparison); ` +
+    `'isequal' with these argument types is not yet supported by the JIT ` +
+      `(complex-tensor, char/string, struct or cell comparison); ` +
       `the interpreter handles it`
   );
 }

@@ -1,5 +1,5 @@
 import type { Builtin } from "../../registry.js";
-import { mtoc2_cmul_mixed } from "../../runtime/snippets.gen.js";
+import { jit_cmul_mixed } from "../../runtime/snippets.gen.js";
 import { defineElemwiseRealBinary, signProd } from "./_elemwise.js";
 
 export const times: Builtin = defineElemwiseRealBinary({
@@ -11,5 +11,5 @@ export const times: Builtin = defineElemwiseRealBinary({
   signRule: signProd,
   // MATLAB's mixed real/complex rule: an operand with zero imag part acts
   // as real and scales each part of the other (no NaN*0 from promotion).
-  complexFold: mtoc2_cmul_mixed,
+  complexFold: jit_cmul_mixed,
 });

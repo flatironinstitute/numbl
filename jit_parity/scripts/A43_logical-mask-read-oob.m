@@ -10,7 +10,7 @@
 % Cause: the interpreter / JS-JIT logical-mask read iterates the mask by
 %   its own length and reads positions past numel(base) (yielding NaN)
 %   instead of bounds-checking each truthy bit. C's
-%   mtoc2_logical_mask_indices correctly bounds-checks.
+%   jit_logical_mask_indices correctly bounds-checks.
 % FIX DIRECTION: make the interpreter + JS-JIT logical-mask read error on a
 %   truthy bit at index > numel(base), matching opt2/MATLAB. (Trailing
 %   FALSE bits past the end stay fine in all modes.)

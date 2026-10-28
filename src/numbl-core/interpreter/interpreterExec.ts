@@ -243,7 +243,7 @@ function execStmtInner(this: Interpreter, stmt: Stmt): ControlSignal | null {
         const e = asScalarNumber(ev);
         if (s !== null && st !== null && e !== null) {
           // makeRangeTensor's element-count formula, clamped to a finite
-          // non-negative value (matches mtoc2_loop_count). step===0 and
+          // non-negative value (matches jit_loop_count). step===0 and
           // non-finite counts yield an empty loop, same as the eager path.
           const rawN = st === 0 ? 0 : Math.floor((e - s) / st + 1 + 1e-10);
           const count = Number.isFinite(rawN) ? Math.max(0, rawN) : 0;
@@ -265,7 +265,7 @@ function execStmtInner(this: Interpreter, stmt: Stmt): ControlSignal | null {
           if (lazyRange) {
             let v = lazyRange.start + lazyRange.step * _i;
             // Snap the last element to exactly `end` (matches
-            // makeRangeTensor / mtoc2_range_value), multi-element only.
+            // makeRangeTensor / jit_range_value), multi-element only.
             if (
               lazyRange.count > 1 &&
               _i === lazyRange.count - 1 &&

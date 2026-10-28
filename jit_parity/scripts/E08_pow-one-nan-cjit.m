@@ -6,7 +6,7 @@
 %
 % Cause: power.ts emitC emitted bare `pow(a,b)`, but C99 pow returns 1 for
 %   |base|==1 with a non-finite exponent, whereas ECMAScript Math.pow (used
-%   by the interpreter and JS-JIT) returns NaN. FIX: emit a `mtoc2_pow_real`
+%   by the interpreter and JS-JIT) returns NaN. FIX: emit a `jit_pow_real`
 %   helper that matches Math.pow, and use it in the scalar path and the
 %   tensor power kernels.
 %

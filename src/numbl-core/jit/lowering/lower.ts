@@ -1,5 +1,5 @@
 /**
- * mtoc2 lowerer. Walks the numbl AST, threads a type env (with exact-
+ * JIT lowerer. Walks the numbl AST, threads a type env (with exact-
  * value tracking), and produces typed IR. The same pass:
  *   - resolves every function-call site through the shared
  *     `Workspace` (which delegates to numbl's `resolveFunction`),
@@ -23,13 +23,8 @@
  * builtin calls, and Ident reads all emit runtime IR even when their
  * exact value is known.
  *
- * MVP scope: scalar real double + arithmetic + comparisons + disp +
- * if/while/for + user functions (0 or 1 outputs; 0-output calls return
- * `Void` and are only valid as the expression of an `ExprStmt`) +
- * classes (instance methods, static methods, constructors), with
- * resolution against sibling `.m` files in the workspace via numbl's
- * vendored resolver. Anything outside that throws
- * `UnsupportedConstruct` with a span.
+ * Anything the lowerer cannot handle throws `UnsupportedConstruct`
+ * (or `JitTypeError`) with a span.
  */
 
 import type { Expr, LValue, Stmt, Span } from "../parser/index.js";
@@ -151,12 +146,12 @@ export class Lowerer {
     baseTy: NumericType;
     axis: number | "linear";
   }> = [];
-  /** Monotonic counter for synthesizing `_mtoc2_t1`, `_mtoc2_t2`, ...
+  /** Monotonic counter for synthesizing `_jit_t1`, `_jit_t2`, ...
    *  hoist-temp names. Reset per function specialization. */
   tempCounter: number = 0;
   /** Monotonic counter for the synthetic suffix used when an
    *  incompatible reassignment is split into a fresh binding
-   *  (`_mtoc2_<cName>__v<N>`). See `recordAssignment`. Per-Lowerer, so
+   *  (`_jit_<cName>__v<N>`). See `recordAssignment`. Per-Lowerer, so
    *  each function specialization / script scope numbers independently. */
   splitCounter: number = 0;
   /** Nesting depth inside `if` / `while` / `for` bodies. Bumped by
@@ -241,7 +236,7 @@ export class Lowerer {
 
   /** Look up a registered class (workspace or local) by name.
    *  Re-throws the saved `UnsupportedConstruct` if numbl knew the
-   *  class but mtoc2's `registerClassDef` rejected it in the JIT
+   *  class but the JIT's `registerClassDef` rejected it in the JIT
    *  bridge's `fromCodeIndex` mode — surfacing the error at
    *  the first actual use rather than at workspace finalize. */
   classReg(name: string): ClassRegistration | undefined {
@@ -319,13 +314,13 @@ export class Lowerer {
   }
 
   /** Numbl directives (`%!numbl:<name> <args>`). Numbl interprets a
-   *  small set (e.g. `assert_jit`) and ignores the rest. Mtoc2 reuses
+   *  small set (e.g. `assert_jit`) and ignores the rest. The JIT reuses
    *  the same parsed-directive AST node to host translator-side hints
    *  that numbl silently passes over:
    *
    *  - `%!numbl:opaque <var> [<var>...]` — strip `exact` from each
    *    named variable in the current env. Used in test scripts to
-   *    force the runtime codegen path on values mtoc2 would otherwise
+   *    force the runtime codegen path on values the JIT would otherwise
    *    fold at compile time.
    *  - `%!numbl:showtype <var> [<var>...]` — snapshot each variable's
    *    type and emit a `/_ type ... _/` comment in the generated C
@@ -381,7 +376,7 @@ export class Lowerer {
       }
       return null;
     }
-    // Unknown directives are silently ignored — keeps mtoc2 forward-
+    // Unknown directives are silently ignored — keeps the JIT forward-
     // compatible with numbl directives that don't translate (e.g.
     // `assert_jit`).
     return null;
@@ -415,7 +410,7 @@ export class Lowerer {
   ): IRStmt | IRStmt[] | null {
     // Special case: bare `toc;` / `toc();` / `toc(t0);` ExprStmt routes
     // to the printing form of toc. Numbl uses `nargout === 0` as the
-    // discriminator; mtoc2 uses "this Call is the sole expression of
+    // discriminator; the JIT uses "this Call is the sole expression of
     // an ExprStmt". The shadow checks ensure a user `toc = 5; toc;`
     // (reading a local) or a `classdef toc` (constructor call) doesn't
     // get hijacked. We synthesize a Void-typed Call to the runtime
@@ -436,7 +431,7 @@ export class Lowerer {
           kind: "ExprStmt",
           expr: {
             kind: "Call",
-            cName: "mtoc2_tic",
+            cName: "jit_tic",
             name: "tic",
             args: [],
             ty: VOID,
@@ -452,7 +447,7 @@ export class Lowerer {
           kind: "ExprStmt",
           expr: {
             kind: "Call",
-            cName: "mtoc2_toc_print",
+            cName: "jit_toc_print",
             name: "toc_print",
             args: [],
             ty: VOID,
@@ -467,7 +462,7 @@ export class Lowerer {
             kind: "ExprStmt",
             expr: {
               kind: "Call",
-              cName: "mtoc2_toc_print",
+              cName: "jit_toc_print",
               name: "toc_print",
               args: [],
               ty: VOID,
@@ -489,7 +484,7 @@ export class Lowerer {
             kind: "ExprStmt",
             expr: {
               kind: "Call",
-              cName: "mtoc2_toc_handle_print",
+              cName: "jit_toc_handle_print",
               name: "toc_handle_print",
               args: [arg],
               ty: VOID,
@@ -798,7 +793,7 @@ export class Lowerer {
 
   freshTempName(): string {
     this.tempCounter += 1;
-    return `_mtoc2_t${this.tempCounter}`;
+    return `_jit_t${this.tempCounter}`;
   }
 
   private lowerAssign(s: Extract<Stmt, { type: "Assign" }>): IRStmt | IRStmt[] {
@@ -1030,7 +1025,7 @@ export class Lowerer {
 
     // Storage compatibility: the rhs and leaf must occupy the same
     // C-level slot. `storageEquivalent` reduces both sides via
-    // `cFieldTypeStr` — so all `mtoc2_tensor_t` slots accept any
+    // `cFieldTypeStr` — so all `jit_tensor_t` slots accept any
     // multi-element tensor, all `double` slots accept any scalar
     // real numeric, and struct/class slots only accept values with
     // the same typedef name. Internal lattice precision (sign,
@@ -1130,7 +1125,7 @@ export class Lowerer {
           span
         );
       }
-      const splitCName = `_mtoc2_${existing.cName}__v${++this.splitCounter}`;
+      const splitCName = `_jit_${existing.cName}__v${++this.splitCounter}`;
       this.env.set(name, { cName: splitCName, ty: expr.ty });
       return {
         kind: "Assign",
@@ -1565,7 +1560,7 @@ export class Lowerer {
       case "String": {
         // Double-quoted MATLAB string literal — scalar string handle
         // (`length("hi") == 1`); codegen emits via
-        // `mtoc2_string_from_literal`. Same stripping rule as Char but
+        // `jit_string_from_literal`. Same stripping rule as Char but
         // with `""` as the in-literal escape.
         const raw = e.value;
         const inner = raw.slice(1, raw.length - 1).replaceAll('""', '"');
@@ -1684,7 +1679,7 @@ export class Lowerer {
       // Mirrors numbl's `makeRangeTensor` count formula via the
       // shared `rangeCountFromExactEnds` helper — same formula as
       // `lowerIndexSlice.exactRangeCount` and the C-side
-      // `mtoc2_loop_count`.
+      // `jit_loop_count`.
       const n = rangeCountFromExactEnds(sExact, tExact, eExact);
       // Length-1 collapse: a `1:1`-style range is a single-element
       // tensor with dims [1, 1]. The type system classifies that as
@@ -2102,13 +2097,13 @@ export class Lowerer {
 // ── Helpers (free functions) ────────────────────────────────────────────
 
 /** Reserved words that are legal numbl identifiers but would collide
- *  with a C or JS keyword on the emit side. mtoc2 maps every user
+ *  with a C or JS keyword on the emit side. The JIT maps every user
  *  variable / param name through `cIdentForUserName` at declaration
  *  time so the same `cName` is safe in BOTH the C and JS emit
  *  paths (which share the cName — see `emitJs.ts` vs `emit.ts`). A
  *  variable named `struct` (C keyword) or `in` (JS keyword) becomes
  *  `v_struct` / `v_in` and survives `new Function(source)()` plus the
- *  C compiler. `mtoc2_` is reserved for the translator's own synthetic
+ *  C compiler. `jit_` is reserved for the translator's own synthetic
  *  names. */
 const C_RESERVED_NAMES: ReadonlySet<string> = new Set([
   // ── C keywords ──────────────────────────────────────────────────────
@@ -2326,7 +2321,7 @@ function rhsSignFromStoreResult(result: IRStmt | IRStmt[]): Sign {
 }
 
 /** Reject loops whose body changes the shape of a self-referenced
- *  variable. mtoc2 lowers the body once with the entry-iteration type,
+ *  variable. The JIT lowers the body once with the entry-iteration type,
  *  so if iteration 1 produces a different shape than iteration 0
  *  carried in (e.g. `w = [w, i]` growing `w` each pass), the emitted
  *  code uses stale shape constants and produces wrong runtime output.
@@ -2347,7 +2342,7 @@ function assertLoopBodyShapeStable(
       throw new UnsupportedConstruct(
         `loop body changes the shape of '${name}' across iterations ` +
           `(entry shape differs from end-of-iter shape); ` +
-          `mtoc2 lowers the body once per spec and cannot specialize ` +
+          `the JIT lowers the body once per spec and cannot specialize ` +
           `per-iteration growing tensors`,
         loopSpan
       );

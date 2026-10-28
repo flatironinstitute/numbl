@@ -35,20 +35,20 @@ export const fprintf: Builtin = {
     return [{ kind: "Void" }];
   },
   emitC({ argsC, argTypes, useRuntime }) {
-    useRuntime("mtoc2_fprintf");
+    useRuntime("jit_fprintf");
     const fmtView = emitTextView(argsC[0], argTypes[0]);
     const slots: string[] = [];
     for (let i = 1; i < argTypes.length; i++) {
       slots.push(emitFormatSlot("fprintf", argsC[i], argTypes[i], i));
     }
-    return `mtoc2_fprintf(stdout, ${fmtView}, ${slots.length}, ${emitFormatSlotArray(slots)})`;
+    return `jit_fprintf(stdout, ${fmtView}, ${slots.length}, ${emitFormatSlotArray(slots)})`;
   },
   emitJs({ argsJs, useRuntime }) {
     // Different call shape from C side — JS uses variadic args
     // directly. Format text passes through as a JS string. Tensor/
     // char/string args are passed by value; the format engine
     // flattens tensors column-major internally.
-    useRuntime("mtoc2_fprintf");
-    return `mtoc2_fprintf(${argsJs.join(", ")})`;
+    useRuntime("jit_fprintf");
+    return `jit_fprintf(${argsJs.join(", ")})`;
   },
 };

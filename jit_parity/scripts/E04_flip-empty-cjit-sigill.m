@@ -5,7 +5,7 @@
 % opt2 (C-JIT):  (no output; process killed, SIGILL / exit 132)  <-- DIVERGES
 % DIVERGING MODE: opt2 only (hard crash).
 %
-% Cause: tensor_ops/tensor_flip.h mtoc2_tensor_flip computes
+% Cause: tensor_ops/tensor_flip.h jit_tensor_flip computes
 %   numOuter = total / slabSize, and slabSize comes from a stride that is 0
 %   when a lower dim has size 0 (total==0 too) -> 0/0 integer division ->
 %   SIGILL. The axisSize<=1 early-return doesn't cover this. Needs a

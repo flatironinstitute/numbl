@@ -8,10 +8,10 @@
 % ALL THREE DIVERGE.
 %
 % Cause: cell-slot scalar disp bypasses the proper formatNumber-equivalent.
-%  - JS:  cell.js mtoc2__format_scalar() returns String(v) for non-integers.
+%  - JS:  cell.js jit__format_scalar() returns String(v) for non-integers.
 %  - C:   emitCellTypedef.ts emitSlotInlineDisp() emits printf("%g", expr)
-%         instead of mtoc2_disp_double().
-% (Struct field disp uses mtoc2_disp_double and matches — see struct_num.m.)
+%         instead of jit_disp_double().
+% (Struct field disp uses jit_disp_double and matches — see struct_num.m.)
 % JIT engagement: CONFIRMED (assert_jit c passes; jsgen=1, cgen=1).
 function out = f(n)
   %!numbl:assert_jit c

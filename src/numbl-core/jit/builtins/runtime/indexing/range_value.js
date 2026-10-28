@@ -1,8 +1,8 @@
 // JS sibling of `range_value.h`. Snap-to-end for the last element
-// of a `start:step:end` range so cross-runner test output matches
-// numbl byte-for-byte.
+// of a `start:step:end` range so output matches the interpreter
+// byte-for-byte.
 
-export function mtoc2_range_value(start, step, end, count, i) {
+export function jit_range_value(start, step, end, count, i) {
   const v = start + step * i;
   // Snap the last element to exactly `end` — but only for multi-element
   // ranges, matching makeRangeTensor's `n > 1` guard. A single-element

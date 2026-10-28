@@ -23,11 +23,11 @@ export const tic: Builtin = {
     return [scalarDouble("positive")];
   },
   emitC({ useRuntime }) {
-    useRuntime("mtoc2_tic_toc");
-    return "mtoc2_tic()";
+    useRuntime("jit_tic_toc");
+    return "jit_tic()";
   },
   emitJs({ useRuntime }) {
-    useRuntime("mtoc2_tic_toc");
-    return "mtoc2_tic()";
+    useRuntime("jit_tic_toc");
+    return "jit_tic()";
   },
 };

@@ -1,8 +1,8 @@
 /* mtoc runtime helper: format a double the same way numbl's
  * `formatNumber` does, into a caller-provided buffer.
  *
- * Used by both scalar and tensor disp so cross-runner output matches
- * numbl byte-for-byte. Kept in its own snippet so disp_double.h and
+ * Used by both scalar and tensor disp so output matches the
+ * interpreter byte-for-byte. Kept in its own snippet so disp_double.h and
  * disp_tensor.h can pull it in via the snippet dependency mechanism.
  *
  * Returns the number of characters written (excluding trailing NUL).
@@ -13,7 +13,7 @@
 #include <string.h>
 #include <math.h>
 
-static int mtoc2_format_double(char *out, size_t cap, double x) {
+static int jit_format_double(char *out, size_t cap, double x) {
   if (isnan(x)) return snprintf(out, cap, "NaN");
   /* MATLAB spells these Inf / -Inf (matches the interpreter's formatNumber). */
   if (isinf(x)) return snprintf(out, cap, x > 0 ? "Inf" : "-Inf");

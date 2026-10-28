@@ -1,21 +1,21 @@
-/* mtoc2 runtime helper: deep-copy a string handle into a fresh
+/* JIT runtime helper: deep-copy a string handle into a fresh
  * heap buffer.
  *
  * Returns `{malloc'd, len, 1}` — the caller owns the new buffer and
- * is responsible for releasing it (typically via `mtoc2_string_assign`,
- * which takes ownership, or `mtoc2_string_free`). The byte content is
+ * is responsible for releasing it (typically via `jit_string_assign`,
+ * which takes ownership, or `jit_string_free`). The byte content is
  * memcpy'd verbatim; encoding is not inspected. Used wherever the
  * codegen wants a stand-alone owned copy of a string — notably the
  * `c = a;` assignment path emits
- * `mtoc2_string_assign(&c, mtoc2_string_copy(a));`.
+ * `jit_string_assign(&c, jit_string_copy(a));`.
  */
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-static mtoc2_string_t mtoc2_string_copy(mtoc2_string_t s) {
-  mtoc2_string_t out;
+static jit_string_t jit_string_copy(jit_string_t s) {
+  jit_string_t out;
   if (s.len <= 0 || s.data == (const char *)0) {
     /* Empty input → empty owned output. Avoid a zero-byte malloc
      * (implementation-defined). */
@@ -26,7 +26,7 @@ static mtoc2_string_t mtoc2_string_copy(mtoc2_string_t s) {
   }
   char *buf = (char *)malloc((size_t)s.len);
   if (!buf) {
-    fprintf(stderr, "mtoc2: out of memory in mtoc2_string_copy (%ld bytes)\n",
+    fprintf(stderr, "C-JIT: out of memory in jit_string_copy (%ld bytes)\n",
             s.len);
     abort();
   }

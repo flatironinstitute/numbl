@@ -1,5 +1,5 @@
 /**
- * Single-file JS codegen for mtoc2 IR. Mirrors `emit.ts` (the C path)
+ * Single-file JS codegen for JIT IR. Mirrors `emit.ts` (the C path)
  * intentionally — same control flow, same variable layout, same call
  * shape — differing only in language and the I/O primitive (`$write(s)`
  * vs `printf(...)`).
@@ -7,7 +7,7 @@
  * Pass-by-value protocol: owned-typed RHSes (Var / MemberLoad /
  * HandleCaptureLoad) at Assign, user-function Call args, and
  * MultiAssignCall args route through `emitOwnedRhsJs`, which wraps
- * the expression in `mtoc2_deep_clone(...)`. JS GC handles lifetime,
+ * the expression in `jit_deep_clone(...)`. JS GC handles lifetime,
  * but value-semantics still need an explicit copy — otherwise
  * `b = a; b.f = rhs` would mutate `a`. Owned-producing expressions
  * (TensorBuild, StructLit, HandleLit, fresh-allocating helpers) are
@@ -196,8 +196,8 @@ function emitOwnedRhsJs(e: IRExpr, state: RuntimeState): string {
     (e.kind === "MemberLoad" && isOwned(e.ty)) ||
     (e.kind === "HandleCaptureLoad" && isOwned(e.ty))
   ) {
-    useRuntimeByName(state, "mtoc2_deep_clone");
-    return `mtoc2_deep_clone(${emitExpr(e, state)})`;
+    useRuntimeByName(state, "jit_deep_clone");
+    return `jit_deep_clone(${emitExpr(e, state)})`;
   }
   return emitExpr(e, state);
 }
@@ -240,30 +240,30 @@ function emitStmt(s: IRStmt, indent: string, state: RuntimeState): string {
     case "For": {
       // Mirror the C path's loop shape so JS output stays
       // bit-identical to numbl: snapshot start/end once at loop
-      // entry, derive the iteration count via `mtoc2_loop_count`,
-      // and rebind the loop var via `mtoc2_range_value` per iter.
+      // entry, derive the iteration count via `jit_loop_count`,
+      // and rebind the loop var via `jit_range_value` per iter.
       // This keeps the loop body insensitive to mid-body mutations
       // of `start`/`end` (matching MATLAB) and leaves the loop var
       // at its last actual iterated value after the loop ends.
       // `s.cVar` is pre-declared at function top by
       // `collectAssignedLocals` so reads after the loop see it.
-      useRuntimeByName(state, "mtoc2_loop_count");
-      useRuntimeByName(state, "mtoc2_range_value");
+      useRuntimeByName(state, "jit_loop_count");
+      useRuntimeByName(state, "jit_range_value");
       const lines: string[] = [];
       const startE = emitExpr(s.start, state);
       const endE = emitExpr(s.end, state);
       const stepStr = formatJsNumber(s.step);
       lines.push(`${indent}{`);
-      lines.push(`${indent}  const _mtoc2_for_start = ${startE};`);
-      lines.push(`${indent}  const _mtoc2_for_end = ${endE};`);
+      lines.push(`${indent}  const _jit_for_start = ${startE};`);
+      lines.push(`${indent}  const _jit_for_end = ${endE};`);
       lines.push(
-        `${indent}  const _mtoc2_for_n = mtoc2_loop_count(_mtoc2_for_start, _mtoc2_for_end, ${stepStr});`
+        `${indent}  const _jit_for_n = jit_loop_count(_jit_for_start, _jit_for_end, ${stepStr});`
       );
       lines.push(
-        `${indent}  for (let _mtoc2_for_i = 0; _mtoc2_for_i < _mtoc2_for_n; _mtoc2_for_i++) {`
+        `${indent}  for (let _jit_for_i = 0; _jit_for_i < _jit_for_n; _jit_for_i++) {`
       );
       lines.push(
-        `${indent}    ${s.cVar} = mtoc2_range_value(_mtoc2_for_start, ${stepStr}, _mtoc2_for_end, _mtoc2_for_n, _mtoc2_for_i);`
+        `${indent}    ${s.cVar} = jit_range_value(_jit_for_start, ${stepStr}, _jit_for_end, _jit_for_n, _jit_for_i);`
       );
       const body = emitBody(s.body, indent + "    ", state);
       if (body.length > 0) lines.push(body);
@@ -287,7 +287,7 @@ function emitStmt(s: IRStmt, indent: string, state: RuntimeState): string {
 
     case "TypeComment": {
       // Debug aid — emit as a JS comment so the source stays readable.
-      // mtoc2's TypeComment can show multiple variables in one block;
+      // The JIT's TypeComment can show multiple variables in one block;
       // each gets its own comment line.
       const lines = s.entries.map(
         en =>
@@ -300,7 +300,7 @@ function emitStmt(s: IRStmt, indent: string, state: RuntimeState): string {
       return emitMultiAssignCall(s, indent, state);
 
     case "IndexStore": {
-      useRuntimeByName(state, "mtoc2_scalar_index");
+      useRuntimeByName(state, "jit_scalar_index");
       // Member-rooted writes target the field slot via dotted access
       // on the (JS-side) struct/class object. The base Var still names
       // the owning root for liveness; here we walk the field path to
@@ -312,16 +312,16 @@ function emitStmt(s: IRStmt, indent: string, state: RuntimeState): string {
       const slotTy = s.leafTy ?? s.base.ty;
       const idxs = s.indices.map(ix => emitExpr(ix, state));
       // Grow-aware store subscripts: a store past the runtime extent
-      // throws a tagged `mtoc2GrowBail` sentinel (the array would grow —
+      // throws a tagged `jitGrowBail` sentinel (the array would grow —
       // unsupported in the JIT) so the executor bails to the
       // interpreter. See `scalar_index.js`.
       let offset: string;
       if (idxs.length === 1) {
-        offset = `mtoc2_idx_lin_grow_js(${baseName}, ${idxs[0]})`;
+        offset = `jit_idx_lin_grow_js(${baseName}, ${idxs[0]})`;
       } else {
         const terms: string[] = [];
         for (let i = 0; i < idxs.length; i++) {
-          const checked = `mtoc2_idx_axis_grow_js(${baseName}, ${i}, ${idxs[i]})`;
+          const checked = `jit_idx_axis_grow_js(${baseName}, ${i}, ${idxs[i]})`;
           if (i === 0) {
             terms.push(checked);
           } else {
@@ -336,7 +336,7 @@ function emitStmt(s: IRStmt, indent: string, state: RuntimeState): string {
       if (slotTy.kind === "Numeric" && slotTy.isComplex) {
         // Two-lane write. Hoist the RHS into a temp so we evaluate
         // the right-hand expression once even when it's an
-        // unparenthesized {re, im} producer like `mtoc2_cmul(...)`.
+        // unparenthesized {re, im} producer like `jit_cmul(...)`.
         // The temp-var names use the root's cName to avoid clashes
         // when multiple fields of the same struct are written in
         // a single block (dot wouldn't be legal in a JS identifier).
@@ -422,28 +422,28 @@ function emitIndexSliceStoreJs(
   const rhsExpr = emitExpr(s.rhs, state);
 
   // Per-slot write template. Reads one element from the RHS (a scalar
-  // value or `_mtoc2_rhs.data/imag[k]`) and writes both data + imag
+  // value or `_jit_rhs.data/imag[k]`) and writes both data + imag
   // lanes into `baseName` at the given dst offset. Complex base with
   // real RHS sets imag = 0; real base with complex RHS would drop the
   // imag lane (we route through `transfer` earlier, so this is rare).
   const writeAt = (dstOff: string, srcIdx: string): string => {
     if (rhsIsScalarReal) {
-      const reLine = `${baseName}.data[${dstOff}] = _mtoc2_rhs;`;
+      const reLine = `${baseName}.data[${dstOff}] = _jit_rhs;`;
       const imLine = baseIsComplex ? ` ${baseName}.imag[${dstOff}] = 0;` : "";
       return reLine + imLine;
     }
     if (rhsIsScalarComplex) {
-      const reLine = `${baseName}.data[${dstOff}] = _mtoc2_rhs.re;`;
+      const reLine = `${baseName}.data[${dstOff}] = _jit_rhs.re;`;
       const imLine = baseIsComplex
-        ? ` ${baseName}.imag[${dstOff}] = _mtoc2_rhs.im;`
+        ? ` ${baseName}.imag[${dstOff}] = _jit_rhs.im;`
         : "";
       return reLine + imLine;
     }
     // Tensor RHS: read one element from rhs.data (and rhs.imag when
     // the rhs is complex).
-    const reLine = `${baseName}.data[${dstOff}] = _mtoc2_rhs.data[${srcIdx}];`;
+    const reLine = `${baseName}.data[${dstOff}] = _jit_rhs.data[${srcIdx}];`;
     if (!baseIsComplex) return reLine;
-    const imSrc = rhsIsComplex ? `_mtoc2_rhs.imag[${srcIdx}]` : `0`;
+    const imSrc = rhsIsComplex ? `_jit_rhs.imag[${srcIdx}]` : `0`;
     return reLine + ` ${baseName}.imag[${dstOff}] = ${imSrc};`;
   };
 
@@ -453,18 +453,18 @@ function emitIndexSliceStoreJs(
     if (slot.kind === "Colon") {
       return (
         `${indent}{ ` +
-        `const _mtoc2_rhs = ${rhsExpr}; ` +
-        `const _mtoc2_n = ${baseName}.data.length; ` +
-        `for (let _mtoc2_k = 0; _mtoc2_k < _mtoc2_n; _mtoc2_k++) { ` +
-        `${writeAt("_mtoc2_k", "_mtoc2_k")} ` +
+        `const _jit_rhs = ${rhsExpr}; ` +
+        `const _jit_n = ${baseName}.data.length; ` +
+        `for (let _jit_k = 0; _jit_k < _jit_n; _jit_k++) { ` +
+        `${writeAt("_jit_k", "_jit_k")} ` +
         `} ` +
         `}`
       );
     }
     if (slot.kind === "Range") {
-      useRuntimeByName(state, "mtoc2_loop_count");
-      useRuntimeByName(state, "mtoc2_range_value");
-      useRuntimeByName(state, "mtoc2_scalar_index");
+      useRuntimeByName(state, "jit_loop_count");
+      useRuntimeByName(state, "jit_range_value");
+      useRuntimeByName(state, "jit_scalar_index");
       const sE = emitExpr(slot.start, state);
       const stE = emitExpr(slot.step, state);
       const eE = emitExpr(slot.end, state);
@@ -473,7 +473,7 @@ function emitIndexSliceStoreJs(
       // instead of silently truncating.
       const lenCheck = rhsIsScalar
         ? ``
-        : `if (_mtoc2_rhs.data.length !== _mtoc2_n) throw new Error("Unable to perform assignment because the size of the left side is " + _mtoc2_n + " and the size of the right side is " + _mtoc2_rhs.data.length + "."); `;
+        : `if (_jit_rhs.data.length !== _jit_n) throw new Error("Unable to perform assignment because the size of the left side is " + _jit_n + " and the size of the right side is " + _jit_rhs.data.length + "."); `;
       // Each target offset goes through the grow-aware checker: a sub-1
       // index errors, and an index past the end grow-bails to the
       // interpreter (which has full grow semantics) — matching the
@@ -481,20 +481,20 @@ function emitIndexSliceStoreJs(
       // silently dropped the out-of-range writes here.
       return (
         `${indent}{ ` +
-        `const _mtoc2_rhs = ${rhsExpr}; ` +
-        `const _mtoc2_s = ${sE}, _mtoc2_e = ${eE}, _mtoc2_st = ${stE}; ` +
-        `const _mtoc2_n = mtoc2_loop_count(_mtoc2_s, _mtoc2_e, _mtoc2_st); ` +
+        `const _jit_rhs = ${rhsExpr}; ` +
+        `const _jit_s = ${sE}, _jit_e = ${eE}, _jit_st = ${stE}; ` +
+        `const _jit_n = jit_loop_count(_jit_s, _jit_e, _jit_st); ` +
         lenCheck +
-        `for (let _mtoc2_k = 0; _mtoc2_k < _mtoc2_n; _mtoc2_k++) { ` +
-        `const _mtoc2_v = mtoc2_range_value(_mtoc2_s, _mtoc2_st, _mtoc2_e, _mtoc2_n, _mtoc2_k); ` +
-        `const _mtoc2_off = mtoc2_idx_lin_grow_js(${baseName}, _mtoc2_v); ` +
-        `${writeAt("_mtoc2_off", "_mtoc2_k")} ` +
+        `for (let _jit_k = 0; _jit_k < _jit_n; _jit_k++) { ` +
+        `const _jit_v = jit_range_value(_jit_s, _jit_st, _jit_e, _jit_n, _jit_k); ` +
+        `const _jit_off = jit_idx_lin_grow_js(${baseName}, _jit_v); ` +
+        `${writeAt("_jit_off", "_jit_k")} ` +
         `} ` +
         `}`
       );
     }
     if (slot.kind === "IndexVec") {
-      useRuntimeByName(state, "mtoc2_scalar_index");
+      useRuntimeByName(state, "jit_scalar_index");
       const idxE = emitExpr(slot.expr, state);
       // Tensor RHS must match the number of selected positions; a
       // mismatch is a "Subscripted assignment dimension mismatch" in the
@@ -502,17 +502,17 @@ function emitIndexSliceStoreJs(
       // the RHS end → silent NaN/truncation.
       const lenCheck = rhsIsScalar
         ? ``
-        : `if (_mtoc2_rhs.data.length !== _mtoc2_n) throw new Error("Subscripted assignment dimension mismatch"); `;
+        : `if (_jit_rhs.data.length !== _jit_n) throw new Error("Subscripted assignment dimension mismatch"); `;
       return (
         `${indent}{ ` +
-        `const _mtoc2_rhs = ${rhsExpr}; ` +
-        `const _mtoc2_ix = ${idxE}; ` +
-        `const _mtoc2_ixd = _mtoc2_ix.mtoc2Tag === "tensor" ? _mtoc2_ix.data : [_mtoc2_ix]; ` +
-        `const _mtoc2_n = _mtoc2_ixd.length; ` +
+        `const _jit_rhs = ${rhsExpr}; ` +
+        `const _jit_ix = ${idxE}; ` +
+        `const _jit_ixd = _jit_ix.jitTag === "tensor" ? _jit_ix.data : [_jit_ix]; ` +
+        `const _jit_n = _jit_ixd.length; ` +
         lenCheck +
-        `for (let _mtoc2_k = 0; _mtoc2_k < _mtoc2_n; _mtoc2_k++) { ` +
-        `const _mtoc2_off = mtoc2_idx_lin_grow_js(${baseName}, _mtoc2_ixd[_mtoc2_k]); ` +
-        `${writeAt("_mtoc2_off", "_mtoc2_k")} ` +
+        `for (let _jit_k = 0; _jit_k < _jit_n; _jit_k++) { ` +
+        `const _jit_off = jit_idx_lin_grow_js(${baseName}, _jit_ixd[_jit_k]); ` +
+        `${writeAt("_jit_off", "_jit_k")} ` +
         `} ` +
         `}`
       );
@@ -529,19 +529,19 @@ function emitIndexSliceStoreJs(
       // ignores trailing RHS elements (long RHS → silent truncation).
       const lenCheck = rhsIsScalar
         ? ``
-        : `if (_mtoc2_rhs.data.length !== _mtoc2_n) throw new Error("Subscripted assignment dimension mismatch"); `;
+        : `if (_jit_rhs.data.length !== _jit_n) throw new Error("Subscripted assignment dimension mismatch"); `;
       return (
         `${indent}{ ` +
-        `const _mtoc2_rhs = ${rhsExpr}; ` +
-        `const _mtoc2_m = ${maskE}; ` +
-        `const _mtoc2_md = _mtoc2_m.data; ` +
-        `const _mtoc2_ix = []; ` +
-        `for (let _mtoc2_mi = 0; _mtoc2_mi < _mtoc2_md.length; _mtoc2_mi++) ` +
-        `if (_mtoc2_md[_mtoc2_mi] !== 0) _mtoc2_ix.push(_mtoc2_mi); ` +
-        `const _mtoc2_n = _mtoc2_ix.length; ` +
+        `const _jit_rhs = ${rhsExpr}; ` +
+        `const _jit_m = ${maskE}; ` +
+        `const _jit_md = _jit_m.data; ` +
+        `const _jit_ix = []; ` +
+        `for (let _jit_mi = 0; _jit_mi < _jit_md.length; _jit_mi++) ` +
+        `if (_jit_md[_jit_mi] !== 0) _jit_ix.push(_jit_mi); ` +
+        `const _jit_n = _jit_ix.length; ` +
         lenCheck +
-        `for (let _mtoc2_k = 0; _mtoc2_k < _mtoc2_n; _mtoc2_k++) { ` +
-        `${writeAt("_mtoc2_ix[_mtoc2_k]", "_mtoc2_k")} ` +
+        `for (let _jit_k = 0; _jit_k < _jit_n; _jit_k++) { ` +
+        `${writeAt("_jit_ix[_jit_k]", "_jit_k")} ` +
         `} ` +
         `}`
       );
@@ -559,58 +559,58 @@ function emitIndexSliceStoreJs(
   // tensor. RHS may be scalar (broadcast to every cell) or tensor
   // (cells read column-major).
   const ndim = s.index.length;
-  const setup: string[] = [`const _mtoc2_rhs = ${rhsExpr};`];
+  const setup: string[] = [`const _jit_rhs = ${rhsExpr};`];
   const idxFns: string[] = [];
   const dims: string[] = [];
   for (let i = 0; i < ndim; i++) {
     const slot = s.index[i];
     if (slot.kind === "Colon") {
-      setup.push(`const _mtoc2_n_${i} = ${baseName}.shape[${i}] ?? 1;`);
-      dims.push(`_mtoc2_n_${i}`);
-      idxFns.push(`(_mtoc2_k_${i} + 1)`);
+      setup.push(`const _jit_n_${i} = ${baseName}.shape[${i}] ?? 1;`);
+      dims.push(`_jit_n_${i}`);
+      idxFns.push(`(_jit_k_${i} + 1)`);
     } else if (slot.kind === "Range") {
-      useRuntimeByName(state, "mtoc2_loop_count");
-      useRuntimeByName(state, "mtoc2_range_value");
+      useRuntimeByName(state, "jit_loop_count");
+      useRuntimeByName(state, "jit_range_value");
       const sE = emitExpr(slot.start, state);
       const stE = emitExpr(slot.step, state);
       const eE = emitExpr(slot.end, state);
       setup.push(
-        `const _mtoc2_s_${i} = ${sE}, _mtoc2_e_${i} = ${eE}, _mtoc2_st_${i} = ${stE};`
+        `const _jit_s_${i} = ${sE}, _jit_e_${i} = ${eE}, _jit_st_${i} = ${stE};`
       );
       setup.push(
-        `const _mtoc2_n_${i} = mtoc2_loop_count(_mtoc2_s_${i}, _mtoc2_e_${i}, _mtoc2_st_${i});`
+        `const _jit_n_${i} = jit_loop_count(_jit_s_${i}, _jit_e_${i}, _jit_st_${i});`
       );
-      dims.push(`_mtoc2_n_${i}`);
+      dims.push(`_jit_n_${i}`);
       idxFns.push(
-        `mtoc2_range_value(_mtoc2_s_${i}, _mtoc2_st_${i}, _mtoc2_e_${i}, _mtoc2_n_${i}, _mtoc2_k_${i})`
+        `jit_range_value(_jit_s_${i}, _jit_st_${i}, _jit_e_${i}, _jit_n_${i}, _jit_k_${i})`
       );
     } else if (slot.kind === "Scalar") {
       const v = emitExpr(slot.expr, state);
-      setup.push(`const _mtoc2_s_${i} = ${v};`);
-      setup.push(`const _mtoc2_n_${i} = 1;`);
+      setup.push(`const _jit_s_${i} = ${v};`);
+      setup.push(`const _jit_n_${i} = 1;`);
       dims.push(`1`);
-      idxFns.push(`_mtoc2_s_${i}`);
+      idxFns.push(`_jit_s_${i}`);
     } else if (slot.kind === "IndexVec") {
       const idxE = emitExpr(slot.expr, state);
       setup.push(
-        `const _mtoc2_ix_${i} = ${idxE}; ` +
-          `const _mtoc2_ixd_${i} = _mtoc2_ix_${i}.mtoc2Tag === "tensor" ? _mtoc2_ix_${i}.data : [_mtoc2_ix_${i}];`
+        `const _jit_ix_${i} = ${idxE}; ` +
+          `const _jit_ixd_${i} = _jit_ix_${i}.jitTag === "tensor" ? _jit_ix_${i}.data : [_jit_ix_${i}];`
       );
-      setup.push(`const _mtoc2_n_${i} = _mtoc2_ixd_${i}.length;`);
-      dims.push(`_mtoc2_n_${i}`);
-      idxFns.push(`_mtoc2_ixd_${i}[_mtoc2_k_${i}]`);
+      setup.push(`const _jit_n_${i} = _jit_ixd_${i}.length;`);
+      dims.push(`_jit_n_${i}`);
+      idxFns.push(`_jit_ixd_${i}[_jit_k_${i}]`);
     } else if (slot.kind === "LogicalMask") {
       const maskE = emitExpr(slot.expr, state);
       setup.push(
-        `const _mtoc2_m_${i} = ${maskE}; ` +
-          `const _mtoc2_md_${i} = _mtoc2_m_${i}.data; ` +
-          `const _mtoc2_ixd_${i} = []; ` +
-          `for (let _mtoc2_mi = 0; _mtoc2_mi < _mtoc2_md_${i}.length; _mtoc2_mi++) ` +
-          `if (_mtoc2_md_${i}[_mtoc2_mi] !== 0) _mtoc2_ixd_${i}.push(_mtoc2_mi + 1);`
+        `const _jit_m_${i} = ${maskE}; ` +
+          `const _jit_md_${i} = _jit_m_${i}.data; ` +
+          `const _jit_ixd_${i} = []; ` +
+          `for (let _jit_mi = 0; _jit_mi < _jit_md_${i}.length; _jit_mi++) ` +
+          `if (_jit_md_${i}[_jit_mi] !== 0) _jit_ixd_${i}.push(_jit_mi + 1);`
       );
-      setup.push(`const _mtoc2_n_${i} = _mtoc2_ixd_${i}.length;`);
-      dims.push(`_mtoc2_n_${i}`);
-      idxFns.push(`_mtoc2_ixd_${i}[_mtoc2_k_${i}]`);
+      setup.push(`const _jit_n_${i} = _jit_ixd_${i}.length;`);
+      dims.push(`_jit_n_${i}`);
+      idxFns.push(`_jit_ixd_${i}[_jit_k_${i}]`);
     } else {
       // Exhaustive: every IndexSliceArg kind handled above.
       const _exhaustive: never = slot;
@@ -629,21 +629,21 @@ function emitIndexSliceStoreJs(
   if (!rhsIsScalar) {
     const slotProduct = dims.join(" * ");
     lines.push(
-      `${indent}  { const _mtoc2_total = ${slotProduct}; if (_mtoc2_rhs.data.length !== _mtoc2_total) throw new Error("Unable to perform assignment because the size of the left side is " + _mtoc2_total + " and the size of the right side is " + _mtoc2_rhs.data.length + "."); }`
+      `${indent}  { const _jit_total = ${slotProduct}; if (_jit_rhs.data.length !== _jit_total) throw new Error("Unable to perform assignment because the size of the left side is " + _jit_total + " and the size of the right side is " + _jit_rhs.data.length + "."); }`
     );
   }
   for (let i = ndim - 1; i >= 0; i--) {
     lines.push(
-      `${indent}  for (let _mtoc2_k_${i} = 0; _mtoc2_k_${i} < _mtoc2_n_${i}; _mtoc2_k_${i}++) {`
+      `${indent}  for (let _jit_k_${i} = 0; _jit_k_${i} < _jit_n_${i}; _jit_k_${i}++) {`
     );
   }
   // Each axis index goes through the grow-aware checker: a sub-1 index
   // errors and an index past that axis's extent grow-bails to the
   // interpreter (which grows), instead of silently dropping the write.
-  useRuntimeByName(state, "mtoc2_scalar_index");
+  useRuntimeByName(state, "jit_scalar_index");
   for (let i = 0; i < ndim; i++) {
     lines.push(
-      `${indent}    const _mtoc2_ai_${i} = mtoc2_idx_axis_grow_js(${baseName}, ${i}, ${idxFns[i]});`
+      `${indent}    const _jit_ai_${i} = jit_idx_axis_grow_js(${baseName}, ${i}, ${idxFns[i]});`
     );
   }
   const srcTerms: string[] = [];
@@ -652,21 +652,21 @@ function emitIndexSliceStoreJs(
     for (let j = 0; j < i; j++)
       strideParts.push(`(${baseName}.shape[${j}] ?? 1)`);
     const stride = strideParts.length === 0 ? "1" : strideParts.join(" * ");
-    srcTerms.push(`_mtoc2_ai_${i} * ${stride}`);
+    srcTerms.push(`_jit_ai_${i} * ${stride}`);
   }
   const rhsTerms: string[] = [];
   for (let i = 0; i < ndim; i++) {
     const strideParts: string[] = [];
     for (let j = 0; j < i; j++) strideParts.push(dims[j]);
     const stride = strideParts.length === 0 ? "1" : strideParts.join(" * ");
-    rhsTerms.push(`_mtoc2_k_${i} * ${stride}`);
+    rhsTerms.push(`_jit_k_${i} * ${stride}`);
   }
-  lines.push(`${indent}    const _mtoc2_dst = ${srcTerms.join(" + ")};`);
+  lines.push(`${indent}    const _jit_dst = ${srcTerms.join(" + ")};`);
   if (rhsIsScalar) {
-    lines.push(`${indent}    ${writeAt("_mtoc2_dst", "0")}`);
+    lines.push(`${indent}    ${writeAt("_jit_dst", "0")}`);
   } else {
-    lines.push(`${indent}    const _mtoc2_src = ${rhsTerms.join(" + ")};`);
-    lines.push(`${indent}    ${writeAt("_mtoc2_dst", "_mtoc2_src")}`);
+    lines.push(`${indent}    const _jit_src = ${rhsTerms.join(" + ")};`);
+    lines.push(`${indent}    ${writeAt("_jit_dst", "_jit_src")}`);
   }
   for (let i = ndim - 1; i >= 0; i--) lines.push(`${indent}  }`);
   lines.push(`${indent}}`);
@@ -726,17 +726,17 @@ function emitExpr(e: IRExpr, state: RuntimeState): string {
 
     case "ImagLit":
       // Scalar complex literal. The JS-side representation is
-      // `{re, im}` (matching the `mtoc2_cscalar.js` snippet's helpers).
+      // `{re, im}` (matching the `jit_cscalar.js` snippet's helpers).
       // Activate it lazily so the call site can rely on it being
       // available; the actual helper functions get inlined alongside.
       return `{re: 0, im: ${formatJsNumber(e.value)}}`;
 
     case "StringLit": {
       // JS runtime value conventions: `String` → bare JS string;
-      // `Char` → `{mtoc2Tag:"char", value:"..."}` wrapper.
+      // `Char` → `{jitTag:"char", value:"..."}` wrapper.
       const lit = JSON.stringify(e.value);
       if (e.ty.kind === "Char") {
-        return `({mtoc2Tag: "char", value: ${lit}})`;
+        return `({jitTag: "char", value: ${lit}})`;
       }
       return lit;
     }
@@ -797,8 +797,8 @@ function emitExpr(e: IRExpr, state: RuntimeState): string {
       const startE = emitExpr(e.start, state);
       const stepE = emitExpr(e.step, state);
       const endE = emitExpr(e.end, state);
-      useRuntimeByName(state, "mtoc2_tensor_make_range");
-      return `mtoc2_tensor_make_range(${startE}, ${stepE}, ${endE})`;
+      useRuntimeByName(state, "jit_tensor_make_range");
+      return `jit_tensor_make_range(${startE}, ${stepE}, ${endE})`;
     }
 
     case "TensorBuild": {
@@ -808,7 +808,7 @@ function emitExpr(e: IRExpr, state: RuntimeState): string {
         // For each element, split into a real / imag pair using the
         // element's static type. Statically-real elements pad imag
         // with 0; statically-complex elements emit `.re` / `.im`.
-        useRuntimeByName(state, "mtoc2_cscalar");
+        useRuntimeByName(state, "jit_cscalar");
         const res: string[] = [];
         const ims: string[] = [];
         for (const el of e.elements) {
@@ -822,19 +822,19 @@ function emitExpr(e: IRExpr, state: RuntimeState): string {
           }
         }
         if (rows === 1) {
-          useRuntimeByName(state, "mtoc2_tensor_from_row_complex");
-          return `mtoc2_tensor_from_row_complex([${res.join(", ")}], [${ims.join(", ")}], ${cols})`;
+          useRuntimeByName(state, "jit_tensor_from_row_complex");
+          return `jit_tensor_from_row_complex([${res.join(", ")}], [${ims.join(", ")}], ${cols})`;
         }
-        useRuntimeByName(state, "mtoc2_tensor_from_matrix_complex");
-        return `mtoc2_tensor_from_matrix_complex([${res.join(", ")}], [${ims.join(", ")}], ${rows}, ${cols})`;
+        useRuntimeByName(state, "jit_tensor_from_matrix_complex");
+        return `jit_tensor_from_matrix_complex([${res.join(", ")}], [${ims.join(", ")}], ${rows}, ${cols})`;
       }
       const flat = e.elements.map(el => emitExpr(el, state)).join(", ");
       if (rows === 1) {
-        useRuntimeByName(state, "mtoc2_tensor_from_row");
-        return `mtoc2_tensor_from_row([${flat}], ${cols})`;
+        useRuntimeByName(state, "jit_tensor_from_row");
+        return `jit_tensor_from_row([${flat}], ${cols})`;
       }
-      useRuntimeByName(state, "mtoc2_tensor_from_matrix");
-      return `mtoc2_tensor_from_matrix([${flat}], ${rows}, ${cols})`;
+      useRuntimeByName(state, "jit_tensor_from_matrix");
+      return `jit_tensor_from_matrix([${flat}], ${rows}, ${cols})`;
     }
 
     case "IndexLoad": {
@@ -846,16 +846,16 @@ function emitExpr(e: IRExpr, state: RuntimeState): string {
           `emitJs internal: IndexLoad base must be a Var after ANF (got ${e.base.kind})`
         );
       }
-      useRuntimeByName(state, "mtoc2_scalar_index");
+      useRuntimeByName(state, "jit_scalar_index");
       const baseName = e.base.cName;
       const idxs = e.indices.map(ix => emitExpr(ix, state));
       let offset: string;
       if (idxs.length === 1) {
-        offset = `mtoc2_idx_lin_js(${baseName}, ${idxs[0]})`;
+        offset = `jit_idx_lin_js(${baseName}, ${idxs[0]})`;
       } else {
         const terms: string[] = [];
         for (let i = 0; i < idxs.length; i++) {
-          const checked = `mtoc2_idx_axis_js(${baseName}, ${i}, ${idxs[i]})`;
+          const checked = `jit_idx_axis_js(${baseName}, ${i}, ${idxs[i]})`;
           if (i === 0) {
             terms.push(checked);
           } else {
@@ -870,7 +870,7 @@ function emitExpr(e: IRExpr, state: RuntimeState): string {
         // Build a fresh `{re, im}` from the two lanes. Hoist the
         // offset to a temp inline so we don't double-evaluate the
         // bounds-checked index expression.
-        useRuntimeByName(state, "mtoc2_cscalar");
+        useRuntimeByName(state, "jit_cscalar");
         return `(() => { const _o = ${offset}; return {re: ${baseName}.data[_o], im: ${baseName}.imag[_o]}; })()`;
       }
       return `${baseName}.data[${offset}]`;
@@ -889,26 +889,26 @@ function emitExpr(e: IRExpr, state: RuntimeState): string {
     }
 
     case "CellLit": {
-      // `{a, b, c}` → fresh `mtoc2_cell_make`-built cell. Slot values
+      // `{a, b, c}` → fresh `jit_cell_make`-built cell. Slot values
       // are owned-consumed; route owned aliases through deep_clone so
       // the cell owns its own copy (mirrors the C consume rule).
-      useRuntimeByName(state, "mtoc2_cell_make");
+      useRuntimeByName(state, "jit_cell_make");
       const slots = e.elements
         .map(el =>
           isOwned(el.ty) ? emitOwnedRhsJs(el, state) : emitExpr(el, state)
         )
         .join(", ");
       const shapeLit = JSON.stringify(e.shape);
-      return `mtoc2_cell_make([${slots}], ${shapeLit})`;
+      return `jit_cell_make([${slots}], ${shapeLit})`;
     }
 
     case "CellEmpty": {
       // `cell(n, m, ...)` → fresh cell with empty-double slots.
       // The 1-arg square form expands to two dim args at lowering
       // time; everything here is the resolved per-axis form.
-      useRuntimeByName(state, "mtoc2_cell_empty");
+      useRuntimeByName(state, "jit_cell_empty");
       const dimsJs = e.dims.map(d => emitExpr(d, state)).join(", ");
-      return `mtoc2_cell_empty([${dimsJs}])`;
+      return `jit_cell_empty([${dimsJs}])`;
     }
 
     case "CellIndexLoad": {
@@ -985,8 +985,8 @@ function emitIndexSliceJs(
   }
   const isComplexBase = e.base.ty.kind === "Numeric" && e.base.ty.isComplex;
   const allocFn = isComplexBase
-    ? "mtoc2_tensor_alloc_nd_complex"
-    : "mtoc2_tensor_alloc_nd";
+    ? "jit_tensor_alloc_nd_complex"
+    : "jit_tensor_alloc_nd";
   useRuntimeByName(state, allocFn);
   const baseName = e.base.cName;
   // Per-element copy template — fills both lanes for complex bases.
@@ -994,8 +994,8 @@ function emitIndexSliceJs(
   // real and complex slices.
   const copy = (dstIdx: string, srcIdx: string): string =>
     isComplexBase
-      ? `_mtoc2_t.data[${dstIdx}] = ${baseName}.data[${srcIdx}]; _mtoc2_t.imag[${dstIdx}] = ${baseName}.imag[${srcIdx}];`
-      : `_mtoc2_t.data[${dstIdx}] = ${baseName}.data[${srcIdx}];`;
+      ? `_jit_t.data[${dstIdx}] = ${baseName}.data[${srcIdx}]; _jit_t.imag[${dstIdx}] = ${baseName}.imag[${srcIdx}];`
+      : `_jit_t.data[${dstIdx}] = ${baseName}.data[${srcIdx}];`;
 
   // Single-slot linear form. Covers `v(:)`, `v(a:b)`, `v(idx_vec)`,
   // `v(mask)`. Multi-slot Scalar single-slot reads route through
@@ -1019,24 +1019,24 @@ function emitIndexSliceJs(
       if (slot.kind === "Colon") {
         off = "0";
       } else if (slot.kind === "Range") {
-        useRuntimeByName(state, "mtoc2_loop_count");
-        useRuntimeByName(state, "mtoc2_range_value");
+        useRuntimeByName(state, "jit_loop_count");
+        useRuntimeByName(state, "jit_range_value");
         const s = emitExpr(slot.start, state);
         const st = emitExpr(slot.step, state);
         const en = emitExpr(slot.end, state);
         off =
-          `(() => { const _mtoc2_s = ${s}, _mtoc2_e = ${en}, _mtoc2_st = ${st}; ` +
-          `const _mtoc2_n = mtoc2_loop_count(_mtoc2_s, _mtoc2_e, _mtoc2_st); ` +
-          `const _mtoc2_idx = Math.round(mtoc2_range_value(_mtoc2_s, _mtoc2_st, _mtoc2_e, _mtoc2_n, 0)); ` +
-          `const _mtoc2_len = ${baseName}.data.length; ` +
-          `if (_mtoc2_idx < 1 || _mtoc2_idx > _mtoc2_len) throw new Error("Index in position 1 exceeds array bounds. Index must not exceed " + _mtoc2_len + "."); ` +
-          `return _mtoc2_idx - 1; })()`;
+          `(() => { const _jit_s = ${s}, _jit_e = ${en}, _jit_st = ${st}; ` +
+          `const _jit_n = jit_loop_count(_jit_s, _jit_e, _jit_st); ` +
+          `const _jit_idx = Math.round(jit_range_value(_jit_s, _jit_st, _jit_e, _jit_n, 0)); ` +
+          `const _jit_len = ${baseName}.data.length; ` +
+          `if (_jit_idx < 1 || _jit_idx > _jit_len) throw new Error("Index in position 1 exceeds array bounds. Index must not exceed " + _jit_len + "."); ` +
+          `return _jit_idx - 1; })()`;
       } else if (slot.kind === "IndexVec") {
         const idx = emitExpr(slot.expr, state);
         off =
-          `(() => { const _mtoc2_ix = ${idx}; ` +
-          `const _mtoc2_ixd = _mtoc2_ix.mtoc2Tag === "tensor" ? _mtoc2_ix.data : [_mtoc2_ix]; ` +
-          `return Math.round(_mtoc2_ixd[0]) - 1; })()`;
+          `(() => { const _jit_ix = ${idx}; ` +
+          `const _jit_ixd = _jit_ix.jitTag === "tensor" ? _jit_ix.data : [_jit_ix]; ` +
+          `return Math.round(_jit_ixd[0]) - 1; })()`;
       } else {
         throw new UnsupportedConstruct(
           `emitJs internal: scalar IndexSlice slot kind ${slot.kind}`,
@@ -1051,40 +1051,40 @@ function emitIndexSliceJs(
     if (slot.kind === "Colon") {
       return (
         `(() => { ` +
-        `const _mtoc2_n = ${baseName}.data.length; ` +
-        `const _mtoc2_t = ${allocFn}(2, [_mtoc2_n, 1]); ` +
-        `for (let _mtoc2_k = 0; _mtoc2_k < _mtoc2_n; _mtoc2_k++) { ` +
-        `${copy("_mtoc2_k", "_mtoc2_k")} ` +
+        `const _jit_n = ${baseName}.data.length; ` +
+        `const _jit_t = ${allocFn}(2, [_jit_n, 1]); ` +
+        `for (let _jit_k = 0; _jit_k < _jit_n; _jit_k++) { ` +
+        `${copy("_jit_k", "_jit_k")} ` +
         `} ` +
-        `return _mtoc2_t; ` +
+        `return _jit_t; ` +
         `})()`
       );
     }
     if (slot.kind === "Range") {
-      useRuntimeByName(state, "mtoc2_loop_count");
-      useRuntimeByName(state, "mtoc2_range_value");
+      useRuntimeByName(state, "jit_loop_count");
+      useRuntimeByName(state, "jit_range_value");
       const s = emitExpr(slot.start, state);
       const st = emitExpr(slot.step, state);
       const en = emitExpr(slot.end, state);
-      const rows = isColVec ? "_mtoc2_n" : "1";
-      const cols = isColVec ? "1" : "_mtoc2_n";
+      const rows = isColVec ? "_jit_n" : "1";
+      const cols = isColVec ? "1" : "_jit_n";
       // Per-element 1-based bounds check against the source's linear
       // length. Mirrors numbl's RuntimeError on out-of-range slice
       // indices (e.g. `oob(0:3)` → index 0 fails the lower-bound
       // guard).
       return (
         `(() => { ` +
-        `const _mtoc2_s = ${s}; const _mtoc2_e = ${en}; const _mtoc2_st = ${st}; ` +
-        `const _mtoc2_n = mtoc2_loop_count(_mtoc2_s, _mtoc2_e, _mtoc2_st); ` +
-        `const _mtoc2_t = ${allocFn}(2, [${rows}, ${cols}]); ` +
-        `const _mtoc2_len = ${baseName}.data.length; ` +
-        `for (let _mtoc2_k = 0; _mtoc2_k < _mtoc2_n; _mtoc2_k++) { ` +
-        `const _mtoc2_v = mtoc2_range_value(_mtoc2_s, _mtoc2_st, _mtoc2_e, _mtoc2_n, _mtoc2_k); ` +
-        `const _mtoc2_idx = Math.round(_mtoc2_v); ` +
-        `if (_mtoc2_idx < 1 || _mtoc2_idx > _mtoc2_len) throw new Error("Index in position 1 exceeds array bounds. Index must not exceed " + _mtoc2_len + "."); ` +
-        `${copy("_mtoc2_k", "_mtoc2_idx - 1")} ` +
+        `const _jit_s = ${s}; const _jit_e = ${en}; const _jit_st = ${st}; ` +
+        `const _jit_n = jit_loop_count(_jit_s, _jit_e, _jit_st); ` +
+        `const _jit_t = ${allocFn}(2, [${rows}, ${cols}]); ` +
+        `const _jit_len = ${baseName}.data.length; ` +
+        `for (let _jit_k = 0; _jit_k < _jit_n; _jit_k++) { ` +
+        `const _jit_v = jit_range_value(_jit_s, _jit_st, _jit_e, _jit_n, _jit_k); ` +
+        `const _jit_idx = Math.round(_jit_v); ` +
+        `if (_jit_idx < 1 || _jit_idx > _jit_len) throw new Error("Index in position 1 exceeds array bounds. Index must not exceed " + _jit_len + "."); ` +
+        `${copy("_jit_k", "_jit_idx - 1")} ` +
         `} ` +
-        `return _mtoc2_t; ` +
+        `return _jit_t; ` +
         `})()`
       );
     }
@@ -1098,18 +1098,18 @@ function emitIndexSliceJs(
     }
     if (slot.kind === "IndexVec") {
       const idx = emitExpr(slot.expr, state);
-      const rows = isRowVec ? "1" : "_mtoc2_n";
-      const cols = isRowVec ? "_mtoc2_n" : "1";
+      const rows = isRowVec ? "1" : "_jit_n";
+      const cols = isRowVec ? "_jit_n" : "1";
       return (
         `(() => { ` +
-        `const _mtoc2_ix = ${idx}; ` +
-        `const _mtoc2_ixd = _mtoc2_ix.mtoc2Tag === "tensor" ? _mtoc2_ix.data : [_mtoc2_ix]; ` +
-        `const _mtoc2_n = _mtoc2_ixd.length; ` +
-        `const _mtoc2_t = ${allocFn}(2, [${rows}, ${cols}]); ` +
-        `for (let _mtoc2_k = 0; _mtoc2_k < _mtoc2_n; _mtoc2_k++) { ` +
-        `${copy("_mtoc2_k", "Math.round(_mtoc2_ixd[_mtoc2_k]) - 1")} ` +
+        `const _jit_ix = ${idx}; ` +
+        `const _jit_ixd = _jit_ix.jitTag === "tensor" ? _jit_ix.data : [_jit_ix]; ` +
+        `const _jit_n = _jit_ixd.length; ` +
+        `const _jit_t = ${allocFn}(2, [${rows}, ${cols}]); ` +
+        `for (let _jit_k = 0; _jit_k < _jit_n; _jit_k++) { ` +
+        `${copy("_jit_k", "Math.round(_jit_ixd[_jit_k]) - 1")} ` +
         `} ` +
-        `return _mtoc2_t; ` +
+        `return _jit_t; ` +
         `})()`
       );
     }
@@ -1118,26 +1118,26 @@ function emitIndexSliceJs(
       // positions of truthy elements, then gather. Result orientation
       // follows the base: row base → row, otherwise column.
       const mask = emitExpr(slot.expr, state);
-      const rows = isRowVec ? "1" : "_mtoc2_n";
-      const cols = isRowVec ? "_mtoc2_n" : "1";
+      const rows = isRowVec ? "1" : "_jit_n";
+      const cols = isRowVec ? "_jit_n" : "1";
       return (
         `(() => { ` +
-        `const _mtoc2_m = ${mask}; ` +
-        `const _mtoc2_md = _mtoc2_m.data; ` +
-        `const _mtoc2_blen = ${baseName}.data.length; ` +
-        `const _mtoc2_ix = []; ` +
-        `for (let _mtoc2_mi = 0; _mtoc2_mi < _mtoc2_md.length; _mtoc2_mi++) ` +
-        `if (_mtoc2_md[_mtoc2_mi] !== 0) { ` +
+        `const _jit_m = ${mask}; ` +
+        `const _jit_md = _jit_m.data; ` +
+        `const _jit_blen = ${baseName}.data.length; ` +
+        `const _jit_ix = []; ` +
+        `for (let _jit_mi = 0; _jit_mi < _jit_md.length; _jit_mi++) ` +
+        `if (_jit_md[_jit_mi] !== 0) { ` +
         // A truthy mask bit past the base end is an error in MATLAB (the C
         // path aborts too); without this the gather reads OOB -> NaN.
-        `if (_mtoc2_mi >= _mtoc2_blen) throw new Error("Index exceeds array bounds"); ` +
-        `_mtoc2_ix.push(_mtoc2_mi); } ` +
-        `const _mtoc2_n = _mtoc2_ix.length; ` +
-        `const _mtoc2_t = ${allocFn}(2, [${rows}, ${cols}]); ` +
-        `for (let _mtoc2_k = 0; _mtoc2_k < _mtoc2_n; _mtoc2_k++) { ` +
-        `${copy("_mtoc2_k", "_mtoc2_ix[_mtoc2_k]")} ` +
+        `if (_jit_mi >= _jit_blen) throw new Error("Index exceeds array bounds"); ` +
+        `_jit_ix.push(_jit_mi); } ` +
+        `const _jit_n = _jit_ix.length; ` +
+        `const _jit_t = ${allocFn}(2, [${rows}, ${cols}]); ` +
+        `for (let _jit_k = 0; _jit_k < _jit_n; _jit_k++) { ` +
+        `${copy("_jit_k", "_jit_ix[_jit_k]")} ` +
         `} ` +
-        `return _mtoc2_t; ` +
+        `return _jit_t; ` +
         `})()`
       );
     }
@@ -1161,56 +1161,56 @@ function emitIndexSliceJs(
   for (let i = 0; i < ndim; i++) {
     const slot = e.index[i];
     if (slot.kind === "Colon") {
-      setup.push(`const _mtoc2_n_${i} = ${baseName}.shape[${i}] ?? 1;`);
-      dims.push(`_mtoc2_n_${i}`);
-      idxFns.push(`(_mtoc2_k_${i} + 1)`);
+      setup.push(`const _jit_n_${i} = ${baseName}.shape[${i}] ?? 1;`);
+      dims.push(`_jit_n_${i}`);
+      idxFns.push(`(_jit_k_${i} + 1)`);
     } else if (slot.kind === "Range") {
-      useRuntimeByName(state, "mtoc2_loop_count");
-      useRuntimeByName(state, "mtoc2_range_value");
+      useRuntimeByName(state, "jit_loop_count");
+      useRuntimeByName(state, "jit_range_value");
       const s = emitExpr(slot.start, state);
       const st = emitExpr(slot.step, state);
       const en = emitExpr(slot.end, state);
       setup.push(
-        `const _mtoc2_s_${i} = ${s}, _mtoc2_e_${i} = ${en}, _mtoc2_st_${i} = ${st};`
+        `const _jit_s_${i} = ${s}, _jit_e_${i} = ${en}, _jit_st_${i} = ${st};`
       );
       setup.push(
-        `const _mtoc2_n_${i} = mtoc2_loop_count(_mtoc2_s_${i}, _mtoc2_e_${i}, _mtoc2_st_${i});`
+        `const _jit_n_${i} = jit_loop_count(_jit_s_${i}, _jit_e_${i}, _jit_st_${i});`
       );
-      dims.push(`_mtoc2_n_${i}`);
+      dims.push(`_jit_n_${i}`);
       idxFns.push(
-        `mtoc2_range_value(_mtoc2_s_${i}, _mtoc2_st_${i}, _mtoc2_e_${i}, _mtoc2_n_${i}, _mtoc2_k_${i})`
+        `jit_range_value(_jit_s_${i}, _jit_st_${i}, _jit_e_${i}, _jit_n_${i}, _jit_k_${i})`
       );
     } else if (slot.kind === "Scalar") {
       const v = emitExpr(slot.expr, state);
-      setup.push(`const _mtoc2_s_${i} = ${v};`);
-      setup.push(`const _mtoc2_n_${i} = 1;`);
+      setup.push(`const _jit_s_${i} = ${v};`);
+      setup.push(`const _jit_n_${i} = 1;`);
       dims.push(`1`);
-      idxFns.push(`_mtoc2_s_${i}`);
+      idxFns.push(`_jit_s_${i}`);
     } else if (slot.kind === "IndexVec") {
       const idxE = emitExpr(slot.expr, state);
       setup.push(
-        `const _mtoc2_ix_${i} = ${idxE}; ` +
-          `const _mtoc2_ixd_${i} = _mtoc2_ix_${i}.mtoc2Tag === "tensor" ? _mtoc2_ix_${i}.data : [_mtoc2_ix_${i}];`
+        `const _jit_ix_${i} = ${idxE}; ` +
+          `const _jit_ixd_${i} = _jit_ix_${i}.jitTag === "tensor" ? _jit_ix_${i}.data : [_jit_ix_${i}];`
       );
-      setup.push(`const _mtoc2_n_${i} = _mtoc2_ixd_${i}.length;`);
-      dims.push(`_mtoc2_n_${i}`);
-      idxFns.push(`_mtoc2_ixd_${i}[_mtoc2_k_${i}]`);
+      setup.push(`const _jit_n_${i} = _jit_ixd_${i}.length;`);
+      dims.push(`_jit_n_${i}`);
+      idxFns.push(`_jit_ixd_${i}[_jit_k_${i}]`);
     } else if (slot.kind === "LogicalMask") {
       // Multi-slot logical mask: scan, collect 0-based truthy
       // positions along this axis. The selected axis size is the
-      // truthy count; each iteration of `_mtoc2_k_${i}` picks the
+      // truthy count; each iteration of `_jit_k_${i}` picks the
       // k-th truthy position (1-based at idxFn-time).
       const maskE = emitExpr(slot.expr, state);
       setup.push(
-        `const _mtoc2_m_${i} = ${maskE}; ` +
-          `const _mtoc2_md_${i} = _mtoc2_m_${i}.data; ` +
-          `const _mtoc2_ixd_${i} = []; ` +
-          `for (let _mtoc2_mi = 0; _mtoc2_mi < _mtoc2_md_${i}.length; _mtoc2_mi++) ` +
-          `if (_mtoc2_md_${i}[_mtoc2_mi] !== 0) _mtoc2_ixd_${i}.push(_mtoc2_mi + 1);`
+        `const _jit_m_${i} = ${maskE}; ` +
+          `const _jit_md_${i} = _jit_m_${i}.data; ` +
+          `const _jit_ixd_${i} = []; ` +
+          `for (let _jit_mi = 0; _jit_mi < _jit_md_${i}.length; _jit_mi++) ` +
+          `if (_jit_md_${i}[_jit_mi] !== 0) _jit_ixd_${i}.push(_jit_mi + 1);`
       );
-      setup.push(`const _mtoc2_n_${i} = _mtoc2_ixd_${i}.length;`);
-      dims.push(`_mtoc2_n_${i}`);
-      idxFns.push(`_mtoc2_ixd_${i}[_mtoc2_k_${i}]`);
+      setup.push(`const _jit_n_${i} = _jit_ixd_${i}.length;`);
+      dims.push(`_jit_n_${i}`);
+      idxFns.push(`_jit_ixd_${i}[_jit_k_${i}]`);
     } else {
       // Exhaustive: every IndexSliceArg kind is handled above.
       const _exhaustive: never = slot;
@@ -1229,11 +1229,11 @@ function emitIndexSliceJs(
   if (isScalar(e.ty)) {
     const slines: string[] = [];
     for (const s of setup) slines.push(s);
-    for (let i = 0; i < ndim; i++) slines.push(`const _mtoc2_k_${i} = 0;`);
+    for (let i = 0; i < ndim; i++) slines.push(`const _jit_k_${i} = 0;`);
     for (let i = 0; i < ndim; i++) {
-      slines.push(`const _mtoc2_idx_${i} = Math.round(${idxFns[i]});`);
+      slines.push(`const _jit_idx_${i} = Math.round(${idxFns[i]});`);
       slines.push(
-        `if (_mtoc2_idx_${i} < 1 || _mtoc2_idx_${i} > (${baseName}.shape[${i}] ?? 1)) ` +
+        `if (_jit_idx_${i} < 1 || _jit_idx_${i} > (${baseName}.shape[${i}] ?? 1)) ` +
           `throw new Error("Index in position ${i + 1} exceeds array bounds.");`
       );
     }
@@ -1243,15 +1243,15 @@ function emitIndexSliceJs(
       for (let j = 0; j < i; j++)
         strideParts.push(`(${baseName}.shape[${j}] ?? 1)`);
       const stride = strideParts.length === 0 ? "1" : strideParts.join(" * ");
-      srcTerms.push(`(_mtoc2_idx_${i} - 1) * ${stride}`);
+      srcTerms.push(`(_jit_idx_${i} - 1) * ${stride}`);
     }
-    slines.push(`const _mtoc2_off = ${srcTerms.join(" + ")};`);
+    slines.push(`const _jit_off = ${srcTerms.join(" + ")};`);
     if (isComplexBase) {
       slines.push(
-        `return {re: ${baseName}.data[_mtoc2_off], im: ${baseName}.imag[_mtoc2_off]};`
+        `return {re: ${baseName}.data[_jit_off], im: ${baseName}.imag[_jit_off]};`
       );
     } else {
-      slines.push(`return ${baseName}.data[_mtoc2_off];`);
+      slines.push(`return ${baseName}.data[_jit_off];`);
     }
     return `(() => { ${slines.join(" ")} })()`;
   }
@@ -1270,11 +1270,11 @@ function emitIndexSliceJs(
   const lines: string[] = [];
   for (const s of setup) lines.push(s);
   lines.push(
-    `const _mtoc2_t = ${allocFn}(${resultDims.length}, [${resultDims.join(", ")}]);`
+    `const _jit_t = ${allocFn}(${resultDims.length}, [${resultDims.join(", ")}]);`
   );
   for (let i = ndim - 1; i >= 0; i--) {
     lines.push(
-      `for (let _mtoc2_k_${i} = 0; _mtoc2_k_${i} < _mtoc2_n_${i}; _mtoc2_k_${i}++) {`
+      `for (let _jit_k_${i} = 0; _jit_k_${i} < _jit_n_${i}; _jit_k_${i}++) {`
     );
   }
   // Per-axis 1-based index, rounded, with a bounds check against that
@@ -1284,9 +1284,9 @@ function emitIndexSliceJs(
   // NaN. Colon slots are always in range; the check is cheap and
   // uniform across slot kinds (Range / Scalar / IndexVec / mask).
   for (let i = 0; i < ndim; i++) {
-    lines.push(`const _mtoc2_idx_${i} = Math.round(${idxFns[i]});`);
+    lines.push(`const _jit_idx_${i} = Math.round(${idxFns[i]});`);
     lines.push(
-      `if (_mtoc2_idx_${i} < 1 || _mtoc2_idx_${i} > (${baseName}.shape[${i}] ?? 1)) ` +
+      `if (_jit_idx_${i} < 1 || _jit_idx_${i} > (${baseName}.shape[${i}] ?? 1)) ` +
         `throw new Error("Index in position ${i + 1} exceeds array bounds.");`
     );
   }
@@ -1299,7 +1299,7 @@ function emitIndexSliceJs(
       strideParts.push(`(${baseName}.shape[${j}] ?? 1)`);
     }
     const stride = strideParts.length === 0 ? "1" : strideParts.join(" * ");
-    srcTerms.push(`(_mtoc2_idx_${i} - 1) * ${stride}`);
+    srcTerms.push(`(_jit_idx_${i} - 1) * ${stride}`);
   }
   // Column-major destination offset using the result's own dims.
   const dstTerms: string[] = [];
@@ -1307,13 +1307,13 @@ function emitIndexSliceJs(
     const strideParts: string[] = [];
     for (let j = 0; j < i; j++) strideParts.push(dims[j]);
     const stride = strideParts.length === 0 ? "1" : strideParts.join(" * ");
-    dstTerms.push(`_mtoc2_k_${i} * ${stride}`);
+    dstTerms.push(`_jit_k_${i} * ${stride}`);
   }
-  lines.push(`const _mtoc2_src_off = ${srcTerms.join(" + ")};`);
-  lines.push(`const _mtoc2_dst_off = ${dstTerms.join(" + ")};`);
-  lines.push(copy("_mtoc2_dst_off", "_mtoc2_src_off"));
+  lines.push(`const _jit_src_off = ${srcTerms.join(" + ")};`);
+  lines.push(`const _jit_dst_off = ${dstTerms.join(" + ")};`);
+  lines.push(copy("_jit_dst_off", "_jit_src_off"));
   for (let i = ndim - 1; i >= 0; i--) lines.push(`}`);
-  lines.push(`return _mtoc2_t;`);
+  lines.push(`return _jit_t;`);
   return `(() => { ${lines.join(" ")} })()`;
 }
 
@@ -1348,14 +1348,14 @@ function makeJsUseRuntime(
  *  `!== 0` because JS truthiness disagrees: `NaN` is falsy in JS but
  *  numbl treats a (nonzero) `NaN` as true. Logical scalars are already
  *  JS booleans, so they pass through directly. Complex scalars route
- *  through `mtoc2_cnonzero` — a `{re: 0, im: 0}` object is "truthy" in
+ *  through `jit_cnonzero` — a `{re: 0, im: 0}` object is "truthy" in
  *  JS as a non-null reference, which would loop forever in `while (z)`. */
 function truthy(e: IRExpr, state: RuntimeState): string {
   const expr = emitExpr(e, state);
   if (e.ty.kind === "Numeric") {
     if (e.ty.isComplex) {
-      useRuntimeByName(state, "mtoc2_cscalar");
-      return `mtoc2_cnonzero(${expr})`;
+      useRuntimeByName(state, "jit_cscalar");
+      return `jit_cnonzero(${expr})`;
     }
     // Real double: NaN must be truthy (matches the C backend's
     // `!= 0.0` and the interpreter's `toBool`). A logical scalar is
@@ -1435,5 +1435,5 @@ function typeToShortString(t: import("../lowering/types.js").Type): string {
  *  uniquifies adjacent discards at the same call site so a
  *  `[~, ~] = foo()` doesn't collide on one name. */
 function discardSlotName(slotIdx: number): string {
-  return `_mtoc2_discard_${slotIdx}`;
+  return `_jit_discard_${slotIdx}`;
 }

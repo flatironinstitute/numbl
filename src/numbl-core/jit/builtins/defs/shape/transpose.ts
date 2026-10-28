@@ -73,7 +73,7 @@ export const transpose: Builtin = {
       throw new UnsupportedConstruct(
         `transpose requires a 2-D operand (got ${a.dims.length}-D); ` +
           `use 'permute' for higher-rank reorderings ` +
-          `(numbl flattens trailing dims into cols; mtoc2 follows MATLAB and rejects)`
+          `(numbl flattens trailing dims into cols; the JIT follows MATLAB and rejects)`
       );
     }
 
@@ -111,25 +111,25 @@ export const transpose: Builtin = {
     return [r];
   },
   emitC({ argsC, argTypes, useRuntime }) {
-    useRuntime("mtoc2_tensor_transpose");
-    useRuntime("mtoc2_tensor_transpose_complex");
+    useRuntime("jit_tensor_transpose");
+    useRuntime("jit_tensor_transpose_complex");
     const a = argTypes[0] as NumericType;
     if (!isMultiElement(a)) {
       return argsC[0];
     }
     if (a.isComplex) {
-      return `mtoc2_tensor_transpose_complex(${argsC[0]})`;
+      return `jit_tensor_transpose_complex(${argsC[0]})`;
     }
-    return `mtoc2_tensor_transpose(${argsC[0]})`;
+    return `jit_tensor_transpose(${argsC[0]})`;
   },
   emitJs({ argsJs, argTypes, useRuntime }) {
     const a = argTypes[0] as NumericType;
     if (!isMultiElement(a)) return argsJs[0];
     if (a.isComplex) {
-      useRuntime("mtoc2_tensor_transpose_complex");
-      return `mtoc2_tensor_transpose_complex(${argsJs[0]})`;
+      useRuntime("jit_tensor_transpose_complex");
+      return `jit_tensor_transpose_complex(${argsJs[0]})`;
     }
-    useRuntime("mtoc2_tensor_transpose");
-    return `mtoc2_tensor_transpose(${argsJs[0]})`;
+    useRuntime("jit_tensor_transpose");
+    return `jit_tensor_transpose(${argsJs[0]})`;
   },
 };

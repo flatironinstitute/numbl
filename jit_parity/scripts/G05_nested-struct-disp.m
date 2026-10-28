@@ -4,7 +4,7 @@
 %   (no extra newline) -> "    p:     a: 1 / b: 2 / q: 9".
 % opt1 (JS-JIT): inserts a stray newline after "p:" before the nested body;
 %   a cell-valued field additionally leaks the raw cell wrapper internals
-%   (mtoc2Tag/shape/data...)   <-- DIVERGES
+%   (jitTag/shape/data...)   <-- DIVERGES
 % opt2 (C-JIT):  inserts the same stray newline after "p:"  <-- DIVERGES
 % DIVERGING MODE: opt1 and opt2.
 %

@@ -1,14 +1,14 @@
 // JS sibling of `tensor_mtimes_real.h`. Real 2-D matrix
 // multiplication A * B. Column-major in, column-major out.
-// `mtoc2_tensor_mtimes_real_scalar` mirrors the C 1×k * k×1
+// `jit_tensor_mtimes_real_scalar` mirrors the C 1×k * k×1
 // inner-product path that returns a bare number instead of a
 // freshly-allocated 1×1 tensor.
 
-import { mtoc2_tensor_alloc } from "../tensor/tensor_alloc.js";
+import { jit_tensor_alloc } from "../tensor/tensor_alloc.js";
 
-export function mtoc2_tensor_mtimes_real(a, b) {
+export function jit_tensor_mtimes_real(a, b) {
   if (a.shape.length !== 2 || b.shape.length !== 2) {
-    throw new Error("mtoc2_tensor_mtimes_real: inputs must be 2-D");
+    throw new Error("jit_tensor_mtimes_real: inputs must be 2-D");
   }
   const m = a.shape[0];
   const k = a.shape[1];
@@ -16,7 +16,7 @@ export function mtoc2_tensor_mtimes_real(a, b) {
   const n = b.shape[1];
   if (k !== k2) {
     throw new Error(
-      `mtoc2_tensor_mtimes_real: inner dimensions disagree (${k} vs ${k2})`
+      `jit_tensor_mtimes_real: inner dimensions disagree (${k} vs ${k2})`
     );
   }
   // Optional WASM LAPACK accelerator. When a host installs `$matmulAccel`
@@ -26,12 +26,12 @@ export function mtoc2_tensor_mtimes_real(a, b) {
   if (typeof $matmulAccel === "function") {
     const accel = $matmulAccel(a.data, m, k, b.data, n);
     if (accel) {
-      const acc = mtoc2_tensor_alloc(m, n);
+      const acc = jit_tensor_alloc(m, n);
       acc.data.set(accel);
       return acc;
     }
   }
-  const r = mtoc2_tensor_alloc(m, n);
+  const r = jit_tensor_alloc(m, n);
   for (let j = 0; j < n; j++) {
     for (let i = 0; i < m; i++) {
       let s = 0;
@@ -44,9 +44,9 @@ export function mtoc2_tensor_mtimes_real(a, b) {
   return r;
 }
 
-export function mtoc2_tensor_mtimes_real_scalar(a, b) {
+export function jit_tensor_mtimes_real_scalar(a, b) {
   if (a.shape.length !== 2 || b.shape.length !== 2) {
-    throw new Error("mtoc2_tensor_mtimes_real_scalar: inputs must be 2-D");
+    throw new Error("jit_tensor_mtimes_real_scalar: inputs must be 2-D");
   }
   // The translate-time type system has already proven a is 1×k and b
   // is k×1; this helper trusts that and just runs the inner product.

@@ -29,7 +29,7 @@
  * `lowerer.specializations` (not just the entry spec), because the
  * entry spec's body references its transitively-called specs by their
  * mangled cNames. Dead specs from prior compileSpec calls are bounded
- * by `MTOC2_MAX_SPECS_PER_FUNCTION` and don't affect correctness; if
+ * by `JIT_MAX_SPECS_PER_FUNCTION` and don't affect correctness; if
  * profiling shows the re-emit cost dominates, a future change can do
  * a reachability walk over the entry's IR body.
  */
@@ -134,7 +134,7 @@ export function compileSpec(args: CompileSpecArgs): CompileSpecResult {
 
 /** Bare expression statements with a non-Void value (e.g. `sin(i);`)
  *  are dialect-bound: numbl assigns each such value to the host-level
- *  `ans` variable. mtoc2 has no `ans` protocol with its hosts, so any
+ *  `ans` variable. The JIT has no `ans` protocol with its hosts, so any
  *  emitted spec that contains such a statement would silently fail to
  *  update `ans` and produce wrong output for callers that read it
  *  later. Decline the spec instead — numbl's executor will catch the

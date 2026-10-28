@@ -195,7 +195,7 @@ export function broadcastFoldExact(
 /** Build a real elementwise binary builtin: scalar, scalar+tensor,
  *  tensor+scalar, tensor+tensor. Folds when every input is exact.
  *  `helperBase` names the matching set of C runtime helpers
- *  (mtoc2_tensor_<helperBase>_tt / _ts / _st). Commutative ops set
+ *  (jit_tensor_<helperBase>_tt / _ts / _st). Commutative ops set
  *  `commutative=true` so the scalar-first path reuses `_ts` with
  *  swapped operands.
  *
@@ -204,9 +204,9 @@ export function broadcastFoldExact(
  *  | a       | b       | C output                                   |
  *  |---------|---------|--------------------------------------------|
  *  | scalar  | scalar  | `(argsC[0] cOp argsC[1])`                  |
- *  | tensor  | scalar  | `mtoc2_tensor_<helperBase>_ts(a, b)`       |
+ *  | tensor  | scalar  | `jit_tensor_<helperBase>_ts(a, b)`       |
  *  | scalar  | tensor  | commutative → `_ts(b, a)`; else `_st(a,b)` |
- *  | tensor  | tensor  | `mtoc2_tensor_<helperBase>_tt(a, b)`       |
+ *  | tensor  | tensor  | `jit_tensor_<helperBase>_tt(a, b)`       |
  *
  *  `complexFold` / `complexScalarExpr` / `complexRuntimeDeps` are
  *  optional; when set, a scalar+scalar op with at least one complex
@@ -228,10 +228,10 @@ export function defineElemwiseRealBinary(opts: {
   /** Scalar-complex C expression. Defaults to the same `(a cOp b)`
    *  infix as the real path — works for `+ - *` because C99 promotes
    *  real↔complex automatically. Divide overrides to route through
-   *  `mtoc2_cdiv(a, b)`. */
+   *  `jit_cdiv(a, b)`. */
   complexScalarExpr?: (aC: string, bC: string) => string;
   /** Extra runtime snippet activations needed by the complex scalar
-   *  path (e.g. `mtoc2_cdiv` for division). The real-only `_real`
+   *  path (e.g. `jit_cdiv` for division). The real-only `_real`
    *  helper still activates unconditionally for the tensor path. */
   complexRuntimeDeps?: string[];
 }): Builtin {
@@ -239,19 +239,19 @@ export function defineElemwiseRealBinary(opts: {
   // `cscalar.h` instead of relying on C99 operator overloading on
   // `_Complex` operands. This keeps the C and JS emission parallel
   // (JS ships matching `{re, im}` helpers). The C compiler inlines
-  // `mtoc2_c*` back to the same instructions C99 would have
+  // `jit_c*` back to the same instructions C99 would have
   // generated, so there's no cost.
   const defaultComplexHelper: Record<string, string | undefined> = {
-    "+": "mtoc2_cadd",
-    "-": "mtoc2_csub",
+    "+": "jit_cadd",
+    "-": "jit_csub",
     // MATLAB's mixed real/complex rule, not the plain complex product.
-    "*": "mtoc2_cmul_mixed",
+    "*": "jit_cmul_mixed",
   };
   const helperName = defaultComplexHelper[opts.cOp];
   const defaultComplexScalarExpr = helperName
     ? (a: string, b: string) => `${helperName}(${a}, ${b})`
     : (a: string, b: string) => `(${a} ${opts.cOp} ${b})`;
-  const defaultComplexDeps = helperName ? ["mtoc2_cscalar"] : [];
+  const defaultComplexDeps = helperName ? ["jit_cscalar"] : [];
   return buildElemwiseRealBinary({
     name: opts.name,
     helperBase: opts.helperBase,
@@ -259,7 +259,7 @@ export function defineElemwiseRealBinary(opts: {
     fold: opts.fold,
     signRule: opts.signRule,
     scalarExpr: (a, b) => `(${a} ${opts.cOp} ${b})`,
-    runtimeDep: "mtoc2_tensor_elemwise_real",
+    runtimeDep: "jit_tensor_elemwise_real",
     complexFold: opts.complexFold,
     complexScalarExpr: opts.complexScalarExpr ?? defaultComplexScalarExpr,
     complexRuntimeDeps: opts.complexRuntimeDeps ?? defaultComplexDeps,
@@ -270,7 +270,7 @@ export function defineElemwiseRealBinary(opts: {
  *  function call (`fmod(a,b)`, `atan2(a,b)`, …) instead of an infix
  *  operator. The tensor helpers still follow the `_tt`/`_ts`/`_st`
  *  naming convention; supply the appropriate `runtimeDep` for the
- *  snippet that defines them (`mtoc2_tensor_elemwise_real_fn`
+ *  snippet that defines them (`jit_tensor_elemwise_real_fn`
  *  covers `mod`/`rem`/`atan2`/`hypot`). */
 export function defineElemwiseRealBinaryFn(opts: {
   name: string;
@@ -287,12 +287,12 @@ export function defineElemwiseRealBinaryFn(opts: {
    *  `mod`/`rem`, etc. */
   jsScalarExpr?: (aJs: string, bJs: string) => string;
 }): Builtin {
-  // When the scalar `cFn` is a mtoc2_-prefixed helper (e.g.
-  // `mtoc2_mod_real`), the scalar emit needs to activate the runtime
+  // When the scalar `cFn` is a jit_-prefixed helper (e.g.
+  // `jit_mod_real`), the scalar emit needs to activate the runtime
   // snippet that defines it — even when no tensor path uses it.
   // libc functions (`fmod`, `atan2`, `hypot`, …) are declared via
   // `<math.h>` and don't need activation.
-  const scalarRuntimeDep = opts.cFn.startsWith("mtoc2_")
+  const scalarRuntimeDep = opts.cFn.startsWith("jit_")
     ? opts.runtimeDep
     : undefined;
   return buildElemwiseRealBinary({
@@ -320,12 +320,12 @@ function buildElemwiseRealBinary(opts: {
   /** Optional JS scalar form (for `emitJs`). When omitted, the
    *  factory uses `scalarExpr` — which is correct only when the C
    *  expression is also valid JS (i.e. infix `+`/`-`/`*`/`/`). The
-   *  function-call forms (`atan2`, `hypot`, `fmod`, mtoc2's custom
+   *  function-call forms (`atan2`, `hypot`, `fmod`, the JIT's custom
    *  mod) must supply this. */
   jsScalarExpr?: (aJs: string, bJs: string) => string;
   runtimeDep: string;
   /** Runtime snippet to activate when emitting the C scalar form.
-   *  Used when `scalarExpr` calls a mtoc2_-prefixed helper that lives
+   *  Used when `scalarExpr` calls a jit_-prefixed helper that lives
    *  in the same snippet as the tensor helpers. Without this, the
    *  scalar path emits a call to an undeclared function. */
   scalarRuntimeDep?: string;
@@ -470,14 +470,14 @@ function buildElemwiseRealBinary(opts: {
         // Tensor + scalar / scalar + tensor with at least one
         // complex operand. The runtime helpers take a `double _Complex`
         // for the scalar slot; project a real scalar to that via
-        // `mtoc2_cmake(re, 0.0)` at emit. The receiver tensor is
+        // `jit_cmake(re, 0.0)` at emit. The receiver tensor is
         // already complex (we reject mixed real-tensor + complex-
         // tensor at the transfer layer).
-        useRuntime("mtoc2_tensor_elemwise_complex");
-        useRuntime("mtoc2_cscalar");
-        const base = `mtoc2_tensor_${helperBase}_complex`;
+        useRuntime("jit_tensor_elemwise_complex");
+        useRuntime("jit_cscalar");
+        const base = `jit_tensor_${helperBase}_complex`;
         const promote = (c: string, isComplexArg: boolean): string =>
-          isComplexArg ? c : `mtoc2_cmake(${c}, 0.0)`;
+          isComplexArg ? c : `jit_cmake(${c}, 0.0)`;
         if (aMulti && bMulti) {
           return needsBroadcast(aN, bN)
             ? `${base}_bcast_tt(${argsC[0]}, ${argsC[1]})`
@@ -494,17 +494,17 @@ function buildElemwiseRealBinary(opts: {
       }
       if (aMulti && bMulti) {
         return needsBroadcast(aN, bN)
-          ? `mtoc2_tensor_${helperBase}_bcast_tt(${argsC[0]}, ${argsC[1]})`
-          : `mtoc2_tensor_${helperBase}_tt(${argsC[0]}, ${argsC[1]})`;
+          ? `jit_tensor_${helperBase}_bcast_tt(${argsC[0]}, ${argsC[1]})`
+          : `jit_tensor_${helperBase}_tt(${argsC[0]}, ${argsC[1]})`;
       }
       if (aMulti) {
-        return `mtoc2_tensor_${helperBase}_ts(${argsC[0]}, ${argsC[1]})`;
+        return `jit_tensor_${helperBase}_ts(${argsC[0]}, ${argsC[1]})`;
       }
       // scalar OP tensor
       if (commutative) {
-        return `mtoc2_tensor_${helperBase}_ts(${argsC[1]}, ${argsC[0]})`;
+        return `jit_tensor_${helperBase}_ts(${argsC[1]}, ${argsC[0]})`;
       }
-      return `mtoc2_tensor_${helperBase}_st(${argsC[0]}, ${argsC[1]})`;
+      return `jit_tensor_${helperBase}_st(${argsC[0]}, ${argsC[1]})`;
     },
     emitJs({ argsJs, argTypes, useRuntime }) {
       const aN = argTypes[0] as NumericType;
@@ -527,9 +527,9 @@ function buildElemwiseRealBinary(opts: {
           // form at the call site. The C path passes plain doubles
           // and lets the C compiler do the cast; here we do it
           // explicitly so the helper sees {re,im} on both sides.
-          useRuntime("mtoc2_cscalar");
+          useRuntime("jit_cscalar");
           const promote = (j: string, isComplexArg: boolean): string =>
-            isComplexArg ? j : `mtoc2_cmake(${j}, 0.0)`;
+            isComplexArg ? j : `jit_cmake(${j}, 0.0)`;
           return complexScalarExpr(
             promote(argsJs[0], aN.isComplex),
             promote(argsJs[1], bN.isComplex)
@@ -548,11 +548,11 @@ function buildElemwiseRealBinary(opts: {
       // rem/power route through `tensor_elemwise_real_fn`.
       useRuntime(runtimeDep);
       if (anyComplex) {
-        useRuntime("mtoc2_tensor_elemwise_complex");
-        useRuntime("mtoc2_cscalar");
-        const base = `mtoc2_tensor_${helperBase}_complex`;
+        useRuntime("jit_tensor_elemwise_complex");
+        useRuntime("jit_cscalar");
+        const base = `jit_tensor_${helperBase}_complex`;
         const promote = (j: string, isComplexArg: boolean): string =>
-          isComplexArg ? j : `mtoc2_cmake(${j}, 0.0)`;
+          isComplexArg ? j : `jit_cmake(${j}, 0.0)`;
         if (aMulti && bMulti) {
           return needsBroadcast(aN, bN)
             ? `${base}_bcast_tt(${argsJs[0]}, ${argsJs[1]})`
@@ -569,17 +569,17 @@ function buildElemwiseRealBinary(opts: {
       }
       if (aMulti && bMulti) {
         if (needsBroadcast(aN, bN)) {
-          return `mtoc2_tensor_${helperBase}_bcast_tt(${argsJs[0]}, ${argsJs[1]})`;
+          return `jit_tensor_${helperBase}_bcast_tt(${argsJs[0]}, ${argsJs[1]})`;
         }
-        return `mtoc2_tensor_${helperBase}_tt(${argsJs[0]}, ${argsJs[1]})`;
+        return `jit_tensor_${helperBase}_tt(${argsJs[0]}, ${argsJs[1]})`;
       }
       if (aMulti) {
-        return `mtoc2_tensor_${helperBase}_ts(${argsJs[0]}, ${argsJs[1]})`;
+        return `jit_tensor_${helperBase}_ts(${argsJs[0]}, ${argsJs[1]})`;
       }
       if (commutative) {
-        return `mtoc2_tensor_${helperBase}_ts(${argsJs[1]}, ${argsJs[0]})`;
+        return `jit_tensor_${helperBase}_ts(${argsJs[1]}, ${argsJs[0]})`;
       }
-      return `mtoc2_tensor_${helperBase}_st(${argsJs[0]}, ${argsJs[1]})`;
+      return `jit_tensor_${helperBase}_st(${argsJs[0]}, ${argsJs[1]})`;
     },
     elementwise: true,
   };

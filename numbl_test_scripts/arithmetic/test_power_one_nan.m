@@ -2,7 +2,7 @@
 % and JS-JIT use Math.pow (NaN for |base|==1 with a non-finite exponent),
 % but the C-JIT emitted bare C99 pow, which returns 1 there — so --opt 2
 % silently disagreed. The fix routes the scalar real power and the tensor
-% power kernels through a `mtoc2_pow_real` helper that matches Math.pow.
+% power kernels through a `jit_pow_real` helper that matches Math.pow.
 assert(isnan(1 .^ NaN), '1 .^ NaN should be NaN');
 assert(isnan((-1) .^ NaN), '(-1) .^ NaN should be NaN');
 

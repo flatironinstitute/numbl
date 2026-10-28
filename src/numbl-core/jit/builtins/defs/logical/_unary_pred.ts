@@ -6,10 +6,10 @@
  *
  * The per-element rule is supplied two ways:
  *  - real path: `cScalar` / `jsScalar` text + `jsFn` (compile fold,
- *    interpreter); real tensor uses `tensorHelper` (`mtoc2_tensor_*`).
+ *    interpreter); real tensor uses `tensorHelper` (`jit_tensor_*`).
  *  - complex path (optional): `cScalarComplex` / `jsScalarComplex`
  *    text + `jsFnComplex`; complex tensor uses
- *    `tensorHelperComplex` (`mtoc2_tensor_*_complex`).
+ *    `tensorHelperComplex` (`jit_tensor_*_complex`).
  *
  * When `complex` is omitted, complex inputs are rejected by
  * `requireRealDouble`. Per the project rule (CLAUDE.md), new
@@ -134,9 +134,9 @@ export function defineUnaryPred(opts: UnaryPredOpts): Builtin {
     emitC({ argsC, argTypes, useRuntime }) {
       const a = argTypes[0] as NumericType;
       if (a.isComplex) {
-        useRuntime("mtoc2_cscalar");
+        useRuntime("jit_cscalar");
         if (isMultiElement(a)) {
-          useRuntime("mtoc2_tensor_predicate");
+          useRuntime("jit_tensor_predicate");
           return `${complex!.tensorHelperComplex}(${argsC[0]})`;
         }
         const re = `creal(${argsC[0]})`;
@@ -145,7 +145,7 @@ export function defineUnaryPred(opts: UnaryPredOpts): Builtin {
       }
       if (isMultiElement(a)) {
         useRuntime(tensorHelper);
-        return `mtoc2_tensor_${name}(${argsC[0]})`;
+        return `jit_tensor_${name}(${argsC[0]})`;
       }
       return cScalar(argsC[0]);
     },
@@ -153,7 +153,7 @@ export function defineUnaryPred(opts: UnaryPredOpts): Builtin {
       const a = argTypes[0] as NumericType;
       if (a.isComplex) {
         if (isMultiElement(a)) {
-          useRuntime("mtoc2_tensor_predicate");
+          useRuntime("jit_tensor_predicate");
           return `${complex!.tensorHelperComplex}(${argsJs[0]})`;
         }
         // Scalar complex: `{re, im}` shape. Result is a bare JS bool.
@@ -161,7 +161,7 @@ export function defineUnaryPred(opts: UnaryPredOpts): Builtin {
       }
       if (isMultiElement(a)) {
         useRuntime(tensorHelper);
-        return `mtoc2_tensor_${name}(${argsJs[0]})`;
+        return `jit_tensor_${name}(${argsJs[0]})`;
       }
       // A logical scalar is a JS boolean; coerce to a number so the
       // numeric test (Number.isFinite, Math.abs, …) sees 0/1 rather

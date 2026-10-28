@@ -95,41 +95,41 @@ export const disp: Builtin = {
   emitJs({ argsJs, argTypes, useRuntime }) {
     const t = argTypes[0];
     if (isNumeric(t) && t.isComplex && isScalar(t)) {
-      useRuntime("mtoc2_disp_complex");
-      return `mtoc2_disp_complex(${argsJs[0]})`;
+      useRuntime("jit_disp_complex");
+      return `jit_disp_complex(${argsJs[0]})`;
     }
     if (isNumeric(t) && t.isComplex && !isScalar(t)) {
-      useRuntime("mtoc2_disp_tensor_complex");
-      return `mtoc2_disp_tensor_complex(${argsJs[0]})`;
+      useRuntime("jit_disp_tensor_complex");
+      return `jit_disp_tensor_complex(${argsJs[0]})`;
     }
     if (isNumeric(t) && !t.isComplex && isScalar(t)) {
-      useRuntime("mtoc2_disp_double");
+      useRuntime("jit_disp_double");
       // Scalar logical is a JS boolean; coerce to 0/1 before
       // formatting (MATLAB / numbl disp logical as "0" / "1").
       const arg = t.elem === "logical" ? `(${argsJs[0]} ? 1 : 0)` : argsJs[0];
-      return `mtoc2_disp_double(${arg})`;
+      return `jit_disp_double(${arg})`;
     }
     if (isNumeric(t) && !t.isComplex && !isScalar(t)) {
-      useRuntime("mtoc2_disp_tensor");
-      return `mtoc2_disp_tensor(${argsJs[0]})`;
+      useRuntime("jit_disp_tensor");
+      return `jit_disp_tensor(${argsJs[0]})`;
     }
     if (t.kind === "String") {
       // String runtime value is a JS string; print + newline.
       return `($write(${argsJs[0]} + "\\n"))`;
     }
     if (t.kind === "Char") {
-      // Char runtime value is `{mtoc2Tag:"char",value}`; print value + newline.
+      // Char runtime value is `{jitTag:"char",value}`; print value + newline.
       return `($write(${argsJs[0]}.value + "\\n"))`;
     }
     if (t.kind === "Struct") {
-      useRuntime("mtoc2_disp_struct");
-      return `mtoc2_disp_struct(${argsJs[0]})`;
+      useRuntime("jit_disp_struct");
+      return `jit_disp_struct(${argsJs[0]})`;
     }
     if (isCell(t)) {
-      // Format via `mtoc2_format_cell` and print with a trailing
+      // Format via `jit_format_cell` and print with a trailing
       // newline, matching numbl's `disp(c) = displayValue(c) + '\n'`.
-      useRuntime("mtoc2_format_cell");
-      return `($write(mtoc2_format_cell(${argsJs[0]}) + "\\n"))`;
+      useRuntime("jit_format_cell");
+      return `($write(jit_format_cell(${argsJs[0]}) + "\\n"))`;
     }
     throw new UnsupportedConstruct(
       `'disp' emitJs for arg kind '${t.kind}' is not yet wired`

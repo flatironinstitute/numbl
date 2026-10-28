@@ -1,8 +1,8 @@
 // JS sibling of `cdiv.h`. Scalar complex division matching numbl's
 // signed-Inf-on-zero-divisor behavior via Smith's algorithm. Mirrors
-// the C side so cross-runner output stays byte-for-byte.
+// the C side so output stays byte-for-byte.
 
-export function mtoc2_cdiv(a, b) {
+export function jit_cdiv(a, b) {
   const ar = a.re,
     ai = a.im;
   const br = b.re,
@@ -26,10 +26,10 @@ export function mtoc2_cdiv(a, b) {
 }
 
 // Scalar `/` with MATLAB's mixed real/complex rule (see `cdiv.h`).
-export function mtoc2_cdiv_mixed(a, b) {
+export function jit_cdiv_mixed(a, b) {
   if (b.im === 0) {
     if (a.im === 0) return { re: a.re / b.re, im: 0 };
     return { re: a.re === 0 ? 0 : a.re / b.re, im: a.im / b.re };
   }
-  return mtoc2_cdiv(a.im === 0 ? { re: a.re, im: 0 } : a, b);
+  return jit_cdiv(a.im === 0 ? { re: a.re, im: 0 } : a, b);
 }

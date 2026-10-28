@@ -10,11 +10,11 @@ export const isnan = defineUnaryPred({
   cScalar: arg => `isnan(${arg})`,
   jsScalar: arg => `Number.isNaN(${arg})`,
   jsFn: Number.isNaN,
-  tensorHelper: "mtoc2_tensor_predicate",
+  tensorHelper: "jit_tensor_predicate",
   complex: {
     cScalarComplex: (re, im) => `isnan(${re}) || isnan(${im})`,
     jsScalarComplex: (re, im) => `Number.isNaN(${re}) || Number.isNaN(${im})`,
     jsFnComplex: (re, im) => Number.isNaN(re) || Number.isNaN(im),
-    tensorHelperComplex: "mtoc2_tensor_isnan_complex",
+    tensorHelperComplex: "jit_tensor_isnan_complex",
   },
 });

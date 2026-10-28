@@ -14,7 +14,7 @@
  *       - `norm(v, 'inf')`          = `+Inf` (case-insensitive)
  *   - Matrix / N-D tensor: not yet supported (numbl uses LAPACK SVD
  *     for the matrix 2-norm; the other matrix orders are
- *     finite-sum but need a per-axis walk that mtoc2's runtime
+ *     finite-sum but need a per-axis walk that the JIT's runtime
  *     doesn't expose yet).
  *
  * Result type is always real scalar `nonneg`.
@@ -223,40 +223,40 @@ export const norm: Builtin = {
   },
   emitC({ argsC, argTypes, useRuntime }) {
     const a = argTypes[0] as NumericType;
-    useRuntime("mtoc2_cscalar");
+    useRuntime("jit_cscalar");
     if (isMultiElement(a)) {
-      useRuntime("mtoc2_tensor_norm");
+      useRuntime("jit_tensor_norm");
       const p = resolveP(argTypes);
       if (p === 2 && argTypes.length < 2) {
         return a.isComplex
-          ? `mtoc2_norm2_complex(${argsC[0]})`
-          : `mtoc2_norm2_real(${argsC[0]})`;
+          ? `jit_norm2_complex(${argsC[0]})`
+          : `jit_norm2_real(${argsC[0]})`;
       }
       const pC = p !== undefined ? pAsC(p) : `(double)(${argsC[1]})`;
       return a.isComplex
-        ? `mtoc2_norm_p_complex(${argsC[0]}, ${pC})`
-        : `mtoc2_norm_p_real(${argsC[0]}, ${pC})`;
+        ? `jit_norm_p_complex(${argsC[0]}, ${pC})`
+        : `jit_norm_p_real(${argsC[0]}, ${pC})`;
     }
-    return a.isComplex ? `mtoc2_cabs(${argsC[0]})` : `fabs(${argsC[0]})`;
+    return a.isComplex ? `jit_cabs(${argsC[0]})` : `fabs(${argsC[0]})`;
   },
   emitJs({ argsJs, argTypes, useRuntime }) {
     const a = argTypes[0] as NumericType;
     if (isMultiElement(a)) {
-      useRuntime("mtoc2_tensor_norm");
+      useRuntime("jit_tensor_norm");
       const p = resolveP(argTypes);
       if (p === 2 && argTypes.length < 2) {
         return a.isComplex
-          ? `mtoc2_norm2_complex(${argsJs[0]})`
-          : `mtoc2_norm2_real(${argsJs[0]})`;
+          ? `jit_norm2_complex(${argsJs[0]})`
+          : `jit_norm2_real(${argsJs[0]})`;
       }
       const pJs = p !== undefined ? pAsJs(p) : argsJs[1];
       return a.isComplex
-        ? `mtoc2_norm_p_complex(${argsJs[0]}, ${pJs})`
-        : `mtoc2_norm_p_real(${argsJs[0]}, ${pJs})`;
+        ? `jit_norm_p_complex(${argsJs[0]}, ${pJs})`
+        : `jit_norm_p_real(${argsJs[0]}, ${pJs})`;
     }
     if (a.isComplex) {
-      useRuntime("mtoc2_cscalar");
-      return `mtoc2_cabs(${argsJs[0]})`;
+      useRuntime("jit_cscalar");
+      return `jit_cabs(${argsJs[0]})`;
     }
     return `Math.abs(${argsJs[0]})`;
   },

@@ -2,7 +2,7 @@
 //
 // 1. Host hook mode (numbl JIT bridge): when the host binds a
 //    `$plotDispatch(name, args)` callback into the emit's `$h`
-//    helpers, the helper forwards the raw mtoc2-shaped args to the
+//    helpers, the helper forwards the raw JIT-shaped args to the
 //    host. The host is expected to translate the args into its own
 //    runtime value shape and route them into its plot pipeline
 //    (numbl: `dispatchPlotBuiltin` into `rt.plotInstructions`).
@@ -11,13 +11,12 @@
 //    host operates in-process and consumes the same value graph the
 //    emitted code already holds.
 //
-// 2. Wire-format mode (standalone AOT / viewer tee): when no host
-//    hook is present, fall back to the RS-prefixed JSON record on
-//    stdout that the launcher splits and forwards. Same shape the C
+// 2. Wire-format mode: when no host hook is present, fall back to
+//    the RS-prefixed JSON record on stdout. Same shape the C
 //    sibling emits, so a single viewer parses both backends.
 //
 // Wire shape per call (mode 2):
-//   \x1e mtoc2:plot \t {"call":"<name>","args":[<arg>, ...]} \n
+//   \x1e jit:plot \t {"call":"<name>","args":[<arg>, ...]} \n
 //
 // Arg encoding (per source-level arg):
 //   number → bare numeric (non-finite → null, matching the C side
@@ -28,10 +27,10 @@
 //            flatten; non-finite as null)
 
 function isTensor(v) {
-  return typeof v === "object" && v !== null && v.mtoc2Tag === "tensor";
+  return typeof v === "object" && v !== null && v.jitTag === "tensor";
 }
 function isChar(v) {
-  return typeof v === "object" && v !== null && v.mtoc2Tag === "char";
+  return typeof v === "object" && v !== null && v.jitTag === "char";
 }
 
 function encodeArg(v) {
@@ -54,11 +53,11 @@ function encodeArg(v) {
   return String(v);
 }
 
-export function mtoc2_plot_dispatch(name, ...args) {
+export function jit_plot_dispatch(name, ...args) {
   if (typeof $plotDispatch === "function") {
     $plotDispatch(name, args);
     return;
   }
   const record = { call: name, args: args.map(encodeArg) };
-  $write("\x1emtoc2:plot\t" + JSON.stringify(record) + "\n");
+  $write("\x1ejit:plot\t" + JSON.stringify(record) + "\n");
 }

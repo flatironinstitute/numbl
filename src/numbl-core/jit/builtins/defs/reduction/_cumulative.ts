@@ -43,7 +43,7 @@ import {
 
 export interface CumulativeSpec {
   /** Source-level builtin name (also the runtime helper suffix:
-   *  `mtoc2_tensor_<name>_dim`). */
+   *  `jit_tensor_<name>_dim`). */
   name: string;
   /** Identity seed (`0` for cumsum, `1` for cumprod). */
   init: number;
@@ -321,19 +321,19 @@ export function defineCumulative(spec: CumulativeSpec): Builtin {
         // input was logical-typed (stored as double anyway).
         return `(${argsC[0]})`;
       }
-      useRuntime("mtoc2_tensor_cumulative");
+      useRuntime("jit_tensor_cumulative");
       const dim = resolveCodegenDim(spec.name, argTypes, ty);
       const suffix = ty.isComplex ? "_complex_dim" : "_dim";
-      return `mtoc2_tensor_${spec.name}${suffix}(${argsC[0]}, ${dim})`;
+      return `jit_tensor_${spec.name}${suffix}(${argsC[0]}, ${dim})`;
     },
 
     emitJs({ argsJs, argTypes, useRuntime }) {
       const ty = argTypes[0] as NumericType;
       if (isScalar(ty)) return argsJs[0];
-      useRuntime("mtoc2_tensor_cumulative");
+      useRuntime("jit_tensor_cumulative");
       const dim = resolveCodegenDim(spec.name, argTypes, ty);
       const suffix = ty.isComplex ? "_complex_dim" : "_dim";
-      return `mtoc2_tensor_${spec.name}${suffix}(${argsJs[0]}, ${dim})`;
+      return `jit_tensor_${spec.name}${suffix}(${argsJs[0]}, ${dim})`;
     },
   };
 }

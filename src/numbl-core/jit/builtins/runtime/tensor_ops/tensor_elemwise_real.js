@@ -12,7 +12,7 @@
 // large work runs as SIMD C and matches --opt 0. Below it the per-call
 // overhead outweighs the JS loop.
 
-import { mtoc2_tensor_alloc_nd } from "../tensor/tensor_alloc_nd.js";
+import { jit_tensor_alloc_nd } from "../tensor/tensor_alloc_nd.js";
 
 const EW_HOST_MIN = 1024;
 
@@ -21,12 +21,12 @@ function ew_host(n) {
 }
 
 function ew_alloc_like(a) {
-  return mtoc2_tensor_alloc_nd(a.shape.length, a.shape);
+  return jit_tensor_alloc_nd(a.shape.length, a.shape);
 }
 
 // uminus on a tensor — separate signature (unary). Kept here because
 // the C side groups it with the elemwise file.
-export function mtoc2_tensor_uminus(a) {
+export function jit_tensor_uminus(a) {
   const r = ew_alloc_like(a);
   const x = a.data;
   const o = r.data;
@@ -60,7 +60,7 @@ function bcast_kernel(a, b, fn) {
     // (mirrors the C twin's (adim==1)?bdim:adim).
     outShape[i] = ashape[i] === 1 ? bshape[i] : ashape[i];
   }
-  const r = mtoc2_tensor_alloc_nd(ndim, outShape);
+  const r = jit_tensor_alloc_nd(ndim, outShape);
   // Column-major strides for each operand. A singleton axis gets a
   // stride of 0 so its index "doesn't move".
   const aStrides = new Array(ndim);
@@ -104,7 +104,7 @@ const opRdivide = (x, y) => x / y;
 // shapes match (unknown dims), so the shapes are re-checked at runtime: a
 // mismatch defers to the broadcast kernel, which broadcasts compatible
 // shapes and errors on incompatible ones (instead of reading past `b`).
-export function mtoc2_tensor_plus_tt(a, b) {
+export function jit_tensor_plus_tt(a, b) {
   if (!shapes_equal(a.shape, b.shape)) return bcast_kernel(a, b, opPlus);
   const r = ew_alloc_like(a);
   const x = a.data;
@@ -115,7 +115,7 @@ export function mtoc2_tensor_plus_tt(a, b) {
   else for (let i = 0; i < o.length; i++) o[i] = x[i] + y[i];
   return r;
 }
-export function mtoc2_tensor_minus_tt(a, b) {
+export function jit_tensor_minus_tt(a, b) {
   if (!shapes_equal(a.shape, b.shape)) return bcast_kernel(a, b, opMinus);
   const r = ew_alloc_like(a);
   const x = a.data;
@@ -126,7 +126,7 @@ export function mtoc2_tensor_minus_tt(a, b) {
   else for (let i = 0; i < o.length; i++) o[i] = x[i] - y[i];
   return r;
 }
-export function mtoc2_tensor_times_tt(a, b) {
+export function jit_tensor_times_tt(a, b) {
   if (!shapes_equal(a.shape, b.shape)) return bcast_kernel(a, b, opTimes);
   const r = ew_alloc_like(a);
   const x = a.data;
@@ -137,7 +137,7 @@ export function mtoc2_tensor_times_tt(a, b) {
   else for (let i = 0; i < o.length; i++) o[i] = x[i] * y[i];
   return r;
 }
-export function mtoc2_tensor_rdivide_tt(a, b) {
+export function jit_tensor_rdivide_tt(a, b) {
   if (!shapes_equal(a.shape, b.shape)) return bcast_kernel(a, b, opRdivide);
   const r = ew_alloc_like(a);
   const x = a.data;
@@ -149,7 +149,7 @@ export function mtoc2_tensor_rdivide_tt(a, b) {
   return r;
 }
 
-export function mtoc2_tensor_plus_ts(a, s) {
+export function jit_tensor_plus_ts(a, s) {
   const r = ew_alloc_like(a);
   const x = a.data;
   const o = r.data;
@@ -158,7 +158,7 @@ export function mtoc2_tensor_plus_ts(a, s) {
   else for (let i = 0; i < o.length; i++) o[i] = x[i] + s;
   return r;
 }
-export function mtoc2_tensor_minus_ts(a, s) {
+export function jit_tensor_minus_ts(a, s) {
   const r = ew_alloc_like(a);
   const x = a.data;
   const o = r.data;
@@ -167,7 +167,7 @@ export function mtoc2_tensor_minus_ts(a, s) {
   else for (let i = 0; i < o.length; i++) o[i] = x[i] - s;
   return r;
 }
-export function mtoc2_tensor_times_ts(a, s) {
+export function jit_tensor_times_ts(a, s) {
   const r = ew_alloc_like(a);
   const x = a.data;
   const o = r.data;
@@ -176,7 +176,7 @@ export function mtoc2_tensor_times_ts(a, s) {
   else for (let i = 0; i < o.length; i++) o[i] = x[i] * s;
   return r;
 }
-export function mtoc2_tensor_rdivide_ts(a, s) {
+export function jit_tensor_rdivide_ts(a, s) {
   const r = ew_alloc_like(a);
   const x = a.data;
   const o = r.data;
@@ -187,7 +187,7 @@ export function mtoc2_tensor_rdivide_ts(a, s) {
 }
 
 // Non-commutative ops also need scalar-OP-tensor.
-export function mtoc2_tensor_minus_st(s, a) {
+export function jit_tensor_minus_st(s, a) {
   const r = ew_alloc_like(a);
   const x = a.data;
   const o = r.data;
@@ -196,7 +196,7 @@ export function mtoc2_tensor_minus_st(s, a) {
   else for (let i = 0; i < o.length; i++) o[i] = s - x[i];
   return r;
 }
-export function mtoc2_tensor_rdivide_st(s, a) {
+export function jit_tensor_rdivide_st(s, a) {
   const r = ew_alloc_like(a);
   const x = a.data;
   const o = r.data;
@@ -206,15 +206,15 @@ export function mtoc2_tensor_rdivide_st(s, a) {
   return r;
 }
 
-export function mtoc2_tensor_plus_bcast_tt(a, b) {
+export function jit_tensor_plus_bcast_tt(a, b) {
   return bcast_kernel(a, b, opPlus);
 }
-export function mtoc2_tensor_minus_bcast_tt(a, b) {
+export function jit_tensor_minus_bcast_tt(a, b) {
   return bcast_kernel(a, b, opMinus);
 }
-export function mtoc2_tensor_times_bcast_tt(a, b) {
+export function jit_tensor_times_bcast_tt(a, b) {
   return bcast_kernel(a, b, opTimes);
 }
-export function mtoc2_tensor_rdivide_bcast_tt(a, b) {
+export function jit_tensor_rdivide_bcast_tt(a, b) {
   return bcast_kernel(a, b, opRdivide);
 }

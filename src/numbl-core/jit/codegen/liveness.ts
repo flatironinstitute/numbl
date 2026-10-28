@@ -8,11 +8,11 @@
  * Drives the "early free" emission in emit.ts: an owned `v` whose
  * last touch is statement `s` (i.e. `v` is in
  * `(uses ∪ defs)(s)` but NOT in `futureTouchOut(s)`) gets a
- * `mtoc2_tensor_free(&v)` immediately after `s`'s C output, rather
+ * `jit_tensor_free(&v)` immediately after `s`'s C output, rather
  * than waiting for scope exit.
  *
  * Why "touch" (uses ∪ defs) rather than standard liveness (uses with
- * kill on def)? Reassignment goes through `mtoc2_tensor_assign(&v,
+ * kill on def)? Reassignment goes through `jit_tensor_assign(&v,
  * ...)`, which already releases the prior buffer. If `v`'s next
  * interaction is a reassignment, an early-free at the previous use
  * would be redundant — better to let the assign helper handle it.
@@ -27,7 +27,7 @@
  * context for their target's future touches.
  *
  * Direct port of mtoc's `src/codegen/liveness.ts`, adapted for
- * mtoc2's simpler IR (no Disp/Error/Assert/Fprintf/MultiAssignCall/
+ * the JIT's simpler IR (no Disp/Error/Assert/Fprintf/MultiAssignCall/
  * IndexStore/etc. yet).
  */
 

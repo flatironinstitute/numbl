@@ -3,8 +3,8 @@
 // keeping the tie-break on ascending original index. Complex sort
 // orders by magnitude then phase (matches numbl).
 
-import { mtoc2_tensor_alloc_nd } from "../tensor/tensor_alloc_nd.js";
-import { mtoc2_tensor_alloc_nd_complex } from "../tensor/tensor_alloc_nd_complex.js";
+import { jit_tensor_alloc_nd } from "../tensor/tensor_alloc_nd.js";
+import { jit_tensor_alloc_nd_complex } from "../tensor/tensor_alloc_nd_complex.js";
 
 function pair_sort_indices(a, descending) {
   const n = a.data.length;
@@ -87,17 +87,17 @@ function complex_sort_indices(a, descending) {
   return idx;
 }
 
-export function mtoc2_sort_real(a, descending) {
-  const v = mtoc2_tensor_alloc_nd(a.shape.length, a.shape);
+export function jit_sort_real(a, descending) {
+  const v = jit_tensor_alloc_nd(a.shape.length, a.shape);
   if (a.data.length === 0) return v;
   const sorted = pair_sort_indices(a, descending);
   for (let i = 0; i < sorted.length; i++) v.data[i] = a.data[sorted[i]];
   return v;
 }
 
-export function mtoc2_sort_real_2(a, descending) {
-  const v = mtoc2_tensor_alloc_nd(a.shape.length, a.shape);
-  const ix = mtoc2_tensor_alloc_nd(a.shape.length, a.shape);
+export function jit_sort_real_2(a, descending) {
+  const v = jit_tensor_alloc_nd(a.shape.length, a.shape);
+  const ix = jit_tensor_alloc_nd(a.shape.length, a.shape);
   if (a.data.length === 0) return { v, ix };
   const sorted = pair_sort_indices(a, descending);
   for (let i = 0; i < sorted.length; i++) {
@@ -107,8 +107,8 @@ export function mtoc2_sort_real_2(a, descending) {
   return { v, ix };
 }
 
-export function mtoc2_sort_complex(a, descending) {
-  const v = mtoc2_tensor_alloc_nd_complex(a.shape.length, a.shape);
+export function jit_sort_complex(a, descending) {
+  const v = jit_tensor_alloc_nd_complex(a.shape.length, a.shape);
   if (a.data.length === 0) return v;
   const sorted = complex_sort_indices(a, descending);
   const im = a.imag;
@@ -119,9 +119,9 @@ export function mtoc2_sort_complex(a, descending) {
   return v;
 }
 
-export function mtoc2_sort_complex_2(a, descending) {
-  const v = mtoc2_tensor_alloc_nd_complex(a.shape.length, a.shape);
-  const ix = mtoc2_tensor_alloc_nd(a.shape.length, a.shape);
+export function jit_sort_complex_2(a, descending) {
+  const v = jit_tensor_alloc_nd_complex(a.shape.length, a.shape);
+  const ix = jit_tensor_alloc_nd(a.shape.length, a.shape);
   if (a.data.length === 0) return { v, ix };
   const sorted = complex_sort_indices(a, descending);
   const im = a.imag;

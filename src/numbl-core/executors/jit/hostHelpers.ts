@@ -1,13 +1,12 @@
 /**
- * Build the `$h` helpers object that mtoc2's emitted spec receives
- * when invoked via the numbl JIT bridge.
+ * Build the `$h` helpers object that JS-JIT emitted code receives.
  *
  *  - `write(s)` — output sink. Routed to `rt.output(...)` so `disp` /
  *    `fprintf` / `warning` etc. land in numbl's output stream.
  *  - `plotDispatch(name, args)` — host hook for plot builtins.
- *    mtoc2's emitted `mtoc2_plot_dispatch(...)` calls this in
- *    preference to the standalone-mode JSON-on-stdout wire format.
- *    We translate args from mtoc2's emit shape into `RuntimeValue`
+ *    The emitted `jit_plot_dispatch(...)` calls this in
+ *    preference to the JSON-on-stdout wire format.
+ *    We translate args from the emitted value shape into `RuntimeValue`
  *    via `jitToNumbl` and call numbl's `dispatchPlotBuiltin`,
  *    pushing the resulting instruction onto `rt.plotInstructions` —
  *    so `colorbar('off')` / `pcolor(...)` / etc. produce the same
@@ -19,7 +18,7 @@
  *    element-wise work runs as SIMD C rather than a scalar JS loop.
  *
  * The unknown-name fallthrough (when `dispatchPlotBuiltin` returns
- * false) is a programmer error: every name mtoc2's plot builtin
+ * false) is a programmer error: every name the JIT's plot builtin
  * registration covers is in `PLOT_ALL_NAMES`, which is sourced from
  * the same list `dispatchPlotBuiltin` switches on. Throw so the
  * mismatch is loud rather than silently dropping a side effect.
@@ -132,8 +131,8 @@ export function buildHostHelpers(rt: Runtime): JitHostHelpers {
       );
       if (!handled) {
         throw new Error(
-          `mtoc2 plot bridge: dispatchPlotBuiltin rejected '${name}' — ` +
-            `mtoc2's plot builtin set is out of sync with numbl's dispatch table`
+          `JIT plot bridge: dispatchPlotBuiltin rejected '${name}'; ` +
+            `the JIT's plot builtin set is out of sync with numbl's dispatch table`
         );
       }
     },
@@ -142,7 +141,7 @@ export function buildHostHelpers(rt: Runtime): JitHostHelpers {
 
 /** Prefix of a plot record that compiled C writes to its output (see
  *  `runtime/plot/plot_dispatch.h`). */
-const PLOT_RECORD_PREFIX = "\x1emtoc2:plot\t";
+const PLOT_RECORD_PREFIX = "\x1ejit:plot\t";
 
 /** Decode one argument of a C plot record. */
 function decodePlotArg(a: unknown): RuntimeValue {
@@ -156,7 +155,7 @@ function decodePlotArg(a: unknown): RuntimeValue {
     );
     return RTV.tensor(data, rec.dims ?? [1, data.length]);
   }
-  throw new Error(`mtoc2 plot bridge: unknown argument kind '${rec.kind}'`);
+  throw new Error(`JIT plot bridge: unknown argument kind '${rec.kind}'`);
 }
 
 /** The output sink for a compiled C call: passes program output to

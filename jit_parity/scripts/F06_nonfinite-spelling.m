@@ -15,7 +15,7 @@
 %
 % DIVERGING MODE: opt2 only (opt0 == opt1).
 %
-% CAUSE: format_engine.h mtoc2__emit_float hardcodes "Infinity"/"-Infinity"
+% CAUSE: format_engine.h jit__emit_float hardcodes "Infinity"/"-Infinity"
 % (JS numStr uses "Inf"/"-Inf"), and the %d-of-non-finite path falls into
 % the %e branch which in C emits libc "inf"/"-nan" instead of the JS
 % toExponential strings "Infinity"/"NaN". C must match the JS spellings.

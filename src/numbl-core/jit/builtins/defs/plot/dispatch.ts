@@ -41,17 +41,17 @@ function makePlotBuiltin(name: string): Builtin {
       return [VOID];
     },
     emitC({ argsC, argTypes, useRuntime }) {
-      useRuntime("mtoc2_plot_dispatch");
+      useRuntime("jit_plot_dispatch");
       const slots: string[] = [];
       for (let i = 0; i < argTypes.length; i++) {
         slots.push(emitFormatSlot(name, argsC[i], argTypes[i], i));
       }
-      return `mtoc2_plot_dispatch("${cName}", ${slots.length}, ${emitFormatSlotArray(slots)})`;
+      return `jit_plot_dispatch("${cName}", ${slots.length}, ${emitFormatSlotArray(slots)})`;
     },
     emitJs({ argsJs, useRuntime }) {
-      useRuntime("mtoc2_plot_dispatch");
+      useRuntime("jit_plot_dispatch");
       const argList = [JSON.stringify(name), ...argsJs].join(", ");
-      return `mtoc2_plot_dispatch(${argList})`;
+      return `jit_plot_dispatch(${argList})`;
     },
   };
 }

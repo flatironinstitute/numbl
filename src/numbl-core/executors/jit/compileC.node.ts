@@ -1,7 +1,7 @@
 /**
  * Node-only implementation of the koffi C-JIT pipeline.
  *
- * Cache layout: `~/.cache/numbl/mtoc2-c-jit/<sha>.so` (one per unique
+ * Cache layout: `~/.cache/numbl/c-jit/<sha>.so` (one per unique
  * `(declaration, source, flags)` triple). On hit, `dlopen` and reuse —
  * no `cc` invocation. On miss, write `<sha>.c`, exec `cc`, then
  * `dlopen`.
@@ -30,7 +30,7 @@ import { C_SNIPPETS } from "../../jit/builtins/runtime/snippets.c.gen.js";
 import { registerCJitBackend } from "../plugins.js";
 import { cBackend } from "./cBackend.js";
 
-const CACHE_DIR = join(homedir(), ".cache", "numbl", "mtoc2-c-jit");
+const CACHE_DIR = join(homedir(), ".cache", "numbl", "c-jit");
 
 /** Compile (or look up cached) and load. The cache key is the SHA of
  *  `(flags, declaration, source)` so two different signatures or
@@ -46,8 +46,7 @@ export function compileAndLoadC(
 
   const cc = process.env.NUMBL_CC || "cc";
   // -O3 + -march=native for the JIT specialization payoff.
-  // -fPIC + -shared for the .so build. -std=c11 because mtoc2's
-  // emitted helpers use designated initializers and _Complex_I.
+  // -fPIC + -shared for the .so build. -std=c11 because the\n  // emitted helpers use designated initializers and _Complex_I.
   // -fno-math-errno avoids errno-update overhead in transcendentals
   // (numbl's interpreter doesn't surface errno either; matches
   // semantics). -ffast-math is OFF by default — reduction ordering
@@ -91,7 +90,7 @@ export function compileAndLoadC(
         e && typeof e === "object" && "stderr" in e
           ? String((e as { stderr?: Buffer }).stderr ?? "")
           : "";
-      throw new Error(`mtoc2-c-jit compile failed for ${srcPath}\n${stderr}`);
+      throw new Error(`C-JIT compile failed for ${srcPath}\n${stderr}`);
     }
   }
 

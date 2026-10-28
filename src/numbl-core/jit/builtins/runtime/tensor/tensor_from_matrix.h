@@ -6,10 +6,10 @@
 
 #include <string.h>
 
-static mtoc2_tensor_t mtoc2_tensor_from_matrix(
+static jit_tensor_t jit_tensor_from_matrix(
   const double *data, long rows, long cols
 ) {
-  mtoc2_tensor_t out = mtoc2_tensor_alloc(rows, cols);
+  jit_tensor_t out = jit_tensor_alloc(rows, cols);
   memcpy(out.real, data, (size_t)(rows * cols) * sizeof(double));
   return out;
 }

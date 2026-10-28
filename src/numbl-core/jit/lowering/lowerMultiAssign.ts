@@ -174,7 +174,7 @@ export function lowerMultiAssign(
 
   // Builtin multi-output path. A builtin opts into `[...] = f(x)` by
   // accepting an `nargout > 1` in its `transfer` hook. Numbl's
-  // resolver returns `kind: "builtin"`; we re-fetch from mtoc2's own
+  // resolver returns `kind: "builtin"`; we re-fetch from the JIT's own
   // registry and route through the same `MultiAssignCall` IR shape
   // user functions use. Single-output `b = f(x)` still flows through
   // `lowerFuncCall` → `transfer`/`emit` — this hook only fires for

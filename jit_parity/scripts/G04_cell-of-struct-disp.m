@@ -5,7 +5,7 @@
 % DIVERGING MODE: opt1 and opt2 (all three differ).
 %
 % Cause: the JIT cell-display helpers don't handle a struct slot the way
-%   the interpreter does. JS mtoc2__format_cell_slot (runtime/cell/cell.js)
+%   the interpreter does. JS jit__format_cell_slot (runtime/cell/cell.js)
 %   has no Struct branch and falls through to String(v) -> "[object
 %   Object]". C's emitSlotInlineDisp (codegen/emitCellTypedef.ts) calls the
 %   struct _disp whose per-field lines each end in '\n', leaving a stray

@@ -109,18 +109,18 @@ export const uniquetol: Builtin = {
   emitC({ argsC, argTypes, useRuntime }) {
     const a = argTypes[0] as NumericType;
     if (isScalar(a)) return `(${argsC[0]})`;
-    useRuntime("mtoc2_uniquetol_real");
+    useRuntime("jit_uniquetol_real");
     const tolC =
       argTypes.length === 2 ? `(double)(${argsC[1]})` : `${DEFAULT_TOL}`;
     const rowOut = isRowInput(a) ? 1 : 0;
-    return `mtoc2_uniquetol_real(${argsC[0]}, ${tolC}, ${rowOut})`;
+    return `jit_uniquetol_real(${argsC[0]}, ${tolC}, ${rowOut})`;
   },
   emitJs({ argsJs, argTypes, useRuntime }) {
     const a = argTypes[0] as NumericType;
     if (isScalar(a)) return `(${argsJs[0]})`;
-    useRuntime("mtoc2_uniquetol_real");
+    useRuntime("jit_uniquetol_real");
     const tolJs = argTypes.length === 2 ? argsJs[1] : String(DEFAULT_TOL);
     const rowOut = isRowInput(a) ? 1 : 0;
-    return `mtoc2_uniquetol_real(${argsJs[0]}, ${tolJs}, ${rowOut})`;
+    return `jit_uniquetol_real(${argsJs[0]}, ${tolJs}, ${rowOut})`;
   },
 };

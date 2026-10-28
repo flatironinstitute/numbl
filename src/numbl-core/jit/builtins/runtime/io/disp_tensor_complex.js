@@ -1,8 +1,8 @@
 // JS sibling of `disp_tensor_complex.h`. Display a complex tensor
-// with each cell formatted via `mtoc2_format_complex` and columns
+// with each cell formatted via `jit_format_complex` and columns
 // padded to their widest cell.
 
-import { mtoc2_format_complex } from "./format_complex.js";
+import { jit_format_complex } from "./format_complex.js";
 
 function disp_complex_slice(re, im, offset, rows, cols) {
   const cells = new Array(rows * cols);
@@ -10,7 +10,7 @@ function disp_complex_slice(re, im, offset, rows, cols) {
   for (let c = 0; c < cols; c++) {
     for (let r = 0; r < rows; r++) {
       const idx = r + c * rows;
-      const text = mtoc2_format_complex({
+      const text = jit_format_complex({
         re: re[offset + idx],
         im: im[offset + idx],
       });
@@ -33,7 +33,7 @@ function disp_complex_slice(re, im, offset, rows, cols) {
   }
 }
 
-export function mtoc2_disp_tensor_complex(t) {
+export function jit_disp_tensor_complex(t) {
   if (!t || !t.shape || t.shape.length === 0) return;
   if (t.imag === undefined) return; // shouldn't happen for a complex tensor
   const rows = t.shape[0] ?? 1;

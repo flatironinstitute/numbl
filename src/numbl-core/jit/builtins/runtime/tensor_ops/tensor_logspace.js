@@ -3,13 +3,13 @@
 // numbl's interpreter `logspace`, including the MATLAB special case
 // where an upper limit of exactly `pi` makes the last point `pi`.
 
-import { mtoc2_tensor_alloc } from "../tensor/tensor_alloc.js";
+import { jit_tensor_alloc } from "../tensor/tensor_alloc.js";
 
-export function mtoc2_tensor_logspace(a, b, n) {
-  if (n <= 0) return mtoc2_tensor_alloc(1, 0);
+export function jit_tensor_logspace(a, b, n) {
+  if (n <= 0) return jit_tensor_alloc(1, 0);
   const isPi = b === Math.PI;
   const endVal = isPi ? Math.PI : Math.pow(10, b);
-  const out = mtoc2_tensor_alloc(1, n);
+  const out = jit_tensor_alloc(1, n);
   if (n === 1) {
     out.data[0] = endVal;
     return out;

@@ -3,7 +3,7 @@
  * Mirrors numbl's `format2DSlice` for the 2-D path and numbl's
  * page-by-page N-D rendering for `ndim > 2` (each 2-D slice prefixed
  * by a `(:,:,k2,k3,...) =` header and separated by a blank line):
- *   - elements are formatted via mtoc2_format_double
+ *   - elements are formatted via jit_format_double
  *   - each column is padded to its widest element via padStart
  *   - rows are separated by '\n', columns by 3 spaces, 3-space indent
  *
@@ -28,7 +28,7 @@
  * truncated to the first/last 10 with a "Columns 1 through N" header
  * and a "..." elision row/column. (Without this the C path printed
  * every element, diverging from the interpreter and the JS sibling.) */
-static void mtoc2__disp_real_slice(const double *data, long rows, long cols) {
+static void jit__disp_real_slice(const double *data, long rows, long cols) {
   enum { CELL_CAP = 32 };
   const long MAXR = 20, MAXC = 20;
   int trunc_r = rows > MAXR, trunc_c = cols > MAXC;
@@ -48,7 +48,7 @@ static void mtoc2__disp_real_slice(const double *data, long rows, long cols) {
     free(show_c);
     free(cells);
     free(col_widths);
-    fprintf(stderr, "mtoc2: out of memory in mtoc2_disp_tensor\n");
+    fprintf(stderr, "C-JIT: out of memory in jit_disp_tensor\n");
     return;
   }
 
@@ -66,8 +66,8 @@ static void mtoc2__disp_real_slice(const double *data, long rows, long cols) {
   }
 
   if (trunc_r || trunc_c) {
-    mtoc2_stdout_printf("  Columns 1 through %ld\n", cols);
-    mtoc2_stdout("\n", 1);
+    jit_stdout_printf("  Columns 1 through %ld\n", cols);
+    jit_stdout("\n", 1);
   }
 
   /* Format the visible cells (display-order, row-major), inserting a
@@ -78,7 +78,7 @@ static void mtoc2__disp_real_slice(const double *data, long rows, long cols) {
     for (long cj = 0; cj < n_show_c; cj++) {
       long c = show_c[cj];
       char *cell = cells + (ri * n_disp_c + ci) * CELL_CAP;
-      mtoc2_format_double(cell, CELL_CAP, data[r + c * rows]);
+      jit_format_double(cell, CELL_CAP, data[r + c * rows]);
       long len = (long)strlen(cell);
       if (len > col_widths[ci]) col_widths[ci] = len;
       ci++;
@@ -97,23 +97,23 @@ static void mtoc2__disp_real_slice(const double *data, long rows, long cols) {
   for (long ri = 0; ri < n_show_r; ri++) {
     if (trunc_r && ri == r_hi) {
       /* Ellipsis row: "..." padded to each display column's width. */
-      mtoc2_stdout("   ", 3);
+      jit_stdout("   ", 3);
       for (long ci = 0; ci < n_disp_c; ci++) {
-        for (long i = 0; i < col_widths[ci] - 3; i++) mtoc2_stdout(" ", 1);
-        mtoc2_stdout("...", 3);
-        if (ci < n_disp_c - 1) mtoc2_stdout("   ", 3);
+        for (long i = 0; i < col_widths[ci] - 3; i++) jit_stdout(" ", 1);
+        jit_stdout("...", 3);
+        if (ci < n_disp_c - 1) jit_stdout("   ", 3);
       }
-      mtoc2_stdout("\n", 1);
+      jit_stdout("\n", 1);
     }
-    mtoc2_stdout("   ", 3);
+    jit_stdout("   ", 3);
     for (long ci = 0; ci < n_disp_c; ci++) {
       char *cell = cells + (ri * n_disp_c + ci) * CELL_CAP;
       long len = (long)strlen(cell);
-      for (long i = 0; i < col_widths[ci] - len; i++) mtoc2_stdout(" ", 1);
-      mtoc2_stdout_s(cell);
-      if (ci < n_disp_c - 1) mtoc2_stdout("   ", 3);
+      for (long i = 0; i < col_widths[ci] - len; i++) jit_stdout(" ", 1);
+      jit_stdout_s(cell);
+      if (ci < n_disp_c - 1) jit_stdout("   ", 3);
     }
-    mtoc2_stdout("\n", 1);
+    jit_stdout("\n", 1);
   }
 
   free(show_r);
@@ -122,9 +122,9 @@ static void mtoc2__disp_real_slice(const double *data, long rows, long cols) {
   free(col_widths);
 }
 
-static void mtoc2_disp_tensor(mtoc2_tensor_t t) {
+static void jit_disp_tensor(jit_tensor_t t) {
   if (t.ndim == 0 || t.real == NULL) {
-    /* `mtoc2_tensor_empty()` placeholder. Reaches here when a
+    /* `jit_tensor_empty()` placeholder. Reaches here when a
      * conditionally-assigned tensor is `disp`ed on a path the
      * conditional didn't fire. Numbl's `disp` short-circuits empty
      * tensors silently (specialBuiltins.ts: the disp handler
@@ -148,9 +148,9 @@ static void mtoc2_disp_tensor(mtoc2_tensor_t t) {
    * JS sibling's `disp_tensor.js`. */
   if (total == 1) {
     char buf[32];
-    mtoc2_format_double(buf, sizeof(buf), t.real[0]);
-    mtoc2_stdout_s(buf);
-    mtoc2_stdout("\n", 1);
+    jit_format_double(buf, sizeof(buf), t.real[0]);
+    jit_stdout_s(buf);
+    jit_stdout("\n", 1);
     return;
   }
   long page_size = rows * cols;
@@ -161,18 +161,18 @@ static void mtoc2_disp_tensor(mtoc2_tensor_t t) {
     if (t.ndim > 2) {
       /* Blank line between pages (after the previous slice's trailing
        * '\n'). For the very first page there is no leading separator. */
-      if (p > 0) mtoc2_stdout("\n", 1);
+      if (p > 0) jit_stdout("\n", 1);
       /* Outer indices via column-major ind2sub (k2 changes fastest). */
       long rem = p;
-      mtoc2_stdout("(:,:", 4);
+      jit_stdout("(:,:", 4);
       for (int i = 2; i < t.ndim; i++) {
         long d = t.dims[i];
         long s = rem % d;
         rem /= d;
-        mtoc2_stdout_printf(",%ld", s + 1);
+        jit_stdout_printf(",%ld", s + 1);
       }
-      mtoc2_stdout_s(") =\n\n");
+      jit_stdout_s(") =\n\n");
     }
-    mtoc2__disp_real_slice(t.real + p * page_size, rows, cols);
+    jit__disp_real_slice(t.real + p * page_size, rows, cols);
   }
 }

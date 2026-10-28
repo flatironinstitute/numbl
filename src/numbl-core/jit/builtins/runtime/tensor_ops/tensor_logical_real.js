@@ -3,23 +3,23 @@
 // Complex input: fires "true" iff both lanes are exactly zero.
 // Result is logical-tagged in both cases.
 
-import { mtoc2_tensor_alloc_nd } from "../tensor/tensor_alloc_nd.js";
+import { jit_tensor_alloc_nd } from "../tensor/tensor_alloc_nd.js";
 
-export function mtoc2_tensor_not(a) {
-  const r = mtoc2_tensor_alloc_nd(a.shape.length, a.shape);
+export function jit_tensor_not(a) {
+  const r = jit_tensor_alloc_nd(a.shape.length, a.shape);
   for (let i = 0; i < r.data.length; i++) {
     r.data[i] = a.data[i] === 0 ? 1 : 0;
   }
   // Tag as logical so `a(mask)` / `M(:, mask)` etc. take the mask
-  // path in the interpreter (and js-aot, when wired). The tensor
+  // path. The tensor
   // alloc helpers return plain numeric tensors; we mutate the field
   // here rather than threading a parameter through every allocator.
   r.isLogical = true;
   return r;
 }
 
-export function mtoc2_tensor_not_complex(a) {
-  const r = mtoc2_tensor_alloc_nd(a.shape.length, a.shape);
+export function jit_tensor_not_complex(a) {
+  const r = jit_tensor_alloc_nd(a.shape.length, a.shape);
   const im = a.imag;
   for (let i = 0; i < r.data.length; i++) {
     const re = a.data[i];

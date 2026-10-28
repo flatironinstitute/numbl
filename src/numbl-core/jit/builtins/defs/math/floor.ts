@@ -9,5 +9,5 @@ export const floor = defineUnaryRealMath({
   cFnReal: "floor",
   jsFn: Math.floor,
   signRule: roundingSignRule(true, false),
-  complex: { cFnComplex: "mtoc2_cfloor", jsFnComplex: cFloor },
+  complex: { cFnComplex: "jit_cfloor", jsFnComplex: cFloor },
 });

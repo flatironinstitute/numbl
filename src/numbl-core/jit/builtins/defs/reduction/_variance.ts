@@ -149,26 +149,26 @@ export function defineVariance(name: "var" | "std"): Builtin {
       return [varResultType(input, resolved)];
     },
     emitC({ argsC, argTypes, useRuntime }) {
-      useRuntime("mtoc2_tensor_var");
+      useRuntime("jit_tensor_var");
       const { input, w, axis } = planVar(name, argTypes);
       if (isScalar(input)) return `((void)(${argsC[0]}), 0.0)`;
       const resolved =
         axis.kind === "default" ? chooseDefaultAxis(name, input) : axis;
       if (collapsesToScalar(input, resolved)) {
-        return `mtoc2_${name}_all(${argsC[0]}, ${w})`;
+        return `jit_${name}_all(${argsC[0]}, ${w})`;
       }
-      return `mtoc2_${name}_dim(${argsC[0]}, ${(resolved as AxisFixed).dim}, ${w})`;
+      return `jit_${name}_dim(${argsC[0]}, ${(resolved as AxisFixed).dim}, ${w})`;
     },
     emitJs({ argsJs, argTypes, useRuntime }) {
-      useRuntime("mtoc2_tensor_var");
+      useRuntime("jit_tensor_var");
       const { input, w, axis } = planVar(name, argTypes);
       if (isScalar(input)) return `((${argsJs[0]}), 0)`;
       const resolved =
         axis.kind === "default" ? chooseDefaultAxis(name, input) : axis;
       if (collapsesToScalar(input, resolved)) {
-        return `mtoc2_${name}_all(${argsJs[0]}, ${w})`;
+        return `jit_${name}_all(${argsJs[0]}, ${w})`;
       }
-      return `mtoc2_${name}_dim(${argsJs[0]}, ${(resolved as AxisFixed).dim}, ${w})`;
+      return `jit_${name}_dim(${argsJs[0]}, ${(resolved as AxisFixed).dim}, ${w})`;
     },
   };
 }

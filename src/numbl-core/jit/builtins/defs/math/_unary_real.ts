@@ -41,8 +41,8 @@ import {
   exactComplex,
   exactComplexArray,
 } from "../_shared.js";
-/** Builtin names with JS tensor kernels (`mtoc2_tensor_<name>` in
- *  `tensor_unary_real_math.js`, `mtoc2_tensor_<name>_complex` in
+/** Builtin names with JS tensor kernels (`jit_tensor_<name>` in
+ *  `tensor_unary_real_math.js`, `jit_tensor_<name>_complex` in
  *  `tensor_unary_complex_math.js`). */
 const JS_TENSOR_UNARY = new Set([
   "cos",
@@ -100,7 +100,7 @@ export interface UnaryRealMathOpts {
    *  Override for `fix` (`Math.trunc`) and `round`
    *  (custom half-away-from-zero form). */
   jsExpr?: (arg: string) => string;
-  /** Optional `mtoc2_`-prefixed helper from `tensor_unary_real_math.js`
+  /** Optional `jit_`-prefixed helper from `tensor_unary_real_math.js`
    *  for `emitJs`'s scalar real path. Activates that snippet and takes
    *  precedence over `jsExpr`. */
   jsFnReal?: string;
@@ -114,8 +114,8 @@ export interface UnaryRealMathOpts {
    *  complex-output); otherwise the factory throws `TypeError`. */
   realDomainOk?: (t: NumericType) => boolean;
   /** Optional complex-input support. When set, complex scalars route
-   *  through `cFnComplex` (a `mtoc2_c*` helper); complex tensors
-   *  route through `mtoc2_tensor_<name>_complex`. `jsFnComplex`
+   *  through `cFnComplex` (a `jit_c*` helper); complex tensors
+   *  route through `jit_tensor_<name>_complex`. `jsFnComplex`
    *  folds at the type-system layer when the input has an exact
    *  `{re, im}` carrier. `liftOnDomainMiss` makes the factory lift
    *  a real-typed input through the same complex path when
@@ -292,32 +292,32 @@ export function defineUnaryRealMath(opts: UnaryRealMathOpts): Builtin {
       const ty = argTypes[0] as NumericType;
       const lifting = liftRealToComplex(ty);
       if ((isNumeric(ty) && ty.isComplex) || lifting) {
-        useRuntime("mtoc2_cscalar");
+        useRuntime("jit_cscalar");
         if (isMultiElement(ty)) {
           // Complex tensor helpers tolerate a real-tensor input
           // (`imag == NULL`), so the lift path passes the real tensor
           // straight through with no promote step.
-          useRuntime("mtoc2_tensor_unary_complex_math");
-          return `mtoc2_tensor_${name}_complex(${argsC[0]})`;
+          useRuntime("jit_tensor_unary_complex_math");
+          return `jit_tensor_${name}_complex(${argsC[0]})`;
         }
         // Scalar lift: promote the `double` arg into `double _Complex`
-        // via `mtoc2_cmake(arg, 0.0)` to match the binary elemwise
+        // via `jit_cmake(arg, 0.0)` to match the binary elemwise
         // convention. C99 would auto-promote here, but the explicit
         // form keeps the emitted C self-evidently complex-typed.
-        const arg = lifting ? `mtoc2_cmake(${argsC[0]}, 0.0)` : argsC[0];
+        const arg = lifting ? `jit_cmake(${argsC[0]}, 0.0)` : argsC[0];
         return `${complex!.cFnComplex}(${arg})`;
       }
       if (isMultiElement(ty)) {
-        useRuntime("mtoc2_tensor_unary_real_math");
-        return `mtoc2_tensor_${name}(${argsC[0]})`;
+        useRuntime("jit_tensor_unary_real_math");
+        return `jit_tensor_${name}(${argsC[0]})`;
       }
-      // `cFnReal` for scalar path. If it's a mtoc2_-prefixed helper
-      // (e.g. `mtoc2_round_half_away`, `mtoc2_signum`), it lives in
+      // `cFnReal` for scalar path. If it's a jit_-prefixed helper
+      // (e.g. `jit_round_half_away`, `jit_signum`), it lives in
       // `tensor_unary_real_math.h`; activate that snippet so the
       // helper is declared even when no tensor path uses it.
       // libc math functions (cos, sin, sqrt, …) don't need this.
-      if (cFnReal.startsWith("mtoc2_")) {
-        useRuntime("mtoc2_tensor_unary_real_math");
+      if (cFnReal.startsWith("jit_")) {
+        useRuntime("jit_tensor_unary_real_math");
       }
       return `${cFnReal}(${argsC[0]})`;
     },
@@ -331,14 +331,14 @@ export function defineUnaryRealMath(opts: UnaryRealMathOpts): Builtin {
               `'${name}' complex-tensor emitJs has no JS kernel registered`
             );
           }
-          useRuntime("mtoc2_tensor_unary_complex_math");
-          useRuntime("mtoc2_cscalar");
-          return `mtoc2_tensor_${name}_complex(${argsJs[0]})`;
+          useRuntime("jit_tensor_unary_complex_math");
+          useRuntime("jit_cscalar");
+          return `jit_tensor_${name}_complex(${argsJs[0]})`;
         }
-        useRuntime("mtoc2_cscalar");
+        useRuntime("jit_cscalar");
         // Real-scalar lift: JS has no implicit real→complex promotion,
-        // so wrap explicitly in `{re, im}` via `mtoc2_cmake`.
-        const arg = lifting ? `mtoc2_cmake(${argsJs[0]}, 0.0)` : argsJs[0];
+        // so wrap explicitly in `{re, im}` via `jit_cmake`.
+        const arg = lifting ? `jit_cmake(${argsJs[0]}, 0.0)` : argsJs[0];
         return `${complex!.cFnComplex}(${arg})`;
       }
       if (isMultiElement(ty)) {
@@ -347,11 +347,11 @@ export function defineUnaryRealMath(opts: UnaryRealMathOpts): Builtin {
             `'${name}' tensor emitJs has no JS kernel registered`
           );
         }
-        useRuntime("mtoc2_tensor_unary_real_math");
-        return `mtoc2_tensor_${name}(${argsJs[0]})`;
+        useRuntime("jit_tensor_unary_real_math");
+        return `jit_tensor_${name}(${argsJs[0]})`;
       }
       if (opts.jsFnReal !== undefined) {
-        useRuntime("mtoc2_tensor_unary_real_math");
+        useRuntime("jit_tensor_unary_real_math");
         return `${opts.jsFnReal}(${argsJs[0]})`;
       }
       return jsExpr(argsJs[0]);

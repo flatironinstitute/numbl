@@ -1,6 +1,6 @@
 /**
  * `or(a, b)` — the function form of `|`. For scalar arguments,
- * mtoc2 routes this through the same scaffold as `||` (`oror`): the
+ * the JIT routes this through the same scaffold as `||` (`oror`): the
  * result type is scalar logical, the codegen uses C's `||` operator,
  * and the only semantic difference (short-circuit on `||` vs.
  * eager-evaluate on `|` / `or`) is moot — by the time the function

@@ -1,10 +1,10 @@
 /**
- * Type adapter for the mtoc2 C-JIT path.
+ * Type adapter for the C-JIT path.
  *
  *   - `compilerTypeToCDecl(ty)` returns the C type string that goes in the
  *     koffi prototype for a value of that type, or `null` when the
  *     type isn't supported across the FFI today.
- *   - `registerTensorStruct(koffi)` registers `mtoc2_tensor_t`
+ *   - `registerTensorStruct(koffi)` registers `jit_tensor_t`
  *     with koffi (idempotent across calls — koffi's `struct` returns
  *     the existing definition on re-registration of the same name).
  *   - `buildCDeclaration(signature)` assembles the full koffi prototype
@@ -12,7 +12,7 @@
  *
  * Supported today:
  *   - Scalar real numeric → `double`
- *   - Scalar complex → `mtoc2_cscalar_t` (a `{double re; double im;}`
+ *   - Scalar complex → `jit_cscalar_t` (a `{double re; double im;}`
  *     koffi struct). The emitted C signature uses `double _Complex` by
  *     value, but on the SysV-x86-64 / AAPCS64 ABIs a 2-double struct
  *     and `double _Complex` share the same by-value calling convention
@@ -20,7 +20,7 @@
  *     marshals the struct against the real `_Complex` function — koffi's
  *     own prototype parser doesn't accept the `double _Complex` token.
  *   - Scalar logical → `double` (shares the `double` ABI)
- *   - Tensor (real or complex) → `mtoc2_tensor_t` (koffi struct)
+ *   - Tensor (real or complex) → `jit_tensor_t` (koffi struct)
  *   - Void return → `void`
  *
  * Everything else (Struct / Class / Handle / String / Char / Cell)
@@ -44,18 +44,18 @@ interface Koffi {
 let tensorStructRegistered = false;
 let cscalarStructRegistered = false;
 
-/** Register the `mtoc2_tensor_t` struct with koffi. Idempotent — safe
+/** Register the `jit_tensor_t` struct with koffi. Idempotent — safe
  *  to call from each compile() invocation; the second call short-
  *  circuits.
  *
- *  Layout MUST match `mtoc2/src/builtins/runtime/tensor/tensor.h`:
+ *  Layout MUST match `jit/builtins/runtime/tensor/tensor.h`:
  *  ```
  *  typedef struct {
  *    double *real;
  *    double *imag;
  *    int  ndim;
  *    long dims[JIT_MAX_NDIM];   // JIT_MAX_NDIM == 8
- *  } mtoc2_tensor_t;
+ *  } jit_tensor_t;
  *  ```
  *  Field order and padding match the C struct's natural alignment;
  *  koffi handles the platform-specific alignment automatically when
@@ -72,7 +72,7 @@ export function registerTensorStruct(koffi: Koffi): void {
   // pointer-to-array); the "Array" encoding makes koffi return a JS
   // Array when reading the struct (faster than a TypedArray view for
   // a small N).
-  koffi.struct("mtoc2_tensor_t", {
+  koffi.struct("jit_tensor_t", {
     real: "double *",
     imag: "double *",
     ndim: "int",
@@ -81,16 +81,16 @@ export function registerTensorStruct(koffi: Koffi): void {
   tensorStructRegistered = true;
 }
 
-/** Register the `mtoc2_cscalar_t` struct — `{double re; double im;}` —
+/** Register the `jit_cscalar_t` struct — `{double re; double im;}` —
  *  used as the koffi stand-in for `double _Complex` scalar params and
  *  returns (ABI-compatible by-value; see header). Idempotent. */
 export function registerCScalarStruct(koffi: Koffi): void {
   if (cscalarStructRegistered) return;
-  koffi.struct("mtoc2_cscalar_t", { re: "double", im: "double" });
+  koffi.struct("jit_cscalar_t", { re: "double", im: "double" });
   cscalarStructRegistered = true;
 }
 
-/** Map an mtoc2 `Type` to the C-type token used in the koffi
+/** Map a JIT `Type` to the C-type token used in the koffi
  *  declaration string. Returns `null` for unsupported shapes. */
 export function compilerTypeToCDecl(ty: Type): string | null {
   if (ty.kind === "Void") return "void";
@@ -102,14 +102,14 @@ export function compilerTypeToCDecl(ty: Type): string | null {
 function numericToCDecl(ty: NumericType): string | null {
   if (isMultiElement(ty)) {
     // Tensor: real or complex, both ride the same struct.
-    return "mtoc2_tensor_t";
+    return "jit_tensor_t";
   }
   // Scalar shape (1×1).
   // Complex scalar: the emitted C signature is `double _Complex`, but
   // koffi marshals the ABI-identical `{re, im}` struct (see header).
-  if (ty.isComplex) return "mtoc2_cscalar_t";
+  if (ty.isComplex) return "jit_cscalar_t";
   // Logical scalars share the `double` ABI with real numerics —
-  // mtoc2's `cTypeFor` returns "double" uniformly for any
+  // the JIT's `cTypeFor` returns "double" uniformly for any
   // single-element Numeric. The koffi declaration must match the
   // actual C signature byte-for-byte; if we declared `bool` here,
   // koffi would pack one byte and the stack offsets would skew,
@@ -120,10 +120,10 @@ function numericToCDecl(ty: NumericType): string | null {
 
 /** Assemble the koffi prototype string for a `SpecCSignature`.
  *
- *  Convention (mirrors mtoc2's `fnRetType` + `fnParamList`):
+ *  Convention (mirrors the JIT's `fnRetType` + `fnParamList`):
  *   - 0 outputs ⇒ `void <cName>(<params>)`
  *   - 1 output  ⇒ `<retType> <cName>(<params>)`
- *   - ≥2 outputs ⇒ `void <cName>(<params>, <outTy> *_mtoc2_o<i>...)`
+ *   - ≥2 outputs ⇒ `void <cName>(<params>, <outTy> *_jit_o<i>...)`
  *
  *  Returns `null` if any param or output type fails the C-FFI
  *  feasibility check — the executor must decline. */
@@ -148,7 +148,7 @@ export function buildCDeclaration(signature: SpecCSignature): string | null {
     for (let i = 0; i < nOut; i++) {
       const t = compilerTypeToCDecl(signature.outputs[i].ty);
       if (t === null) return null;
-      paramParts.push(`${t} *_mtoc2_o${i}`);
+      paramParts.push(`${t} *_jit_o${i}`);
     }
   }
   const params = paramParts.length === 0 ? "void" : paramParts.join(", ");

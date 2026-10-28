@@ -1,12 +1,12 @@
-/* mtoc2 runtime helpers: elementwise unary math on real tensors.
+/* JIT runtime helpers: elementwise unary math on real tensors.
  *
  * Allocate-and-fill pattern matching `tensor_elemwise_real.h`. The
  * fresh tensor inherits the input's shape; the loop applies the C
  * <math.h> function elementwise.
  *
  * `sign` has no direct <math.h> equivalent — we provide
- * `mtoc2_signum` inline. `round` uses C99's `round()` (half-away-
- * from-zero, matching MATLAB) via the `mtoc2_round_half_away`
+ * `jit_signum` inline. `round` uses C99's `round()` (half-away-
+ * from-zero, matching MATLAB) via the `jit_round_half_away`
  * wrapper.
  */
 #include <math.h>
@@ -17,7 +17,7 @@
  * is half-away-from-zero per the spec, which matches. Wrapped for
  * symmetry with the rest of the helpers (and to give the codegen a
  * single C symbol to call regardless of compiler quirks). */
-static double mtoc2_round_half_away(double x) {
+static double jit_round_half_away(double x) {
   return round(x);
 }
 
@@ -25,7 +25,7 @@ static double mtoc2_round_half_away(double x) {
  *   - NaN → NaN (any comparison with NaN is false, so a naive
  *     positive/negative test would silently return 0).
  *   - -0 → 0 (handled by the equality-to-zero fall-through). */
-static double mtoc2_signum(double x) {
+static double jit_signum(double x) {
   if (isnan(x)) return x;
   if (x > 0) return 1.0;
   if (x < 0) return -1.0;
@@ -34,7 +34,7 @@ static double mtoc2_signum(double x) {
 
 /* realsqrt(x): MATLAB raises an error rather than returning a complex
  * result for x < 0. NaN passes through as NaN. */
-static double mtoc2_realsqrt(double x) {
+static double jit_realsqrt(double x) {
   if (x < 0) {
     fprintf(stderr, "Realsqrt produced complex result.\n");
     exit(1);
@@ -42,37 +42,37 @@ static double mtoc2_realsqrt(double x) {
   return sqrt(x);
 }
 
-#define MTOC2_DEFINE_UNARY_MATH(name, FN)                                   \
-  static mtoc2_tensor_t name(mtoc2_tensor_t a) {                            \
+#define JIT_DEFINE_UNARY_MATH(name, FN)                                     \
+  static jit_tensor_t name(jit_tensor_t a) {                                \
     long n = 1;                                                             \
     for (int i = 0; i < a.ndim; i++) n *= a.dims[i];                        \
-    mtoc2_tensor_t r;                                                       \
-    r.real = mtoc2_alloc((size_t)n * sizeof(double));                       \
+    jit_tensor_t r;                                                         \
+    r.real = jit_alloc((size_t)n * sizeof(double));                         \
     r.imag = NULL;                                                          \
     r.ndim = a.ndim;                                                        \
     for (int i = 0; i < a.ndim; i++) r.dims[i] = a.dims[i];                 \
-    MTOC2_OMP_PARFOR_N                                                      \
+    JIT_OMP_PARFOR_N                                                        \
     for (long i = 0; i < n; i++) r.real[i] = FN(a.real[i]);                 \
     return r;                                                               \
   }
 
-MTOC2_DEFINE_UNARY_MATH(mtoc2_tensor_cos,   cos)
-MTOC2_DEFINE_UNARY_MATH(mtoc2_tensor_sin,   sin)
-MTOC2_DEFINE_UNARY_MATH(mtoc2_tensor_tan,   tan)
-MTOC2_DEFINE_UNARY_MATH(mtoc2_tensor_atan,  atan)
-MTOC2_DEFINE_UNARY_MATH(mtoc2_tensor_sinh,  sinh)
-MTOC2_DEFINE_UNARY_MATH(mtoc2_tensor_cosh,  cosh)
-MTOC2_DEFINE_UNARY_MATH(mtoc2_tensor_tanh,  tanh)
-MTOC2_DEFINE_UNARY_MATH(mtoc2_tensor_asinh, asinh)
-MTOC2_DEFINE_UNARY_MATH(mtoc2_tensor_exp,   exp)
-MTOC2_DEFINE_UNARY_MATH(mtoc2_tensor_log,   log)
-MTOC2_DEFINE_UNARY_MATH(mtoc2_tensor_log2,  log2)
-MTOC2_DEFINE_UNARY_MATH(mtoc2_tensor_log10, log10)
-MTOC2_DEFINE_UNARY_MATH(mtoc2_tensor_sqrt,  sqrt)
-MTOC2_DEFINE_UNARY_MATH(mtoc2_tensor_realsqrt, mtoc2_realsqrt)
-MTOC2_DEFINE_UNARY_MATH(mtoc2_tensor_abs,   fabs)
-MTOC2_DEFINE_UNARY_MATH(mtoc2_tensor_floor, floor)
-MTOC2_DEFINE_UNARY_MATH(mtoc2_tensor_ceil,  ceil)
-MTOC2_DEFINE_UNARY_MATH(mtoc2_tensor_fix,   trunc)
-MTOC2_DEFINE_UNARY_MATH(mtoc2_tensor_round, mtoc2_round_half_away)
-MTOC2_DEFINE_UNARY_MATH(mtoc2_tensor_sign,  mtoc2_signum)
+JIT_DEFINE_UNARY_MATH(jit_tensor_cos,   cos)
+JIT_DEFINE_UNARY_MATH(jit_tensor_sin,   sin)
+JIT_DEFINE_UNARY_MATH(jit_tensor_tan,   tan)
+JIT_DEFINE_UNARY_MATH(jit_tensor_atan,  atan)
+JIT_DEFINE_UNARY_MATH(jit_tensor_sinh,  sinh)
+JIT_DEFINE_UNARY_MATH(jit_tensor_cosh,  cosh)
+JIT_DEFINE_UNARY_MATH(jit_tensor_tanh,  tanh)
+JIT_DEFINE_UNARY_MATH(jit_tensor_asinh, asinh)
+JIT_DEFINE_UNARY_MATH(jit_tensor_exp,   exp)
+JIT_DEFINE_UNARY_MATH(jit_tensor_log,   log)
+JIT_DEFINE_UNARY_MATH(jit_tensor_log2,  log2)
+JIT_DEFINE_UNARY_MATH(jit_tensor_log10, log10)
+JIT_DEFINE_UNARY_MATH(jit_tensor_sqrt,  sqrt)
+JIT_DEFINE_UNARY_MATH(jit_tensor_realsqrt, jit_realsqrt)
+JIT_DEFINE_UNARY_MATH(jit_tensor_abs,   fabs)
+JIT_DEFINE_UNARY_MATH(jit_tensor_floor, floor)
+JIT_DEFINE_UNARY_MATH(jit_tensor_ceil,  ceil)
+JIT_DEFINE_UNARY_MATH(jit_tensor_fix,   trunc)
+JIT_DEFINE_UNARY_MATH(jit_tensor_round, jit_round_half_away)
+JIT_DEFINE_UNARY_MATH(jit_tensor_sign,  jit_signum)

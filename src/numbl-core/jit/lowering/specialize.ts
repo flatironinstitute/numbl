@@ -39,7 +39,7 @@ import { cIdentForUserName } from "./lower.js";
  *  programs sit far below it; pathological exact-tracking explosions
  *  abort with a clear error pointing at the offending function.
  *
- *  Read once at module load from `MTOC2_MAX_SPECS_PER_FUNCTION` so a
+ *  Read once at module load from `JIT_MAX_SPECS_PER_FUNCTION` so a
  *  user with a legitimate dense-specialization need can raise it
  *  without recompiling. Defaults to 256. */
 const MAX_SPECS_PER_FUNCTION: number = (() => {
@@ -49,7 +49,7 @@ const MAX_SPECS_PER_FUNCTION: number = (() => {
     typeof globalThis !== "undefined" &&
     (globalThis as { process?: { env?: Record<string, string | undefined> } })
       .process?.env;
-  const raw = env ? env.MTOC2_MAX_SPECS_PER_FUNCTION : undefined;
+  const raw = env ? env.JIT_MAX_SPECS_PER_FUNCTION : undefined;
   if (!raw) return 256;
   const n = Number.parseInt(raw, 10);
   if (Number.isFinite(n) && n > 0) return n;
@@ -222,7 +222,7 @@ export function specializeUserFunction(
   // can produce hundreds of specs and bloat the emitted code. Above
   // the cap, abort with a clear error pointing at the offending
   // function and span; users with a legitimate need can raise the cap
-  // via `MTOC2_MAX_SPECS_PER_FUNCTION`. The key is `<source>|<file>`
+  // via `JIT_MAX_SPECS_PER_FUNCTION`. The key is `<source>|<file>`
   // so a homonymous function in two files counts independently.
   const countKey = `${source}|${file}`;
   const priorCount = this.specCountPerSource.get(countKey) ?? 0;
@@ -233,7 +233,7 @@ export function specializeUserFunction(
         `means exact-value tracking is sharding a call site into one ` +
         `spec per distinct input; widen the inputs (e.g. via ` +
         `'%!numbl:opaque') or raise the cap via the ` +
-        `MTOC2_MAX_SPECS_PER_FUNCTION env var.`,
+        `JIT_MAX_SPECS_PER_FUNCTION env var.`,
       errSpan
     );
   }
@@ -393,7 +393,7 @@ export function specializeUserFunction(
             `produced [${outputTypes.map(canonicalizeType).join(", ")}]. ` +
             `This usually means the output type genuinely depends on a ` +
             `runtime value the lowerer can't resolve, or that the function ` +
-            `is mutually recursive in a shape mtoc2 can't yet handle. ` +
+            `is mutually recursive in a shape the JIT can't yet handle. ` +
             `Try annotating the output via an early assignment, or avoid ` +
             `recursion for this call.`,
           errSpan
@@ -408,7 +408,7 @@ export function specializeUserFunction(
     //  (a) `recordAssignment` split the output's binding mid-body
     //      because two assignments had storage-incompatible types
     //      (`s = 0; ... s = a_tensor;` at top level). The split moves
-    //      the post-split writes to `_mtoc2_<o>__v<N>` but the
+    //      the post-split writes to `_jit_<o>__v<N>` but the
     //      function's `cOutputs[i]` is locked at the canonical name,
     //      so the return path reads the un-split slot — which was
     //      declared with the post-split type but written with the
@@ -419,7 +419,7 @@ export function specializeUserFunction(
     //      types (real-tensor vs complex-tensor, scalar vs tensor in
     //      a branch the For-merge folds with envBefore, ...). The C
     //      ABI has no slot for Unknown, so the emitted signature
-    //      would declare `double *_mtoc2_o<i>` and the body would
+    //      would declare `double *_jit_o<i>` and the body would
     //      write a tensor through it.
     //
     // Both shapes are correctness bugs in the C emit. Declining at the

@@ -33,7 +33,7 @@ export function addAssignedFlags(
   const outputTypes = [...fn.outputTypes];
   fn.outputs.forEach((name, i) => {
     if (!maybeUnassigned.has(name) || flagCName.has(name)) return;
-    const cName = `_mtoc2_asg${flags.length}`;
+    const cName = `_jit_asg${flags.length}`;
     flagCName.set(name, cName);
     flags.push({ output: i, flag: outputs.length });
     outputs.push(cName);

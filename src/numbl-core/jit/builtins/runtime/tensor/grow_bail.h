@@ -1,4 +1,4 @@
-/* mtoc2 runtime: grow-aware indexed-store bounds checks + JIT bail.
+/* JIT runtime: grow-aware indexed-store bounds checks + JIT bail.
  *
  * MATLAB indexed STORES grow the array when the index exceeds the
  * current bounds (`v(k) = x` with k > numel, `M(i, j) = x` with
@@ -8,11 +8,11 @@
  * signals a *bail*: it sets a flag and `longjmp`s back to the
  * `setjmp` guard the emitter places at the top of the host-entry
  * function, which then returns normally. The host inspects the flag
- * after the call (`mtoc2_grow_bail_check`) and re-runs the whole
+ * after the call (`jit_grow_bail_check`) and re-runs the whole
  * scope on the interpreter, which has full MATLAB grow semantics.
  *
  * Index < 1 is NOT a grow — `v(0) = x` is a genuine error in MATLAB —
- * so it still aborts via `mtoc2_oob_abort`, matching a read's OOB.
+ * so it still aborts via `jit_oob_abort`, matching a read's OOB.
  *
  * Statically-provable grows (`v(end+1) = x` on a fixed-shape array)
  * are declined at compile time (see `lowering/lowerIndexStore.ts`)
@@ -31,38 +31,38 @@
 
 #include <setjmp.h>
 
-static jmp_buf mtoc2_grow_bail_buf;
-static int mtoc2_grow_bailed = 0;
+static jmp_buf jit_grow_bail_buf;
+static int jit_grow_bailed = 0;
 
-void mtoc2_grow_bail_reset(void) { mtoc2_grow_bailed = 0; }
-int mtoc2_grow_bail_check(void) { return mtoc2_grow_bailed; }
+void jit_grow_bail_reset(void) { jit_grow_bailed = 0; }
+int jit_grow_bail_check(void) { return jit_grow_bailed; }
 
 /* Linear (1-arg) store bounds check. Returns the 0-based offset for an
  * in-bounds index; bails on a grow (index past numel); aborts on a
  * genuine sub-1 index. */
-static long mtoc2_idx_lin_grow(
-  const mtoc2_tensor_t *t, long got1, const char *loc
+static long jit_idx_lin_grow(
+  const jit_tensor_t *t, long got1, const char *loc
 ) {
   long total = 1;
   for (int i = 0; i < t->ndim; i++) total *= t->dims[i];
-  if (got1 < 1) mtoc2_oob_abort(loc, -1, got1, 1, total);
+  if (got1 < 1) jit_oob_abort(loc, -1, got1, 1, total);
   if (got1 > total) {
-    mtoc2_grow_bailed = 1;
-    longjmp(mtoc2_grow_bail_buf, 1);
+    jit_grow_bailed = 1;
+    longjmp(jit_grow_bail_buf, 1);
   }
   return got1 - 1;
 }
 
 /* Per-axis (N-arg) store bounds check. Same contract as
- * `mtoc2_idx_lin_grow` but against a single axis's dim. */
-static long mtoc2_idx_axis_grow(
-  const mtoc2_tensor_t *t, int axis, long got1, const char *loc
+ * `jit_idx_lin_grow` but against a single axis's dim. */
+static long jit_idx_axis_grow(
+  const jit_tensor_t *t, int axis, long got1, const char *loc
 ) {
   long dim = t->dims[axis];
-  if (got1 < 1) mtoc2_oob_abort(loc, axis, got1, 1, dim);
+  if (got1 < 1) jit_oob_abort(loc, axis, got1, 1, dim);
   if (got1 > dim) {
-    mtoc2_grow_bailed = 1;
-    longjmp(mtoc2_grow_bail_buf, 1);
+    jit_grow_bailed = 1;
+    longjmp(jit_grow_bail_buf, 1);
   }
   return got1 - 1;
 }

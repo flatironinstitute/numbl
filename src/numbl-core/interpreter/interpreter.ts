@@ -62,7 +62,7 @@ export class Interpreter {
    *  on exit. Read by the executor registry's `propose()` to gate JIT
    *  attempts: when `loopDepth > 0`, the interpreter is iterating a
    *  hot loop and per-call JIT lookup overhead / spec-cache thrashing
-   *  is a net loss. Once mtoc2 successfully JITs an outer call, the
+   *  is a net loss. Once the JIT successfully JITs an outer call, the
    *  nested loops execute inside the compiled artifact and the
    *  interpreter never sees them, so this gate only fires on calls
    *  that genuinely happen at the interpreter level inside a loop. */

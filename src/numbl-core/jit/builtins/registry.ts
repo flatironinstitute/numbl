@@ -16,9 +16,9 @@
  *     optional. C codegen. Returns the full string ready to splice
  *     into the surrounding context:
  *       - nargout=1: a C expression (`(a + b)`,
- *         `mtoc2_tensor_plus_tt(a, b)`)
+ *         `jit_tensor_plus_tt(a, b)`)
  *       - nargout≥2: a full call including out-pointer args
- *         (`mtoc2_sort_real_2(a, &v, &i)`). `outArgsC` holds those
+ *         (`jit_sort_real_2(a, &v, &i)`). `outArgsC` holds those
  *         pre-built `&v`, `&i` strings in the order the call site
  *         requested.
  *     Activate any runtime snippets this emit-output references by

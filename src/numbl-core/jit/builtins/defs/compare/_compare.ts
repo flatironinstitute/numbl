@@ -65,7 +65,7 @@ export function defineCompare(
         if (a.isComplex || b.isComplex) {
           throw new UnsupportedConstruct(
             `'${name}' elementwise: complex tensor compare is not ` +
-              `supported in mtoc2 yet`
+              `supported by the JIT yet`
           );
         }
         // Result is a logical tensor shaped like the broadcast — we
@@ -115,26 +115,26 @@ export function defineCompare(
         throw new UnsupportedConstruct(
           `'${name}' on tensors that don't share static shape ` +
             `(broadcast / runtime-unknown) is not yet supported by ` +
-            `mtoc2's AOT backends; the interpreter handles it`
+            `the JIT; the interpreter handles it`
         );
       }
       const aCx = isScalarComplex(argTypes[0]);
       const bCx = isScalarComplex(argTypes[1]);
       if (aCx || bCx) {
-        useRuntime("mtoc2_cscalar");
+        useRuntime("jit_cscalar");
         // Materialize re/im for the operands; project a real-typed
         // operand to (re, 0) inline so the C expression doesn't have
         // to branch on which side is complex.
-        const aReC = aCx ? `mtoc2_creal(${argsC[0]})` : `(${argsC[0]})`;
-        const bReC = bCx ? `mtoc2_creal(${argsC[1]})` : `(${argsC[1]})`;
+        const aReC = aCx ? `jit_creal(${argsC[0]})` : `(${argsC[0]})`;
+        const bReC = bCx ? `jit_creal(${argsC[1]})` : `(${argsC[1]})`;
         if (kind === "eq") {
-          const aImC = aCx ? `mtoc2_cimag(${argsC[0]})` : "0.0";
-          const bImC = bCx ? `mtoc2_cimag(${argsC[1]})` : "0.0";
+          const aImC = aCx ? `jit_cimag(${argsC[0]})` : "0.0";
+          const bImC = bCx ? `jit_cimag(${argsC[1]})` : "0.0";
           return `(${aReC} == ${bReC} && ${aImC} == ${bImC})`;
         }
         if (kind === "ne") {
-          const aImC = aCx ? `mtoc2_cimag(${argsC[0]})` : "0.0";
-          const bImC = bCx ? `mtoc2_cimag(${argsC[1]})` : "0.0";
+          const aImC = aCx ? `jit_cimag(${argsC[0]})` : "0.0";
+          const bImC = bCx ? `jit_cimag(${argsC[1]})` : "0.0";
           return `(${aReC} != ${bReC} || ${aImC} != ${bImC})`;
         }
         return `(${aReC} ${cOp} ${bReC})`;
@@ -151,7 +151,7 @@ export function defineCompare(
         throw new UnsupportedConstruct(
           `'${name}' on tensors that don't share static shape ` +
             `(broadcast / runtime-unknown) is not yet supported by ` +
-            `mtoc2's AOT backends; the interpreter handles it`
+            `the JIT; the interpreter handles it`
         );
       }
       const aCx = isScalarComplex(argTypes[0]);

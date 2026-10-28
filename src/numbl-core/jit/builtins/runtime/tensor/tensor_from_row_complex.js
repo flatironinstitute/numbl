@@ -3,10 +3,10 @@
 // `double[]` sources). The codegen path passes plain JS array
 // literals.
 
-import { mtoc2_tensor_alloc_complex } from "./tensor_alloc_complex.js";
+import { jit_tensor_alloc_complex } from "./tensor_alloc_complex.js";
 
-export function mtoc2_tensor_from_row_complex(re, im, n) {
-  const t = mtoc2_tensor_alloc_complex(1, n);
+export function jit_tensor_from_row_complex(re, im, n) {
+  const t = jit_tensor_alloc_complex(1, n);
   for (let i = 0; i < n; i++) {
     t.data[i] = re[i];
     t.imag[i] = im[i];

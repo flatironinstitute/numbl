@@ -1,6 +1,6 @@
 % DIAGNOSIS: opt0 interpreter truncates matrix display at >20 cols
 %   ("Columns 1 through N" header + "..." ellipsis, via format2DSlice);
-%   opt1 JS-JIT's mtoc2_disp_tensor has NO truncation -> prints full row.
+%   opt1 JS-JIT's jit_disp_tensor has NO truncation -> prints full row.
 % --opt 0:
 %     Columns 1 through 25
 %

@@ -11,7 +11,7 @@ export const log10 = defineUnaryRealMath({
   signRule: () => "unknown",
   realDomainOk: t => signIsNonneg(t.sign),
   complex: {
-    cFnComplex: "mtoc2_clog10",
+    cFnComplex: "jit_clog10",
     jsFnComplex: cLog10,
     liftOnDomainMiss: true,
   },

@@ -289,7 +289,7 @@ export function lowerCellIndexStore(
 
   // The cell's slot storage (its per-shape C typedef) is fixed at
   // construction. Writes must be storage-equivalent with the
-  // targeted slot's existing type — mtoc2 doesn't reshape a cell
+  // targeted slot's existing type — the JIT doesn't reshape a cell
   // typedef mid-lifetime. Lattice-precision narrowing / widening
   // still happens through standard env-refresh paths if a future
   // pass wants to track it, but the C representation stays put.

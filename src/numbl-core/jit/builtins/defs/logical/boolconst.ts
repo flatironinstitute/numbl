@@ -36,15 +36,15 @@ function boolBuiltin(name: "true" | "false"): Builtin {
       ? defineShapeConstructor(
           name,
           1,
-          "mtoc2_tensor_ones_nd",
-          "mtoc2_tensor_ones_square",
+          "jit_tensor_ones_nd",
+          "jit_tensor_ones_square",
           { minArgs: 1 }
         )
       : defineShapeConstructor(
           name,
           0,
-          "mtoc2_tensor_zeros_nd",
-          "mtoc2_tensor_zeros_square",
+          "jit_tensor_zeros_nd",
+          "jit_tensor_zeros_square",
           { minArgs: 1 }
         );
   return {

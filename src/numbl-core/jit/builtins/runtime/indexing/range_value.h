@@ -1,4 +1,4 @@
-/* mtoc2 runtime helper: i-th element of a numbl-style `start:step:end`
+/* JIT runtime helper: i-th element of a numbl-style `start:step:end`
  * range, with snap-to-end on the last element.
  *
  * Mirrors numbl's `makeRangeTensor` step-of-i computation:
@@ -11,14 +11,14 @@
  *     `:0.3`. A single-element range (count == 1) is just `start` and
  *     must NOT snap, matching makeRangeTensor's `n > 1` guard.
  *
- * Used by `mtoc2_tensor_make_range`, slice-read range generation, and
+ * Used by `jit_tensor_make_range`, slice-read range generation, and
  * the For-loop emitter so every range-yielding site agrees on the
  * snapped values numbl produces.
  */
 
 #include <math.h>
 
-static double mtoc2_range_value(
+static double jit_range_value(
   double start, double step, double end, long count, long i
 ) {
   double v = start + step * (double)i;

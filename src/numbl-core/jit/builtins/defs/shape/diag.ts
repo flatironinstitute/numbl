@@ -17,7 +17,7 @@
  * Mirrors numbl's `diag` tensor-branch in
  * `interpreter/builtins/array-manipulation.ts`. Real and complex
  * inputs both supported (complex routes through `*_diag_*_complex`
- * runtime helpers); the sparse-matrix branch is N/A (mtoc2 has no
+ * runtime helpers); the sparse-matrix branch is N/A (the JIT has no
  * sparse type).
  *
  * Input shape must be statically known (matches numbl's eager
@@ -263,12 +263,12 @@ export const diag: Builtin = {
     if (isScalar(a)) {
       if (k === 0) return argsC[0];
       if (a.isComplex) {
-        useRuntime("mtoc2_tensor_diag");
-        useRuntime("mtoc2_cscalar");
-        return `mtoc2_tensor_diag_from_scalar_complex(creal(${argsC[0]}), cimag(${argsC[0]}), ${k}L)`;
+        useRuntime("jit_tensor_diag");
+        useRuntime("jit_cscalar");
+        return `jit_tensor_diag_from_scalar_complex(creal(${argsC[0]}), cimag(${argsC[0]}), ${k}L)`;
       }
-      useRuntime("mtoc2_tensor_diag");
-      return `mtoc2_tensor_diag_from_scalar(${argsC[0]}, ${k}L)`;
+      useRuntime("jit_tensor_diag");
+      return `jit_tensor_diag_from_scalar(${argsC[0]}, ${k}L)`;
     }
 
     const rows = (a.shape as number[])[0];
@@ -276,11 +276,11 @@ export const diag: Builtin = {
 
     if (rows === 1 || cols === 1) {
       if (a.isComplex) {
-        useRuntime("mtoc2_tensor_diag");
-        return `mtoc2_tensor_diag_construct_complex(${argsC[0]}, ${k}L)`;
+        useRuntime("jit_tensor_diag");
+        return `jit_tensor_diag_construct_complex(${argsC[0]}, ${k}L)`;
       }
-      useRuntime("mtoc2_tensor_diag");
-      return `mtoc2_tensor_diag_construct(${argsC[0]}, ${k}L)`;
+      useRuntime("jit_tensor_diag");
+      return `jit_tensor_diag_construct(${argsC[0]}, ${k}L)`;
     }
 
     const diagLen = diagonalLength(rows, cols, k);
@@ -289,17 +289,17 @@ export const diag: Builtin = {
       const c = k > 0 ? k : 0;
       const offset = r + c * rows;
       if (a.isComplex) {
-        useRuntime("mtoc2_cscalar");
-        return `mtoc2_cmake(${argsC[0]}.real[${offset}], ${argsC[0]}.imag != NULL ? ${argsC[0]}.imag[${offset}] : 0.0)`;
+        useRuntime("jit_cscalar");
+        return `jit_cmake(${argsC[0]}.real[${offset}], ${argsC[0]}.imag != NULL ? ${argsC[0]}.imag[${offset}] : 0.0)`;
       }
       return `${argsC[0]}.real[${offset}]`;
     }
     if (a.isComplex) {
-      useRuntime("mtoc2_tensor_diag");
-      return `mtoc2_tensor_diag_extract_complex(${argsC[0]}, ${k}L)`;
+      useRuntime("jit_tensor_diag");
+      return `jit_tensor_diag_extract_complex(${argsC[0]}, ${k}L)`;
     }
-    useRuntime("mtoc2_tensor_diag");
-    return `mtoc2_tensor_diag_extract(${argsC[0]}, ${k}L)`;
+    useRuntime("jit_tensor_diag");
+    return `jit_tensor_diag_extract(${argsC[0]}, ${k}L)`;
   },
 
   emitJs({ argsJs, argTypes, useRuntime }) {
@@ -309,11 +309,11 @@ export const diag: Builtin = {
     if (isScalar(a)) {
       if (k === 0) return argsJs[0];
       if (a.isComplex) {
-        useRuntime("mtoc2_tensor_diag");
-        return `mtoc2_tensor_diag_from_scalar_complex(${argsJs[0]}.re, ${argsJs[0]}.im, ${k})`;
+        useRuntime("jit_tensor_diag");
+        return `jit_tensor_diag_from_scalar_complex(${argsJs[0]}.re, ${argsJs[0]}.im, ${k})`;
       }
-      useRuntime("mtoc2_tensor_diag");
-      return `mtoc2_tensor_diag_from_scalar(${argsJs[0]}, ${k})`;
+      useRuntime("jit_tensor_diag");
+      return `jit_tensor_diag_from_scalar(${argsJs[0]}, ${k})`;
     }
 
     const rows = (a.shape as number[])[0];
@@ -321,11 +321,11 @@ export const diag: Builtin = {
 
     if (rows === 1 || cols === 1) {
       if (a.isComplex) {
-        useRuntime("mtoc2_tensor_diag");
-        return `mtoc2_tensor_diag_construct_complex(${argsJs[0]}, ${k})`;
+        useRuntime("jit_tensor_diag");
+        return `jit_tensor_diag_construct_complex(${argsJs[0]}, ${k})`;
       }
-      useRuntime("mtoc2_tensor_diag");
-      return `mtoc2_tensor_diag_construct(${argsJs[0]}, ${k})`;
+      useRuntime("jit_tensor_diag");
+      return `jit_tensor_diag_construct(${argsJs[0]}, ${k})`;
     }
 
     const diagLen = diagonalLength(rows, cols, k);
@@ -339,10 +339,10 @@ export const diag: Builtin = {
       return `${argsJs[0]}.data[${offset}]`;
     }
     if (a.isComplex) {
-      useRuntime("mtoc2_tensor_diag");
-      return `mtoc2_tensor_diag_extract_complex(${argsJs[0]}, ${k})`;
+      useRuntime("jit_tensor_diag");
+      return `jit_tensor_diag_extract_complex(${argsJs[0]}, ${k})`;
     }
-    useRuntime("mtoc2_tensor_diag");
-    return `mtoc2_tensor_diag_extract(${argsJs[0]}, ${k})`;
+    useRuntime("jit_tensor_diag");
+    return `jit_tensor_diag_extract(${argsJs[0]}, ${k})`;
   },
 };

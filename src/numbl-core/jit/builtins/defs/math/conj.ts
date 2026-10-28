@@ -78,16 +78,16 @@ export const conj: Builtin = {
     const a = argTypes[0] as NumericType;
     if (isMultiElement(a)) {
       if (a.isComplex) {
-        useRuntime("mtoc2_tensor_unary_complex_math");
-        useRuntime("mtoc2_cscalar");
-        return `mtoc2_tensor_conj_complex(${argsC[0]})`;
+        useRuntime("jit_tensor_unary_complex_math");
+        useRuntime("jit_cscalar");
+        return `jit_tensor_conj_complex(${argsC[0]})`;
       }
-      useRuntime("mtoc2_tensor_copy");
-      return `mtoc2_tensor_copy(${argsC[0]})`;
+      useRuntime("jit_tensor_copy");
+      return `jit_tensor_copy(${argsC[0]})`;
     }
     if (a.isComplex) {
-      useRuntime("mtoc2_cscalar");
-      return `mtoc2_cconj(${argsC[0]})`;
+      useRuntime("jit_cscalar");
+      return `jit_cconj(${argsC[0]})`;
     }
     return `(${argsC[0]})`;
   },
@@ -95,16 +95,16 @@ export const conj: Builtin = {
     const a = argTypes[0] as NumericType;
     if (isMultiElement(a)) {
       if (a.isComplex) {
-        useRuntime("mtoc2_tensor_unary_complex_math");
-        useRuntime("mtoc2_cscalar");
-        return `mtoc2_tensor_conj_complex(${argsJs[0]})`;
+        useRuntime("jit_tensor_unary_complex_math");
+        useRuntime("jit_cscalar");
+        return `jit_tensor_conj_complex(${argsJs[0]})`;
       }
-      useRuntime("mtoc2_tensor_copy");
-      return `mtoc2_tensor_copy(${argsJs[0]})`;
+      useRuntime("jit_tensor_copy");
+      return `jit_tensor_copy(${argsJs[0]})`;
     }
     if (a.isComplex) {
-      useRuntime("mtoc2_cscalar");
-      return `mtoc2_cconj(${argsJs[0]})`;
+      useRuntime("jit_cscalar");
+      return `jit_cconj(${argsJs[0]})`;
     }
     return `(${argsJs[0]})`;
   },

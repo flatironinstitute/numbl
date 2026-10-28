@@ -32,10 +32,10 @@ import { useRuntimeByName, type RuntimeState } from "./runtime.js";
 
 export function emitCellTypedef(t: CellType, state: RuntimeState): string {
   const name = cellTypedefName(t);
-  // The generated `_disp` writes its framing through mtoc2_stdout* so it
+  // The generated `_disp` writes its framing through jit_stdout* so it
   // shares the host-write channel with the slot values (a raw printf
   // would reorder against fprintf / disp under a captured --opt 2 run).
-  useRuntimeByName(state, "mtoc2_host_output");
+  useRuntimeByName(state, "jit_host_output");
   if (t.mode === "tuple") return emitCellTupleTypedef(t, name, state);
   return emitCellUniformTypedef(t, name, state);
 }
@@ -128,17 +128,17 @@ function emitCellTupleTypedef(
   // _disp: `{e1, e2, ...}` — numbl format.
   lines.push(`static void ${name}_disp(${name} v) {`);
   if (slotCount === 0) {
-    lines.push(`  mtoc2_stdout_s("{}");`);
+    lines.push(`  jit_stdout_s("{}");`);
     lines.push(`}`);
     lines.push("");
     return lines.join("\n");
   }
-  lines.push(`  mtoc2_stdout_s("{");`);
+  lines.push(`  jit_stdout_s("{");`);
   for (let i = 0; i < slotCount; i++) {
-    if (i > 0) lines.push(`  mtoc2_stdout_s(", ");`);
+    if (i > 0) lines.push(`  jit_stdout_s(", ");`);
     lines.push(...emitSlotInlineDisp(elements[i], `v.slot_${i}`, state));
   }
-  lines.push(`  mtoc2_stdout_s("}");`);
+  lines.push(`  jit_stdout_s("}");`);
   lines.push(`}`);
   lines.push("");
 
@@ -167,7 +167,7 @@ function emitCellUniformTypedef(
   lines.push(`/* ${pretty} */`);
   lines.push(`typedef struct ${name} {`);
   lines.push(`  size_t ndim;`);
-  lines.push(`  size_t dims[8]; /* MTOC2_MAX_NDIM */`);
+  lines.push(`  size_t dims[8]; /* JIT_MAX_NDIM */`);
   lines.push(`  size_t nslots;`);
   lines.push(`  ${cTypeFor(elem)} *slots;`);
   lines.push(`} ${name};`);
@@ -234,13 +234,13 @@ function emitCellUniformTypedef(
 
   // _disp: same numbl format `{e1, e2, ...}`.
   lines.push(`static void ${name}_disp(${name} v) {`);
-  lines.push(`  if (v.nslots == 0) { mtoc2_stdout_s("{}"); return; }`);
-  lines.push(`  mtoc2_stdout_s("{");`);
+  lines.push(`  if (v.nslots == 0) { jit_stdout_s("{}"); return; }`);
+  lines.push(`  jit_stdout_s("{");`);
   lines.push(`  for (size_t _i = 0; _i < v.nslots; _i++) {`);
-  lines.push(`    if (_i > 0) mtoc2_stdout_s(", ");`);
+  lines.push(`    if (_i > 0) jit_stdout_s(", ");`);
   lines.push(...emitSlotInlineDisp(elem, `v.slots[_i]`, state, "    "));
   lines.push(`  }`);
-  lines.push(`  mtoc2_stdout_s("}");`);
+  lines.push(`  jit_stdout_s("}");`);
   lines.push(`}`);
   lines.push("");
 
@@ -263,44 +263,44 @@ function emitSlotInlineDisp(
 ): string[] {
   const lines: string[] = [];
   if (ty.kind === "Char") {
-    // Char value is `mtoc2_char_tensor_t { data, rows, cols, owned }` —
-    // mtoc2's 1×N byte buffer. Numbl wraps with `'...'`. Write the raw
-    // bytes through mtoc2_stdout (not printf) so the content shares the
+    // Char value is `jit_char_tensor_t { data, rows, cols, owned }` —
+    // the JIT's 1×N byte buffer. Numbl wraps with `'...'`. Write the raw
+    // bytes through jit_stdout (not printf) so the content shares the
     // host-write channel and isn't capped by a format buffer.
-    lines.push(`${indent}mtoc2_stdout_s("'");`);
+    lines.push(`${indent}jit_stdout_s("'");`);
     lines.push(
-      `${indent}mtoc2_stdout((const char*)${expr}.data, (long)${expr}.cols);`
+      `${indent}jit_stdout((const char*)${expr}.data, (long)${expr}.cols);`
     );
-    lines.push(`${indent}mtoc2_stdout_s("'");`);
+    lines.push(`${indent}jit_stdout_s("'");`);
     return lines;
   }
   if (ty.kind === "String") {
-    // String is `mtoc2_string_t { data, len, owned }`; numbl
+    // String is `jit_string_t { data, len, owned }`; numbl
     // wraps with `"..."`.
-    lines.push(`${indent}mtoc2_stdout_s("\\"");`);
+    lines.push(`${indent}jit_stdout_s("\\"");`);
     lines.push(
-      `${indent}mtoc2_stdout((const char*)${expr}.data, (long)${expr}.len);`
+      `${indent}jit_stdout((const char*)${expr}.data, (long)${expr}.len);`
     );
-    lines.push(`${indent}mtoc2_stdout_s("\\"");`);
+    lines.push(`${indent}jit_stdout_s("\\"");`);
     return lines;
   }
   if (isNumeric(ty) && !isMultiElement(ty)) {
     // Scalar slot: format exactly like `disp(x)` (numbl's formatNumber)
     // but without the trailing newline — NOT a raw `%g`, which prints
     // only 6 significant digits (and renders Inf/NaN as libc inf/nan).
-    useRuntimeByName(state, "mtoc2_format_double");
-    useRuntimeByName(state, "mtoc2_host_output");
+    useRuntimeByName(state, "jit_format_double");
+    useRuntimeByName(state, "jit_host_output");
     lines.push(
-      `${indent}{ char _mtoc2_cb[64]; mtoc2_format_double(_mtoc2_cb, sizeof(_mtoc2_cb), ${expr}); mtoc2_stdout_s(_mtoc2_cb); }`
+      `${indent}{ char _jit_cb[64]; jit_format_double(_jit_cb, sizeof(_jit_cb), ${expr}); jit_stdout_s(_jit_cb); }`
     );
     return lines;
   }
   if (isMultiElement(ty)) {
-    // Inline-display variant — same body as `mtoc2_disp_tensor` but
+    // Inline-display variant — same body as `jit_disp_tensor` but
     // skips the trailing newline so numbl's `formatCell` interpolation
     // pattern matches byte-for-byte (`{e1, e2, ...   1   2   3}`).
-    useRuntimeByName(state, "mtoc2_disp_tensor_inline");
-    lines.push(`${indent}mtoc2_disp_tensor_inline(${expr});`);
+    useRuntimeByName(state, "jit_disp_tensor_inline");
+    lines.push(`${indent}jit_disp_tensor_inline(${expr});`);
     return lines;
   }
   if (ty.kind === "Struct") {
@@ -319,26 +319,26 @@ function emitSlotInlineDisp(
   // Class / Handle in a cell slot: no disp helper. Render a stub
   // matching numbl's `displayValue` fall-through if reachable; the
   // immediate need (chunkie cells) doesn't exercise this.
-  lines.push(`${indent}mtoc2_stdout_s("[unsupported cell slot disp]");`);
+  lines.push(`${indent}jit_stdout_s("[unsupported cell slot disp]");`);
   return lines;
 }
 
 function activateSlotRuntime(ty: Type, state: RuntimeState): void {
   if (isMultiElement(ty)) {
-    useRuntimeByName(state, "mtoc2_tensor_empty");
-    useRuntimeByName(state, "mtoc2_tensor_assign");
-    useRuntimeByName(state, "mtoc2_tensor_copy");
-    useRuntimeByName(state, "mtoc2_tensor_free");
+    useRuntimeByName(state, "jit_tensor_empty");
+    useRuntimeByName(state, "jit_tensor_assign");
+    useRuntimeByName(state, "jit_tensor_copy");
+    useRuntimeByName(state, "jit_tensor_free");
   } else if (ty.kind === "String") {
-    useRuntimeByName(state, "mtoc2_string_empty");
-    useRuntimeByName(state, "mtoc2_string_assign");
-    useRuntimeByName(state, "mtoc2_string_copy");
-    useRuntimeByName(state, "mtoc2_string_free");
+    useRuntimeByName(state, "jit_string_empty");
+    useRuntimeByName(state, "jit_string_assign");
+    useRuntimeByName(state, "jit_string_copy");
+    useRuntimeByName(state, "jit_string_free");
   } else if (ty.kind === "Char") {
-    useRuntimeByName(state, "mtoc2_char_tensor_empty");
-    useRuntimeByName(state, "mtoc2_char_tensor_assign");
-    useRuntimeByName(state, "mtoc2_char_tensor_copy");
-    useRuntimeByName(state, "mtoc2_char_tensor_free");
+    useRuntimeByName(state, "jit_char_tensor_empty");
+    useRuntimeByName(state, "jit_char_tensor_assign");
+    useRuntimeByName(state, "jit_char_tensor_copy");
+    useRuntimeByName(state, "jit_char_tensor_free");
   }
   // For nested Struct / Class / Cell / Handle slots, the typedef
   // ordering guarantees the inner type's helpers are emitted before

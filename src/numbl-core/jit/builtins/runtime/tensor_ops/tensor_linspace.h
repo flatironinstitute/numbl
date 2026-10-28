@@ -1,4 +1,4 @@
-/* mtoc2 runtime helper: build a 1×n row tensor of n linearly-spaced
+/* JIT runtime helper: build a 1×n row tensor of n linearly-spaced
  * values from `a` to `b` inclusive. Matches numbl's `linspace` byte-
  * for-byte:
  *
@@ -14,9 +14,9 @@
 
 #include <math.h>
 
-static mtoc2_tensor_t mtoc2_tensor_linspace(double a, double b, long n) {
+static jit_tensor_t jit_tensor_linspace(double a, double b, long n) {
   if (n < 0) n = 0;
-  mtoc2_tensor_t out = mtoc2_tensor_alloc(1, n);
+  jit_tensor_t out = jit_tensor_alloc(1, n);
   if (n == 0) return out;
   if (n == 1) {
     out.real[0] = b;

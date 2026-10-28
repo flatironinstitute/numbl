@@ -2,7 +2,7 @@
  * `class(x)` — return the static type name as a char (single-quoted)
  * value.
  *
- * Always static in mtoc2: the type lattice knows every value's kind
+ * Always static in the JIT: the type lattice knows every value's kind
  * (numeric/double, numeric/logical, char, string, struct, class
  * instance, cell, function-handle). The transfer attaches the
  * resolved name to the `CharType`'s `exact` slot so subsequent
@@ -86,12 +86,12 @@ export const classBuiltin: Builtin = {
   },
   emitC({ argTypes, useRuntime }) {
     const name = classNameForType(argTypes[0]);
-    useRuntime("mtoc2_char_tensor_from_literal");
+    useRuntime("jit_char_tensor_from_literal");
     const { lit, byteLen } = asciiCLit(name);
-    return `mtoc2_char_tensor_from_literal(${lit}, ${byteLen})`;
+    return `jit_char_tensor_from_literal(${lit}, ${byteLen})`;
   },
   emitJs({ argTypes }) {
     const name = classNameForType(argTypes[0]);
-    return `({mtoc2Tag:"char", value:${JSON.stringify(name)}})`;
+    return `({jitTag:"char", value:${JSON.stringify(name)}})`;
   },
 };

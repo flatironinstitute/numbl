@@ -6,7 +6,7 @@
  * Unlike `error`, `warning` doesn't throw and has no `try/catch`
  * interaction; the identifier-bearing form is accepted for
  * source-level compatibility but the id is dropped (numbl wires it
- * into a `lastwarn` state mtoc2 doesn't expose).
+ * into a `lastwarn` state the JIT doesn't expose).
  *
  * The state-query form `warning('on'/'off', id)` and the no-arg
  * call `warning()` are deferred — chunkie doesn't use them.
@@ -76,7 +76,7 @@ export const warningBuiltin: Builtin = {
     return [{ kind: "Void" }];
   },
   emitC({ argsC, argTypes, useRuntime }) {
-    useRuntime("mtoc2_warning_fmt");
+    useRuntime("jit_warning_fmt");
     const first = argTypes[0];
     const firstExact =
       first.kind === "Char" || first.kind === "String"
@@ -95,7 +95,7 @@ export const warningBuiltin: Builtin = {
     for (let i = fmtIdx + 1; i < argTypes.length; i++) {
       slots.push(emitFormatSlot("warning", argsC[i], argTypes[i], i));
     }
-    return `mtoc2_warning_fmt(${fmtView}, ${slots.length}, ${emitFormatSlotArray(slots)})`;
+    return `jit_warning_fmt(${fmtView}, ${slots.length}, ${emitFormatSlotArray(slots)})`;
   },
   emitJs({ argsJs, argTypes, useRuntime }) {
     const first = argTypes[0];
@@ -112,10 +112,10 @@ export const warningBuiltin: Builtin = {
       fmtIdx = 1;
     }
     if (fmtIdx === 1 && firstExact !== undefined) {
-      useRuntime("mtoc2_warning_fmt_id");
-      return `mtoc2_warning_fmt_id(${JSON.stringify(firstExact)}, ${argsJs.slice(fmtIdx).join(", ")})`;
+      useRuntime("jit_warning_fmt_id");
+      return `jit_warning_fmt_id(${JSON.stringify(firstExact)}, ${argsJs.slice(fmtIdx).join(", ")})`;
     }
-    useRuntime("mtoc2_warning_fmt");
-    return `mtoc2_warning_fmt(${argsJs.slice(fmtIdx).join(", ")})`;
+    useRuntime("jit_warning_fmt");
+    return `jit_warning_fmt(${argsJs.slice(fmtIdx).join(", ")})`;
   },
 };

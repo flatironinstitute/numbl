@@ -3,7 +3,7 @@
  * the `n = floor((end - start) / step + 1 + 1e-10)` formula used in
  * three places: `lowerRangeAsValue` (range-as-value `1:n`), the
  * `exactRangeCount` helper in `lowerIndexSlice.ts`, and the C-side
- * `mtoc2_loop_count` runtime helper. All three must agree byte-for-
+ * `jit_loop_count` runtime helper. All three must agree byte-for-
  * byte so the statically-known shape, the runtime-allocated buffer
  * length, and the for-loop iteration count match.
  *

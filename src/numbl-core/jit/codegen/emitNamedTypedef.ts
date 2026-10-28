@@ -18,7 +18,7 @@
  *   - owned (multi-element Numeric / nested Struct / nested Class):
  *     route through the field's own owned-kind helper family.
  *
- * Tensor fields call `mtoc2_tensor_*` directly; nested struct/class
+ * Tensor fields call `jit_tensor_*` directly; nested struct/class
  * fields call the corresponding `<inner-typedef>_*` helper, so a
  * topological order over the typedef-dependency graph guarantees each
  * helper is defined before the one that uses it.
@@ -52,7 +52,7 @@ export interface NamedTypedefSpec {
 
 /** Emit the typedef and its four (or five) owned-kind helpers as
  *  one block of C source. Activates any runtime snippets the helpers
- *  call into (e.g. `mtoc2_tensor_copy`). */
+ *  call into (e.g. `jit_tensor_copy`). */
 export function emitNamedTypedef(
   spec: NamedTypedefSpec,
   state: RuntimeState
@@ -79,7 +79,7 @@ export function emitNamedTypedef(
   lines.push(`typedef struct ${spec.name} {`);
   if (isEmpty) {
     // C99 forbids empty structs; emit a placeholder field. Used by
-    // no-capture function handles (`mtoc2_handle_empty_t`).
+    // no-capture function handles (`jit_handle_empty_t`).
     lines.push(`  char _placeholder;`);
   } else {
     for (const f of spec.fields) {
@@ -166,7 +166,7 @@ export function emitNamedTypedef(
 /** Emit `<name>_disp(v)` — prints a `key: value` line per field. The
  *  format is intentionally narrow: it matches what numbl's `disp` on
  *  a scalar struct produces for the common scalar / tensor field
- *  shapes (so the cross-runner stays byte-exact). Anything outside
+ *  shapes. Anything outside
  *  that subset would fail at lowering, not here. */
 function emitStructDisp(spec: NamedTypedefSpec, state: RuntimeState): string[] {
   // Each `disp_double`/`disp_tensor` call pulls in its own snippet on
@@ -192,10 +192,10 @@ function emitStructDisp(spec: NamedTypedefSpec, state: RuntimeState): string[] {
   // field kind only has to land in one place.
   const useRt = (name: string) => useRuntimeByName(state, name);
   // Field labels / framing must go through the same host-write channel
-  // as the values (mtoc2_disp_double / disp_tensor) — a raw printf would
-  // land on libc stdout while values route through mtoc2_host_write,
+  // as the values (jit_disp_double / disp_tensor) — a raw printf would
+  // land on libc stdout while values route through jit_host_write,
   // reordering the output under a captured/streamed --opt 2 run.
-  useRt("mtoc2_host_output");
+  useRt("jit_host_output");
   for (const f of spec.fields) {
     if (f.ty.kind === "Class") {
       // Class / handle disp not supported in v1; emit nothing rather
@@ -209,11 +209,11 @@ function emitStructDisp(spec: NamedTypedefSpec, state: RuntimeState): string[] {
       lines.push(`  /* skipping handle-typed field '${f.name}' in disp */`);
       continue;
     }
-    lines.push(`  mtoc2_stdout_s("    ${f.name}: ");`);
+    lines.push(`  jit_stdout_s("    ${f.name}: ");`);
     if (f.ty.kind === "Struct") {
       // A nested struct's own _disp emits its own header/leading
       // newline; numbl prints a blank then the nested fields.
-      lines.push(`  mtoc2_stdout_s("\\n");`);
+      lines.push(`  jit_stdout_s("\\n");`);
       lines.push(`  ${structTypedefName(f.ty)}_disp(v.${f.name});`);
       continue;
     }

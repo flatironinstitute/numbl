@@ -15,8 +15,8 @@
 % (array-manipulation.ts) also uses Math.round. C should round to match.
 %
 % JIT ENGAGEMENT: CONFIRMED. opt2 --dump-c (877 lines) call site is
-%   mtoc2_tensor_repmat(_mtoc2_t1, 2, (long[]){1L, (long)(n)})
-% opt1 --dump-js call site is mtoc2_tensor_repmat(..., [1, Math.round(n)]).
+%   jit_tensor_repmat(_jit_t1, 2, (long[]){1L, (long)(n)})
+% opt1 --dump-js call site is jit_tensor_repmat(..., [1, Math.round(n)]).
 function s = f(vals, k)
   n = vals(k);
   r = repmat([1 2 3], 1, n);

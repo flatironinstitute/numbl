@@ -1,4 +1,4 @@
-/* mtoc2 runtime helper: compute the iteration count for a numbl-style
+/* JIT runtime helper: compute the iteration count for a numbl-style
  * `start : step : end` range as a non-negative `long`.
  *
  * Mirrors numbl's `makeRangeTensor` formula
@@ -34,7 +34,7 @@
 #include <limits.h>
 #include <math.h>
 
-static long mtoc2_loop_count(double start, double end, double step) {
+static long jit_loop_count(double start, double end, double step) {
   if (step == 0.0) return 0;
   double n = floor((end - start) / step + 1.0 + 1e-10);
   if (!isfinite(n)) return 0;

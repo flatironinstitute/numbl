@@ -1,4 +1,4 @@
-/* mtoc2 runtime helper: deep-copy a char tensor into a fresh heap buffer.
+/* JIT runtime helper: deep-copy a char tensor into a fresh heap buffer.
  *
  * Returns an owned copy of `src`. Used for `c = d;` where `d` is a
  * char-tensor variable — the copy lets `d` remain usable while giving
@@ -9,12 +9,12 @@
 #include <stdlib.h>
 #include <string.h>
 
-static mtoc2_char_tensor_t mtoc2_char_tensor_copy(mtoc2_char_tensor_t src) {
+static jit_char_tensor_t jit_char_tensor_copy(jit_char_tensor_t src) {
   long n = src.rows * src.cols;
-  mtoc2_char_tensor_t out;
+  jit_char_tensor_t out;
   out.data = (char *)malloc((size_t)(n > 0 ? n : 1));
   if (!out.data) {
-    fprintf(stderr, "mtoc2: out of memory in mtoc2_char_tensor_copy\n");
+    fprintf(stderr, "C-JIT: out of memory in jit_char_tensor_copy\n");
     abort();
   }
   out.rows = src.rows;

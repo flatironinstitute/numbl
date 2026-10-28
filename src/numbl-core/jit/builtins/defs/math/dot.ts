@@ -263,28 +263,28 @@ export const dot: Builtin = {
     const b = argTypes[1] as NumericType;
     const anyComplex = a.isComplex || b.isComplex;
     if (isMultiElement(a) && isMultiElement(b)) {
-      useRuntime("mtoc2_dot_real");
-      if (anyComplex) useRuntime("mtoc2_cscalar");
+      useRuntime("jit_dot_real");
+      if (anyComplex) useRuntime("jit_cscalar");
       const helper = anyComplex
         ? isVectorLike(a) || isVectorLike(b)
-          ? "mtoc2_dot_complex"
-          : "mtoc2_dot_complex_matrix"
+          ? "jit_dot_complex"
+          : "jit_dot_complex_matrix"
         : isVectorLike(a) || isVectorLike(b)
-          ? "mtoc2_dot_real"
-          : "mtoc2_dot_real_matrix";
+          ? "jit_dot_real"
+          : "jit_dot_real_matrix";
       return `${helper}(${argsC[0]}, ${argsC[1]})`;
     }
     // Scalar/scalar. For complex, emit `conj(a) * b` directly via
-    // mtoc2_cmul + mtoc2_cconj; for the real path, plain `a * b`.
+    // jit_cmul + jit_cconj; for the real path, plain `a * b`.
     if (anyComplex) {
-      useRuntime("mtoc2_cscalar");
+      useRuntime("jit_cscalar");
       const aC = a.isComplex
         ? argsC[0]
-        : `mtoc2_cmake((double)(${argsC[0]}), 0.0)`;
+        : `jit_cmake((double)(${argsC[0]}), 0.0)`;
       const bC = b.isComplex
         ? argsC[1]
-        : `mtoc2_cmake((double)(${argsC[1]}), 0.0)`;
-      return `mtoc2_cmul(mtoc2_cconj(${aC}), ${bC})`;
+        : `jit_cmake((double)(${argsC[1]}), 0.0)`;
+      return `jit_cmul(jit_cconj(${aC}), ${bC})`;
     }
     return `((${argsC[0]}) * (${argsC[1]}))`;
   },
@@ -293,21 +293,21 @@ export const dot: Builtin = {
     const b = argTypes[1] as NumericType;
     const anyComplex = a.isComplex || b.isComplex;
     if (isMultiElement(a) && isMultiElement(b)) {
-      useRuntime("mtoc2_dot_real");
+      useRuntime("jit_dot_real");
       const helper = anyComplex
         ? isVectorLike(a) || isVectorLike(b)
-          ? "mtoc2_dot_complex"
-          : "mtoc2_dot_complex_matrix"
+          ? "jit_dot_complex"
+          : "jit_dot_complex_matrix"
         : isVectorLike(a) || isVectorLike(b)
-          ? "mtoc2_dot_real"
-          : "mtoc2_dot_real_matrix";
+          ? "jit_dot_real"
+          : "jit_dot_real_matrix";
       return `${helper}(${argsJs[0]}, ${argsJs[1]})`;
     }
     if (anyComplex) {
-      useRuntime("mtoc2_cscalar");
-      const aJs = a.isComplex ? argsJs[0] : `mtoc2_cmake(${argsJs[0]}, 0)`;
-      const bJs = b.isComplex ? argsJs[1] : `mtoc2_cmake(${argsJs[1]}, 0)`;
-      return `mtoc2_cmul(mtoc2_cconj(${aJs}), ${bJs})`;
+      useRuntime("jit_cscalar");
+      const aJs = a.isComplex ? argsJs[0] : `jit_cmake(${argsJs[0]}, 0)`;
+      const bJs = b.isComplex ? argsJs[1] : `jit_cmake(${argsJs[1]}, 0)`;
+      return `jit_cmul(jit_cconj(${aJs}), ${bJs})`;
     }
     return `((${argsJs[0]}) * (${argsJs[1]}))`;
   },

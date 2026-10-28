@@ -41,7 +41,7 @@ export const assert: Builtin = {
     }
     if (!isScalar(cond)) {
       throw new UnsupportedConstruct(
-        `'assert' on a tensor cond is not yet supported in mtoc2 v1 ` +
+        `'assert' on a tensor cond is not yet supported by the JIT ` +
           `(numbl tests every element non-zero and non-NaN); pass a scalar predicate instead`
       );
     }
@@ -74,20 +74,20 @@ export const assert: Builtin = {
     return [{ kind: "Void" }];
   },
   emitC({ argsC, argTypes, useRuntime }) {
-    useRuntime("mtoc2_assert_scalar");
-    useRuntime("mtoc2_assert_scalar_fmt");
+    useRuntime("jit_assert_scalar");
+    useRuntime("jit_assert_scalar_fmt");
     const cond = argTypes[0];
     if (isNumeric(cond) && exactDouble(cond) !== undefined) {
       return `((void)0)`;
     }
     const condC = `(double)(${argsC[0]})`;
     if (argTypes.length < 2) {
-      return `mtoc2_assert_scalar(${condC}, (const char *)0)`;
+      return `jit_assert_scalar(${condC}, (const char *)0)`;
     }
     if (argTypes.length === 2) {
       const m = argTypes[1];
       if ((m.kind === "Char" || m.kind === "String") && m.exact !== undefined) {
-        return `mtoc2_assert_scalar(${condC}, ${JSON.stringify(m.exact)})`;
+        return `jit_assert_scalar(${condC}, ${JSON.stringify(m.exact)})`;
       }
     }
     const fmtView = emitTextView(argsC[1], argTypes[1]);
@@ -95,17 +95,17 @@ export const assert: Builtin = {
     for (let i = 2; i < argTypes.length; i++) {
       slots.push(emitFormatSlot("assert", argsC[i], argTypes[i], i));
     }
-    return `mtoc2_assert_scalar_fmt(${condC}, ${fmtView}, ${slots.length}, ${emitFormatSlotArray(slots)})`;
+    return `jit_assert_scalar_fmt(${condC}, ${fmtView}, ${slots.length}, ${emitFormatSlotArray(slots)})`;
   },
   emitJs({ argsJs, argTypes, useRuntime }) {
-    useRuntime("mtoc2_assert_scalar_fmt");
+    useRuntime("jit_assert_scalar_fmt");
     const cond = argTypes[0];
     if (isNumeric(cond) && exactDouble(cond) !== undefined) {
       return `undefined`;
     }
     if (argTypes.length < 2) {
-      return `mtoc2_assert_scalar_fmt(${argsJs[0]}, "assertion failed")`;
+      return `jit_assert_scalar_fmt(${argsJs[0]}, "assertion failed")`;
     }
-    return `mtoc2_assert_scalar_fmt(${argsJs.join(", ")})`;
+    return `jit_assert_scalar_fmt(${argsJs.join(", ")})`;
   },
 };

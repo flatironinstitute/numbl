@@ -61,14 +61,14 @@ export function fnParamList(fn: IRFunc): string {
   for (let i = 0; i < fn.cParams.length; i++) {
     parts.push(`${cTypeFor(fn.paramTypes[i])} ${fn.cParams[i]}`);
   }
-  // Multi-output convention: append one `T_i *_mtoc2_o<i>` per output
+  // Multi-output convention: append one `T_i *_jit_o<i>` per output
   // after the user params, in declaration order. The body's sret
   // writes (emitted at every return point and at the function-end
   // fall-through) target these pointers.
   if (fn.outputs.length >= 2) {
     for (let i = 0; i < fn.outputs.length; i++) {
       const ty = fn.outputTypes[i] ?? { kind: "Unknown" as const };
-      parts.push(`${cTypeFor(ty)} *_mtoc2_o${i}`);
+      parts.push(`${cTypeFor(ty)} *_jit_o${i}`);
     }
   }
   return parts.length === 0 ? "void" : parts.join(", ");
@@ -194,7 +194,7 @@ export function emitFunction(
   // outputs above, params in the function signature). Without the
   // paramNames filter, a body that reassigns an owned param
   // (`function f(xs); xs = xs(:); ...`) would emit a duplicate
-  // `mtoc2_tensor_t xs = mtoc2_tensor_empty();` and the C compiler
+  // `jit_tensor_t xs = jit_tensor_empty();` and the C compiler
   // would reject the redeclaration.
   const isLocalDeclSite = (o: { cName: string }): boolean =>
     !outputCNames.has(o.cName) && !paramNames.has(o.cName);
@@ -258,7 +258,7 @@ export function emitFunction(
     // Multi-output: write each output through its sret pointer
     // BEFORE the scope-exit free walk so the writes can read the
     // live locals before any tensor frees would zero them.
-    //   Scalar slots: bare struct copy (`*_mtoc2_o<i> = <local>`).
+    //   Scalar slots: bare struct copy (`*_jit_o<i> = <local>`).
     //   Owned slots:  ownership transfer via the kind's `_assign`
     //                 helper. The local's scope-exit free is
     //                 suppressed below (`outputCNames` skip).
@@ -267,9 +267,9 @@ export function emitFunction(
         const outTy = fn.outputTypes[i];
         if (outTy && isOwned(outTy)) {
           const h = requireOwnedHelpers(outTy);
-          tail.push(`${indent}${h.assign}(_mtoc2_o${i}, ${fn.cOutputs[i]});`);
+          tail.push(`${indent}${h.assign}(_jit_o${i}, ${fn.cOutputs[i]});`);
         } else {
-          tail.push(`${indent}*_mtoc2_o${i} = ${fn.cOutputs[i]};`);
+          tail.push(`${indent}*_jit_o${i} = ${fn.cOutputs[i]};`);
         }
       }
     }
@@ -300,7 +300,7 @@ export function emitFunction(
     fnReturnTail
   );
   // Grow-bail guard (host-entry function only). A runtime indexed-store
-  // grow `longjmp`s here from `mtoc2_idx_*_grow` (see `grow_bail.h`);
+  // grow `longjmp`s here from `jit_idx_*_grow` (see `grow_bail.h`);
   // we free owned buffers and return a zero value. The flag stays set,
   // so the host re-runs the whole scope on the interpreter (full grow
   // semantics). Only the entry (`storageClass === ""`) arms a setjmp —
@@ -309,7 +309,7 @@ export function emitFunction(
   // before the body so it's armed for the body's first store.
   if (storageClass === "" && state.usedGrowBail) {
     const bail: string[] = [];
-    bail.push(`  if (setjmp(mtoc2_grow_bail_buf)) {`);
+    bail.push(`  if (setjmp(jit_grow_bail_buf)) {`);
     for (const o of [...owned, ...ownedParams]) {
       const h = requireOwnedHelpers(o.ty);
       bail.push(`    ${h.free}(&${o.cName});`);
@@ -410,7 +410,7 @@ function emitFusedFallback(
       if (args.some((a, i) => a !== e.args[i])) r = { ...e, args };
     }
     if (isRoot || r.kind === "Var" || !isOwned(r.ty)) return r;
-    const name = `_mtoc2_fb${decls.length}`;
+    const name = `_jit_fb${decls.length}`;
     const h = activatedOwnedHelpers(r.ty, state);
     decls.push(`${cTypeFor(r.ty)} ${name} = ${emitExpr(r, state)};`);
     frees.push(`${h.free}(&${name});`);
@@ -495,27 +495,27 @@ function emitStmt(
         // Both lanes must be written. The offset expression may have
         // side effects (function calls, autoinc, etc.), so hoist it to
         // a local. RHS may be real (project imag → 0) or complex
-        // (split via `mtoc2_creal/cimag`).
-        useRuntimeByName(state, "mtoc2_cscalar");
+        // (split via `jit_creal/cimag`).
+        useRuntimeByName(state, "jit_cscalar");
         if (rhsIsComplex) {
           const lines: string[] = [];
           lines.push(`${indent}{`);
-          lines.push(`${indent}  long _mtoc2_off = ${offset};`);
-          lines.push(`${indent}  double _Complex _mtoc2_rhs = ${rhs};`);
+          lines.push(`${indent}  long _jit_off = ${offset};`);
+          lines.push(`${indent}  double _Complex _jit_rhs = ${rhs};`);
           lines.push(
-            `${indent}  ${slotCName}.real[_mtoc2_off] = mtoc2_creal(_mtoc2_rhs);`
+            `${indent}  ${slotCName}.real[_jit_off] = jit_creal(_jit_rhs);`
           );
           lines.push(
-            `${indent}  ${slotCName}.imag[_mtoc2_off] = mtoc2_cimag(_mtoc2_rhs);`
+            `${indent}  ${slotCName}.imag[_jit_off] = jit_cimag(_jit_rhs);`
           );
           lines.push(`${indent}}`);
           return lines.join("\n");
         }
         const lines: string[] = [];
         lines.push(`${indent}{`);
-        lines.push(`${indent}  long _mtoc2_off = ${offset};`);
-        lines.push(`${indent}  ${slotCName}.real[_mtoc2_off] = ${rhs};`);
-        lines.push(`${indent}  ${slotCName}.imag[_mtoc2_off] = 0.0;`);
+        lines.push(`${indent}  long _jit_off = ${offset};`);
+        lines.push(`${indent}  ${slotCName}.real[_jit_off] = ${rhs};`);
+        lines.push(`${indent}  ${slotCName}.imag[_jit_off] = 0.0;`);
         lines.push(`${indent}}`);
         return lines.join("\n");
       }
@@ -587,35 +587,35 @@ function emitStmt(
       // MATLAB / numbl evaluate `start:step:end` ONCE at loop entry
       // (the range becomes a vector and the loop iterates over its
       // elements). To match: snapshot start/end into block-scoped
-      // locals, derive the iteration count via `mtoc2_loop_count` so
-      // it agrees with `mtoc2_tensor_make_range`'s formula, and use
-      // `mtoc2_range_value` to apply the snap-to-end on the final
+      // locals, derive the iteration count via `jit_loop_count` so
+      // it agrees with `jit_tensor_make_range`'s formula, and use
+      // `jit_range_value` to apply the snap-to-end on the final
       // iteration. Without this, the body re-reads the live binding
       // for `end` every iteration — so e.g. `for k=1:n; n=100; end`
       // becomes a 100-iter loop instead of the MATLAB-correct 3.
-      useRuntimeByName(state, "mtoc2_loop_count");
-      useRuntimeByName(state, "mtoc2_range_value");
+      useRuntimeByName(state, "jit_loop_count");
+      useRuntimeByName(state, "jit_range_value");
       const lines: string[] = [];
       const startC = emitExpr(s.start, state);
       const endC = emitExpr(s.end, state);
       const stepC = formatDouble(s.step);
       // Block-scope the snapshot temps so nested For loops don't
-      // collide on the fixed `_mtoc2_for_*` names.
+      // collide on the fixed `_jit_for_*` names.
       lines.push(`${indent}{`);
-      lines.push(`${indent}  const double _mtoc2_for_start = ${startC};`);
-      lines.push(`${indent}  const double _mtoc2_for_end = ${endC};`);
+      lines.push(`${indent}  const double _jit_for_start = ${startC};`);
+      lines.push(`${indent}  const double _jit_for_end = ${endC};`);
       lines.push(
-        `${indent}  const long _mtoc2_for_n = mtoc2_loop_count(_mtoc2_for_start, _mtoc2_for_end, ${stepC});`
+        `${indent}  const long _jit_for_n = jit_loop_count(_jit_for_start, _jit_for_end, ${stepC});`
       );
       lines.push(
-        `${indent}  for (long _mtoc2_for_i = 0; _mtoc2_for_i < _mtoc2_for_n; _mtoc2_for_i++) {`
+        `${indent}  for (long _jit_for_i = 0; _jit_for_i < _jit_for_n; _jit_for_i++) {`
       );
       // The loop var is pre-declared at function top by
       // `collectLocals`, so the rebind here is a plain
       // assignment. This lets reads after the loop see the final
       // iteration's value (matching numbl).
       lines.push(
-        `${indent}    ${s.cVar} = mtoc2_range_value(_mtoc2_for_start, ${stepC}, _mtoc2_for_end, _mtoc2_for_n, _mtoc2_for_i);`
+        `${indent}    ${s.cVar} = jit_range_value(_jit_for_start, ${stepC}, _jit_for_end, _jit_for_n, _jit_for_i);`
       );
       const bodyText = emitBody(
         s.body,
@@ -647,14 +647,14 @@ function emitStmt(
       // N≥2-output user-function call OR multi-output builtin (e.g.
       // `[v, i] = sort(a)`). Named slots' `binding.cName` is pre-
       // declared at function top by `collectLocals`; ignored slots
-      // become `_mtoc2_discard_<callIdx>_<i>` locals scoped to the
+      // become `_jit_discard_<callIdx>_<i>` locals scoped to the
       // call's `{}` block.
       //
       // User-function path: callee owns its args, so owned-typed args
       // wrap in `emitOwnedRhs` (the standard `_copy` per kind).
       // Builtin path: follows the single-output builtin convention —
       // the helper reads the arg without taking ownership (no `_copy`
-      // at the call site), matching every other `mtoc2_tensor_*`
+      // at the call site), matching every other `jit_tensor_*`
       // helper that takes a tensor by value.
       const isBuiltinMA = s.isBuiltin === true;
       const builtinMA = isBuiltinMA ? getBuiltin(s.name) : undefined;
@@ -670,7 +670,7 @@ function emitStmt(
       for (let i = 0; i < s.outputs.length; i++) {
         const slot = s.outputs[i];
         if (slot.binding === null) {
-          const tmp = `_mtoc2_discard_${callIdx}_${i}`;
+          const tmp = `_jit_discard_${callIdx}_${i}`;
           if (isOwned(slot.ty)) {
             // (Unreachable in v1; kept for the future-tensor-output
             // extension.) Initialize the discard temp to an empty
@@ -708,7 +708,7 @@ function emitStmt(
         const slot = s.outputs[i];
         if (slot.binding === null && isOwned(slot.ty)) {
           const h = activatedOwnedHelpers(slot.ty, state);
-          out.push(`${indent}  ${h.free}(&_mtoc2_discard_${callIdx}_${i});`);
+          out.push(`${indent}  ${h.free}(&_jit_discard_${callIdx}_${i});`);
         }
       }
       out.push(`${indent}}`);
@@ -753,10 +753,10 @@ function emitCellIndexStore(
     const elem = baseTy.elem!;
     const lines: string[] = [];
     lines.push(`${indent}{`);
-    lines.push(`${indent}  size_t _mtoc2_off = ${offsetExpr};`);
-    lines.push(`${indent}  if (_mtoc2_off >= ${baseCName}.nslots) {`);
+    lines.push(`${indent}  size_t _jit_off = ${offsetExpr};`);
+    lines.push(`${indent}  if (_jit_off >= ${baseCName}.nslots) {`);
     lines.push(
-      `${indent}    fprintf(stderr, "mtoc2: cell index out of bounds\\n");`
+      `${indent}    fprintf(stderr, "C-JIT: cell index out of bounds\\n");`
     );
     lines.push(`${indent}    exit(1);`);
     lines.push(`${indent}  }`);
@@ -764,11 +764,11 @@ function emitCellIndexStore(
       const h = activatedOwnedHelpers(elem, state);
       const rhs = emitOwnedRhs(s.rhs, state);
       lines.push(
-        `${indent}  ${h.assign}(&${baseCName}.slots[_mtoc2_off], ${rhs});`
+        `${indent}  ${h.assign}(&${baseCName}.slots[_jit_off], ${rhs});`
       );
     } else {
       const rhs = emitExpr(s.rhs, state);
-      lines.push(`${indent}  ${baseCName}.slots[_mtoc2_off] = ${rhs};`);
+      lines.push(`${indent}  ${baseCName}.slots[_jit_off] = ${rhs};`);
     }
     lines.push(`${indent}}`);
     return lines.join("\n");
@@ -794,8 +794,8 @@ function emitCellIndexStore(
   // types unify (lowerer already enforced).
   const lines: string[] = [];
   lines.push(`${indent}{`);
-  lines.push(`${indent}  size_t _mtoc2_off = ${offsetExpr};`);
-  lines.push(`${indent}  switch (_mtoc2_off) {`);
+  lines.push(`${indent}  size_t _jit_off = ${offsetExpr};`);
+  lines.push(`${indent}  switch (_jit_off) {`);
   for (let i = 0; i < elements.length; i++) {
     lines.push(`${indent}    case ${i}: {`);
     if (isOwned(elements[i])) {
@@ -812,7 +812,7 @@ function emitCellIndexStore(
     lines.push(`${indent}    }`);
   }
   lines.push(
-    `${indent}    default: fprintf(stderr, "mtoc2: cell index out of bounds\\n"); exit(1);`
+    `${indent}    default: fprintf(stderr, "C-JIT: cell index out of bounds\\n"); exit(1);`
   );
   lines.push(`${indent}  }`);
   lines.push(`${indent}}`);

@@ -2,7 +2,7 @@
 
 The JIT sits on top of the interpreter. It type-specializes hot code paths to JavaScript (run in V8) or, at `--opt 2`, to C compiled to a native `.so` and called via koffi. The interpreter remains authoritative: anything the JIT cannot handle falls back to the interpreter transparently.
 
-The JIT compiler is an in-tree, self-contained subsystem under `src/numbl-core/jit` (lowering → IR → JS/C codegen, builtins, runtime snippets, workspace) with **no external dependency**. Its per-spec entry points — `compileSpec` for JS ([`jit/compileSpec.ts`](../../../src/numbl-core/jit/compileSpec.ts)) and `compileSpecC` for C ([`jit/compileSpecC.ts`](../../../src/numbl-core/jit/compileSpecC.ts)), both re-exported from `jit/index.ts` — are called by the per-shape executors under `src/numbl-core/executors/jit/`; see [executors.md](../executors.md).
+The JIT compiler is an in-tree, self-contained subsystem under `src/numbl-core/jit` (lowering → IR → JS/C codegen, builtins, runtime snippets, workspace) with **no external dependency**. Its per-spec entry points — `compileSpec` for JS ([`jit/compileSpec.ts`](../../../src/numbl-core/jit/compileSpec.ts)) and `compileSpecC` for C ([`jit/compileSpecC.ts`](../../../src/numbl-core/jit/compileSpecC.ts)), both re-exported from `jit/index.ts` — are called by the per-shape executors under `src/numbl-core/executors/jit/`; see [executors.md](../executors.md). The JIT began as a separate project (mtoc2) and was later vendored into numbl.
 
 ## Trigger points
 
@@ -26,7 +26,7 @@ The compiler decides feasibility at **compile time**: it either lowers a special
 
 A separate safety pass classifies constructs with observable side effects the JIT cannot faithfully reproduce (interactive input, certain display statements at the top level, etc.) and suppresses JIT for scripts that contain them unsuppressed.
 
-Indexed **stores** are the exception to "no runtime bailout": an index past a tensor's current extent would grow it in MATLAB, which a spec compiled against a fixed shape cannot model, so the emitted store routes through a grow-aware bounds check (`mtoc2_idx_*_grow`) that bails to the interpreter at that point. Both scalar stores (`v(k) = x`) and the scalar slots of slice stores (`A(k, :) = row`) use it, which is what lets a store with a loop-variable index compile at all — the index is never statically known inside a loop.
+Indexed **stores** are the exception to "no runtime bailout": an index past a tensor's current extent would grow it in MATLAB, which a spec compiled against a fixed shape cannot model, so the emitted store routes through a grow-aware bounds check (`jit_idx_*_grow`) that bails to the interpreter at that point. Both scalar stores (`v(k) = x`) and the scalar slots of slice stores (`A(k, :) = row`) use it, which is what lets a store with a loop-variable index compile at all — the index is never statically known inside a loop.
 
 ### Decline diagnostics
 

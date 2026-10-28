@@ -109,11 +109,11 @@ export const sort: Builtin = {
     return [v, idx];
   },
   emitC({ argsC, argTypes, nargout, outArgsC, useRuntime }) {
-    useRuntime("mtoc2_sort_real");
+    useRuntime("jit_sort_real");
     const aN = argTypes[0] as NumericType;
     const isComplex = isNumeric(aN) && aN.isComplex;
     const desc = parseMode(argTypes) ? 1 : 0;
-    const base = isComplex ? "mtoc2_sort_complex" : "mtoc2_sort_real";
+    const base = isComplex ? "jit_sort_complex" : "jit_sort_real";
     if (nargout === 1) {
       return `${base}(${argsC[0]}, ${desc})`;
     }
@@ -121,11 +121,11 @@ export const sort: Builtin = {
     return `${base}_2(${argsC[0]}, ${desc}, ${outs.join(", ")})`;
   },
   emitJs({ argsJs, argTypes, nargout, useRuntime }) {
-    useRuntime("mtoc2_sort_real");
+    useRuntime("jit_sort_real");
     const aN = argTypes[0] as NumericType;
     const isComplex = isNumeric(aN) && aN.isComplex;
     const desc = parseMode(argTypes) ? "true" : "false";
-    const base = isComplex ? "mtoc2_sort_complex" : "mtoc2_sort_real";
+    const base = isComplex ? "jit_sort_complex" : "jit_sort_real";
     if (nargout === 1) return `${base}(${argsJs[0]}, ${desc})`;
     return `(o => [o.v, o.ix])(${base}_2(${argsJs[0]}, ${desc}))`;
   },

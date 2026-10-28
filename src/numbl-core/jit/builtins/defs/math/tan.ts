@@ -6,5 +6,5 @@ export const tan = defineUnaryRealMath({
   cFnReal: "tan",
   jsFn: Math.tan,
   signRule: () => "unknown",
-  complex: { cFnComplex: "mtoc2_ctan", jsFnComplex: cTan },
+  complex: { cFnComplex: "jit_ctan", jsFnComplex: cTan },
 });
