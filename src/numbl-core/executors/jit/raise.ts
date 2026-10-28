@@ -19,6 +19,10 @@
  *   error, otherwise Return RERUN: the registry discards the run's side
  *                    effects without caching a bail, and the interpreter
  *                    re-runs the unit to raise the error itself.
+ *   cancel           The host's cancel flag was set (compiled loops poll
+ *                    it). Throw numbl's CancellationError, as the
+ *                    interpreter's `checkCancel` would: the run ends, its
+ *                    output so far stays, and no bail is cached.
  *
  * An error is raised directly only when the result is indistinguishable
  * from the interpreter's: the JIT reproduces the wording (message non-null),
@@ -36,13 +40,14 @@
 import type { Interpreter } from "../../interpreter/interpreter.js";
 import type { Stmt } from "../../parser/index.js";
 import {
+  CancellationError,
   RuntimeError,
   buildLineTable,
   offsetToLineFast,
 } from "../../runtime/error.js";
 import { RERUN } from "../types.js";
 
-export type JitRaiseKind = "bail" | "error";
+export type JitRaiseKind = "bail" | "error" | "cancel";
 
 export interface SourceLoc {
   readonly file: string;
@@ -130,6 +135,7 @@ export function handleRaise(
   interp: Interpreter,
   where: string
 ): null | typeof RERUN {
+  if (r.kind === "cancel") throw new CancellationError();
   if (r.kind === "bail") {
     interp.onJitBail?.(
       `${where}: ${r.raiseMessage ?? "JIT bail"}; falling back to interpreter`

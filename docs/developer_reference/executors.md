@@ -32,6 +32,9 @@ interface Executor<K extends ShapeKind, D, C> {
   // otherwise), null to bail, or RERUN for a runtime error the
   // interpreter must reproduce. A throw is the unit's error.
   run(compiled: C, data: D, interp: Interpreter): RunResult;
+
+  // Whether the run's output may stream (see Output streaming).
+  streamsOutput?(compiled: C): boolean;
 }
 
 type RunResult = { result: unknown } | null | typeof RERUN;
@@ -50,16 +53,16 @@ runFirst(executors, lowered, owner):
     compiled = cache.get(executor, owner, key)
     if compiled is BAILED: continue
     if compiled is missing: compiled = cache.set(..., executor.compile(data))
-    result = executor.run(compiled, data)   // output captured
+    result = executor.run(compiled, data)   // output captured or streamed
                                             // (a throw commits it, then propagates)
     if result is null:                      // bail
-      discard captured output, plots, PRNG draws
+      discard output, plots, PRNG draws
       cache.markBailed(executor, owner, key)
       continue
     if result is RERUN:                     // runtime error, see Runtime errors
-      discard captured output, plots, PRNG draws
+      discard output, plots, PRNG draws
       return null                           // no bail cached
-    commit captured output; return result
+    commit output; return result
   return null                               // caller falls back to the interpreter
 ```
 
@@ -69,7 +72,7 @@ runFirst(executors, lowered, owner):
 
 There is no cost model: the order is fixed by registration (`executors/plugins.ts`), C-JIT before JS-JIT. A C executor declines what it cannot marshal across the koffi ABI, so JS-JIT picks that up, and the interpreter takes whatever both decline.
 
-A compiler rejection (`UnsupportedConstruct` / `JitTypeError`) makes `compile` return null; `run` then bails, and the bail is cached, so the unit is not recompiled on every later dispatch. Runtime bails are cached the same way; runtime errors are not (see [Runtime errors](#runtime-errors-and-bails)). Side effects of a run that bails or re-runs are rolled back so the interpreter's re-run does not duplicate them: captured output is discarded, plot instructions and plot state are restored (`Runtime.discardOutputCapture`), and the PRNG is rewound (`snapshotRng` / `restoreRng`). A run that throws keeps the output it produced before the error, as the interpreter would.
+A compiler rejection (`UnsupportedConstruct` / `JitTypeError`) makes `compile` return null; `run` then bails, and the bail is cached, so the unit is not recompiled on every later dispatch. Runtime bails are cached the same way; runtime errors are not (see [Runtime errors](#runtime-errors-and-bails)). Side effects of a run that bails or re-runs are rolled back so the interpreter's re-run does not duplicate them: its output is discarded (or, for a streaming run, skipped on the re-run; see [Output streaming](#output-streaming)), plot instructions and plot state are restored (`Runtime.discardOutputCapture`), and the PRNG is rewound (`snapshotRng` / `restoreRng`). A run that throws (an error or a cancel) keeps the output it produced before, as the interpreter would.
 
 ## Lowering
 
@@ -112,7 +115,27 @@ The JIT rejects statically: the compiler either lowers a spec cleanly or throws 
 - **bail** (a JIT limitation, e.g. an indexed store past a tensor's extent, which would grow it): warn through `interp.onJitBail`, return null. The bail is cached and the interpreter re-runs the unit.
 - **error** (a MATLAB runtime error): when the JIT reproduces the interpreter's result exactly, throw numbl's `RuntimeError` with the interpreter's message and identifier, at the raising statement's line (and, for the call shape, with the function's call frame). That requires the wording (the message is not null), a raising statement in the unit's own code (not a callee, whose frames the JIT does not track, and not a recursive function), and unobservable intermediate state: the call shape discards the function's workspace, while a loop or script body inside a `try` would leave variables the catch block can read but the compiled unit never wrote back. Otherwise return `RERUN`: the interpreter re-runs the unit to raise the error itself. Neither path caches a bail, so one error does not de-JIT the unit.
 
+- **cancel** (the host's cancel flag was set; see [Cancellation](#cancellation)): throw numbl's `CancellationError`, as the interpreter's `checkCancel` would. The run ends, its output so far stays, and no bail is cached.
+
 Anything else thrown by emitted JS is a JIT bug and propagates as an internal error (a V8 stack overflow excepted: it re-runs, so the interpreter reports its own recursion limit).
+
+## Cancellation
+
+The IDE's Stop sets word 0 of a `SharedArrayBuffer` (`ExecOptions.cancelSAB`, viewed as `Runtime.cancelFlag`) from the main thread while the worker runs synchronously. The interpreter polls it between statements and at calls (`Runtime.checkCancel`), and compiled code polls it too, so Stop also ends a JIT'd loop:
+
+- **Where.** Every loop iteration, and the entry of every function that calls a spec (so recursion polls as well). A loop whose iterations do constant work (scalar statements only, no nested loop or user call; `jit/codegen/cancelPoll.ts`) is strip-mined instead: an outer loop polls around chunks of 1024 iterations that do not, since even one extra test per iteration costs 10% or more in a one-statement loop. The work between polls is thus bounded, except for a single long builtin call.
+- **JS.** The module's `$cancel` (`$h.cancel`: the runtime's flag, or a private zero word) is read through a function-local alias with a plain typed-array load; V8 does not eliminate such loads across iterations, so the other thread's store is seen. A loop tests the flag in its condition and raises after it exits, because a raise call inside the loop body, even one never taken, slows a tight V8 loop severalfold.
+- **C.** `JIT_POLL_CANCEL()`: a relaxed atomic load through `jit__cancel` and a never-taken branch to `jit_raise_cancel`, which raises through the raise channel, so the guard frees the call's allocations. The host installs the flag with the `.so`'s `jit_set_cancel` before a call when it changed; koffi passes a pointer to the `SharedArrayBuffer`'s backing store, which does not move.
+
+On scalar loops of one to three statements the cost is within the run-to-run noise (about 5%) at `--opt 1` and `--opt 2`. The exception is a `while` loop whose body is a single scalar update (`while k < n, k = k + 1; end`, about one cycle per iteration), which runs about 40% slower at `--opt 1`: the chunk counter that strip-mining adds is a large share of such an iteration. Only a host with a cancel buffer can cancel: the IDE worker and embedders that pass `cancelSAB`. The CLI has none; Ctrl-C ends the process, compiled code included.
+
+## Output streaming
+
+A JIT run's output is captured so that a bail or `RERUN` leaves none behind. Output could stream directly only for a run that cannot end in a bail or `RERUN` once it has produced output. Bails come from indexed stores that may grow an array (every store with a computed index), allocation-overflow and out-of-memory checks in the C runtime, and a few builtin limitations; `RERUN` comes from every error whose wording the JIT leaves to the interpreter, every error raised in a callee or a recursive function, every error in a loop or script unit inside `try`, and a JS stack overflow. A unit free of all of these is scalar code that stores into no array by index, which excludes most long loops worth watching.
+
+Instead, a run streams (`Executor.streamsOutput`) and a discard is made safe on the re-run. `Runtime.beginOutputCapture(true)` emits the run's output as it is produced and records it; `discardOutputCapture` rewinds a cursor to where the run began, and while the interpreter's re-run produces output up to what was already emitted, `Runtime.output` skips it as long as it matches. Nested attempts rewind the same cursor. This is exact when the re-run reproduces the discarded run's output byte for byte up to the point of the discard: the re-run starts from the same variables and PRNG state, and the JIT reproduces the interpreter's output (the `jit_parity` gate). It does not hold for output that depends on the clock, so a unit whose module uses `toc` (`outputIsReproducible`) is captured as before. Should the re-run's output differ (a parity bug), the rest is emitted from the first differing character, the discarded run's text past it stays visible, and `NUMBL_JIT_LOG` reports `[jit-replay]`. Plot instructions are not streamed and are still rolled back.
+
+Streaming means user output callbacks (`onOutput`) run while compiled code is on the stack, during a C call through the `.so`'s output callback. A `.so` is not re-entrant (its raise guard and allocator list are file-scope), so a call into a `.so` that is already running bails.
 
 ## Mode-driven registration
 

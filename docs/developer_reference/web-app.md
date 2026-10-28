@@ -23,7 +23,7 @@ The worker is the only thing that ever calls `executeCode`. The main thread neve
 
 The IDE runs scripts through an `ExecutionBackend` (`src/execution/ExecutionBackend.ts`): `run(request, events)`, `stop()`, `sendInput(text)`, and a `capabilities` record. A run reports output, plot instructions, input requests, one `onError` per diagnostic and, last and exactly once, `onDone` with a status (`success`, `error` or `cancelled`). `useExecutionBackends` provides both implementations and picks the active one:
 
-- `WorkerExecutionBackend` wraps the IDE's `NumblWorkerClient`. It also runs REPL commands (`execute`), which share state with persistent runs. `stop()` cancels a persistent run cooperatively and otherwise replaces the worker.
+- `WorkerExecutionBackend` wraps the IDE's `NumblWorkerClient`. It also runs REPL commands (`execute`), which share state with persistent runs. `stop()` cancels a persistent run cooperatively and otherwise replaces the worker. Cooperative cancellation sets the cancel `SharedArrayBuffer`, which the interpreter polls between statements and JIT-compiled code polls in its loops (see [executors.md](executors.md#cancellation)), so Stop also ends a JIT'd loop; the run ends with a `CancellationError` and the worker keeps its state. Output from JIT-compiled code streams to the console as it is produced ([executors.md](executors.md#output-streaming)).
 - `RemoteExecutionBackend` posts the project's text files to a numbl execution server (`numbl serve`, see [server.md](server.md)) and decodes the server-sent events with the `--stream` protocol (`src/streamProtocol.ts`, see [cli.md](cli.md#stream-protocol)). It has no REPL or persistent workspace, `input()` returns an empty value, and uihtml figures are not interactive.
 
 ## Virtual file system
@@ -34,7 +34,7 @@ When the worker runs a script, it first sets the VFS cwd to the directory of tha
 
 ## Synchronous input in an async world
 
-MATLAB code that calls `input(...)` expects to block until the user types a response. In the worker this is implemented with a `SharedArrayBuffer` plus `Atomics.wait`/`Atomics.notify`: the worker blocks on the shared buffer, the main thread collects the response from the UI and writes it back, and `Atomics.notify` wakes the worker. This is the only synchronous cross-thread bridge; everything else uses normal async messaging.
+MATLAB code that calls `input(...)` expects to block until the user types a response. In the worker this is implemented with a `SharedArrayBuffer` plus `Atomics.wait`/`Atomics.notify`: the worker blocks on the shared buffer, the main thread collects the response from the UI and writes it back, and `Atomics.notify` wakes the worker. This is the only blocking cross-thread bridge (the cancel buffer is shared too, but only polled); everything else uses normal async messaging.
 
 ## Plot viewer
 

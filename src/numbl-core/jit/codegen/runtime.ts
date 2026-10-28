@@ -212,6 +212,12 @@ export interface RuntimeState {
   /** JS only: `Var` reads of a local that may not be assigned yet, which
    *  the emitter guards (see `maybeUnassignedReads`). */
   maybeUnbound?: Set<object>;
+  /** The enclosing loops, innermost last: a label when the loop is
+   *  strip-mined (a `break` must leave both of its loops), else null. See
+   *  `cancelPoll.ts`. */
+  loopLabels?: (string | null)[];
+  /** Counter for strip-mined loop labels. */
+  stripLabelCount?: number;
 }
 
 export function newRuntimeState(): RuntimeState {

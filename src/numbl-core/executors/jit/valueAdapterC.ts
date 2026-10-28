@@ -123,7 +123,7 @@ export function bindHostWrite(
 
 /** The raise status a call left behind (see `runtime/system/raise.h`). */
 export interface CRaiseStatus {
-  /** 1 = bail, 2 = error. */
+  /** 1 = bail, 2 = error, 3 = cancel. */
   readonly kind: number;
   readonly id: string;
   /** null: the JIT leaves the error's wording to the interpreter. */
@@ -150,6 +150,32 @@ export function bindRaise(lib: KoffiLib): { status(): CRaiseStatus | null } {
       const k = kind();
       if (k === 0) return null;
       return { kind: k, id: id() ?? "", msg: msg(), loc: Number(loc()) };
+    },
+  };
+}
+
+/** The cancel flag installed in each loaded `.so`, by path (one `dlopen`
+ *  handle, and so one `jit__cancel`, per path in a process). */
+const installedCancel = new Map<string, Int32Array | null>();
+
+/** Bind the emitted `.so`'s `jit_set_cancel` (see `runtime/system/raise.h`).
+ *  `install(flag)` points the compiled cancel polls at `flag`, a view of a
+ *  SharedArrayBuffer word (koffi passes the backing store, which never
+ *  moves, so the pointer stays valid while the runtime holds the view), or
+ *  at a constant zero for null. It calls into C only when the flag
+ *  changes. */
+export function bindCancel(
+  lib: KoffiLib,
+  libPath: string
+): { install(flag: Int32Array | null): void } {
+  const set = lib.func("void jit_set_cancel(int32_t *)") as (
+    flag: Int32Array | null
+  ) => void;
+  return {
+    install(flag) {
+      if (installedCancel.get(libPath) === flag) return;
+      set(flag);
+      installedCancel.set(libPath, flag);
     },
   };
 }

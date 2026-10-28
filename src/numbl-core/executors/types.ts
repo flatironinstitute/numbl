@@ -24,7 +24,7 @@ export const RERUN: unique symbol = Symbol("EXECUTOR_RERUN");
 
 /** Outcome of `run`. `{ result }` on success (the call's return value
  *  for the `call` shape; `undefined` otherwise). `null` is a bail: the
- *  registry discards any captured output, caches the bail, and tries
+ *  registry discards the run's output, caches the bail, and tries
  *  the next executor (or the interpreter). `RERUN`: see above. A throw
  *  propagates as the unit's error, after the registry commits the output
  *  produced before it. */
@@ -54,4 +54,10 @@ export interface Executor<
   compile(data: D, interp: Interpreter): C;
 
   run(compiled: C, data: D, interp: Interpreter): RunResult;
+
+  /** Whether a run's output may be emitted as it is produced rather than
+   *  held until the run succeeds. Only when a re-run after a bail or
+   *  `RERUN` reproduces the output exactly (see `Runtime.beginOutputCapture`).
+   *  Default: false (buffered). */
+  streamsOutput?(compiled: C): boolean;
 }

@@ -33,6 +33,13 @@ import {
 } from "./liveness.js";
 import { irFuncDocComment, irStmtHeader } from "./prettyIR.js";
 import {
+  STRIP_CHUNK,
+  breakLabel,
+  enterLoop,
+  exitLoop,
+  isConstantTimeLoop,
+} from "./cancelPoll.js";
+import {
   emitTensorAssignFused,
   fusedAssignNeedsShapeGuard,
   isFusableAssign,
@@ -161,7 +168,10 @@ export function emitFunction(
   /** Storage-class (and attribute) prefix on the function definition.
    *  The host calls the exported wrapper from `emit.ts`, so every spec is
    *  `static`. */
-  storageClass: string = "static"
+  storageClass: string = "static",
+  /** Poll the cancel flag on entry (the function calls specs, so it may
+   *  recurse; see `raise.h`). */
+  pollOnEntry: boolean = false
 ): string {
   const lines: string[] = [];
   const retType = fnRetType(fn);
@@ -208,6 +218,7 @@ export function emitFunction(
   for (const o of fnLocals.scalars.filter(isLocalDeclSite)) {
     lines.push(`  ${cTypeFor(o.ty)} ${o.cName} = ${defaultInitFor()};`);
   }
+  if (pollOnEntry) lines.push(`  JIT_POLL_CANCEL();`);
   // Keep each owned output alive through the body so the future-touch
   // analysis doesn't emit a stray early-free of the value we're about
   // to return (single-output) or transfer via sret (multi-output).
@@ -566,17 +577,37 @@ function emitStmt(
     }
     case "While": {
       const lines: string[] = [];
-      lines.push(`${indent}while (${emitCondToBoolExpr(s.cond, state)}) {`);
+      // Cancel poll (see `raise.h`): once per iteration, or once per chunk
+      // of a strip-mined loop when the iterations take constant time (see
+      // `cancelPoll.ts`), where a `break` jumps to `label`.
+      const label = enterLoop(state, isConstantTimeLoop(s.body, s.cond));
+      const cond = emitCondToBoolExpr(s.cond, state);
+      let ind = indent + "  ";
+      if (label !== null) {
+        lines.push(`${indent}for (;;) {`);
+        lines.push(`${indent}  JIT_POLL_CANCEL();`);
+        lines.push(
+          `${indent}  for (int _jit_w = 0; _jit_w < ${STRIP_CHUNK}; _jit_w++) {`
+        );
+        lines.push(`${indent}    if (!(${cond})) goto ${label};`);
+        ind += "  ";
+      } else {
+        lines.push(`${indent}while (${cond}) {`);
+        lines.push(`${indent}  JIT_POLL_CANCEL();`);
+      }
       const bodyText = emitBody(
         s.body,
-        indent + "  ",
+        ind,
         state,
         futureTouches,
         ownedTypes,
         emitReturnTail
       );
+      exitLoop(state);
       if (bodyText.length > 0) lines.push(bodyText);
+      if (label !== null) lines.push(`${indent}  }`);
       lines.push(`${indent}}`);
+      if (label !== null) lines.push(`${indent}${label}:;`);
       return lines.join("\n");
     }
     case "For": {
@@ -603,33 +634,60 @@ function emitStmt(
       lines.push(
         `${indent}  const long _jit_for_n = jit_loop_count(_jit_for_start, _jit_for_end, ${stepC});`
       );
-      lines.push(
-        `${indent}  for (long _jit_for_i = 0; _jit_for_i < _jit_for_n; _jit_for_i++) {`
-      );
+      // Cancel poll (see `raise.h`): once per iteration, or, when the
+      // iterations take constant time, once per chunk of a strip-mined
+      // loop (see `cancelPoll.ts`), where a `break` jumps to `label`.
+      const label = enterLoop(state, isConstantTimeLoop(s.body));
+      let ind = indent + "  ";
+      if (label !== null) {
+        lines.push(`${indent}  long _jit_for_i = 0;`);
+        lines.push(`${indent}  while (_jit_for_i < _jit_for_n) {`);
+        lines.push(`${indent}    JIT_POLL_CANCEL();`);
+        lines.push(
+          `${indent}    const long _jit_for_m = _jit_for_n - _jit_for_i > ${STRIP_CHUNK} ? _jit_for_i + ${STRIP_CHUNK} : _jit_for_n;`
+        );
+        lines.push(
+          `${indent}    for (; _jit_for_i < _jit_for_m; _jit_for_i++) {`
+        );
+        ind += "  ";
+      } else {
+        lines.push(
+          `${indent}  for (long _jit_for_i = 0; _jit_for_i < _jit_for_n; _jit_for_i++) {`
+        );
+        lines.push(`${indent}    JIT_POLL_CANCEL();`);
+      }
       // The loop var is pre-declared at function top by
       // `collectLocals`, so the rebind here is a plain
       // assignment. This lets reads after the loop see the final
       // iteration's value (matching numbl).
       lines.push(
-        `${indent}    ${s.cVar} = jit_range_value(_jit_for_start, ${stepC}, _jit_for_end, _jit_for_n, _jit_for_i);`
+        `${ind}  ${s.cVar} = jit_range_value(_jit_for_start, ${stepC}, _jit_for_end, _jit_for_n, _jit_for_i);`
       );
       const bodyText = emitBody(
         s.body,
-        indent + "    ",
+        ind + "  ",
         state,
         futureTouches,
         ownedTypes,
         emitReturnTail
       );
+      exitLoop(state);
       if (bodyText.length > 0) lines.push(bodyText);
+      if (label !== null) lines.push(`${indent}    }`);
       lines.push(`${indent}  }`);
+      if (label !== null && bodyText.includes(`goto ${label};`)) {
+        lines.push(`${indent}  ${label}:;`);
+      }
       lines.push(`${indent}}`);
       return lines.join("\n");
     }
     case "ReturnFromFunction":
       return emitReturnTail(indent);
-    case "Break":
-      return `${indent}break;`;
+    case "Break": {
+      // Leave both loops of a strip-mined loop.
+      const label = breakLabel(state);
+      return label === null ? `${indent}break;` : `${indent}goto ${label};`;
+    }
     case "Continue":
       return `${indent}continue;`;
     case "TypeComment": {

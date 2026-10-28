@@ -30,6 +30,7 @@ import {
   type Type,
 } from "../lowering/types.js";
 import { forEachSubExpr, forEachTopLevelExpr } from "../lowering/walk.js";
+import { callsSpec } from "../lowering/callGraph.js";
 import {
   BASE_HEADERS,
   collectRuntimeHeaders,
@@ -115,7 +116,9 @@ export function emitProgram(prog: IRProgram, opts: EmitOptions): EmitResult {
 
   // Function bodies.
   for (const fn of prog.functions.values()) {
-    userParts.push(emitFunction(fn, state, storage(fn.cName)));
+    userParts.push(
+      emitFunction(fn, state, storage(fn.cName), callsSpec(prog, fn))
+    );
     userParts.push("");
   }
   const entry = prog.functions.get(opts.exposeSpec)!;
