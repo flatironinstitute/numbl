@@ -36,6 +36,7 @@ import {
   stringArrayValue,
   type RuntimeClassInstanceArray,
   type RuntimeClassInstance,
+  type RuntimeStruct,
 } from "../runtime/types.js";
 import { stringArraySubscript } from "./indexing.js";
 import { matlabNumToString } from "./utils.js";
@@ -328,20 +329,14 @@ function resolveObjSubscript(raw: unknown, dimSize: number): number[] {
   throw new RuntimeError("Invalid index type for class instance array");
 }
 
-/** Build a class instance array (or unwrap to a scalar instance). Mirrors the
- *  borrow-without-incref convention used elsewhere in this module. */
+/** Build a class instance array (or unwrap to a scalar instance). */
 function makeObjResult(
   className: string,
   elements: import("../runtime/types.js").RuntimeClassInstance[],
   shape: [number, number]
 ): unknown {
   if (elements.length === 1) return elements[0];
-  return {
-    kind: "class_instance_array" as const,
-    className,
-    elements,
-    shape,
-  };
+  return RTV.classInstanceArray(className, elements, shape);
 }
 
 /** Handle arr(k) / arr(i,j) on a class instance array — returns element(s). */
@@ -568,7 +563,8 @@ export function indexStore(
   base: unknown,
   indices: unknown[],
   rhs: unknown,
-  skipSubsasgn = false
+  skipSubsasgn = false,
+  storeBack = false
 ): unknown {
   // Treat undefined/null as an empty tensor (uninitialized variable).
   // Exception: if RHS is a class instance, replace entirely
@@ -616,20 +612,44 @@ export function indexStore(
         : isRuntimeStruct(mv)
           ? [...mv.fields.keys()]
           : [];
+      const rhsFieldNames = [...rhsMv.fields.keys()];
+      // MATLAB: `s(k) = t` requires `t` to have the same field set as `s`
+      // (order may differ). Store-backs from `s(k).f = v` are exempt: they
+      // legitimately add a field to every element.
+      if (
+        !storeBack &&
+        (isRuntimeStructArray(mv) || isRuntimeStruct(mv)) &&
+        (rhsFieldNames.length !== existingFieldNames.length ||
+          rhsFieldNames.some(f => !existingFieldNames.includes(f)))
+      ) {
+        throw new RuntimeError(
+          "Subscripted assignment between dissimilar structures."
+        );
+      }
       const allFieldNames = [
-        ...new Set([...existingFieldNames, ...[...rhsMv.fields.keys()]]),
+        ...new Set([...existingFieldNames, ...rhsFieldNames]),
       ];
-      // Ensure existing elements have all field names. Use bindField (not a
-      // raw fields.set) so the default value is incref'd — otherwise the
-      // scope-adopted tensor is freed out from under the struct and a later
-      // reassignment of that field underflows its refcount.
+      // Every element must carry every field, in `allFieldNames` order.
+      // Elements needing a change get a fresh struct: the originals may be
+      // shared with another variable (copy-on-write).
+      const conform = (el: RuntimeStruct): RuntimeStruct => {
+        const keys = [...el.fields.keys()];
+        if (
+          keys.length === allFieldNames.length &&
+          keys.every((f, i) => f === allFieldNames[i])
+        )
+          return el;
+        return RTV.struct(
+          new Map(
+            allFieldNames.map(f => [
+              f,
+              el.fields.get(f) ?? RTV.tensor(allocFloat64Array(0), [0, 0]),
+            ])
+          )
+        );
+      };
       for (let ei = 0; ei < existingElements.length; ei++) {
-        const el = existingElements[ei];
-        for (const f of allFieldNames) {
-          if (!el.fields.has(f)) {
-            el.bindField(rt, f, RTV.tensor(allocFloat64Array(0), [0, 0]));
-          }
-        }
+        existingElements[ei] = conform(existingElements[ei]);
       }
       while (existingElements.length <= k) {
         existingElements.push(
@@ -643,7 +663,7 @@ export function indexStore(
           )
         );
       }
-      existingElements[k] = rhsMv;
+      existingElements[k] = conform(rhsMv);
       return RTV.structArray(allFieldNames, existingElements);
     }
   }

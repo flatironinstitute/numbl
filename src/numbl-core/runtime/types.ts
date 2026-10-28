@@ -5,6 +5,7 @@ import {
   incref,
   decref,
 } from "./refcount.js";
+import { allocFloat64Array } from "./alloc.js";
 
 const useFloat32 = import.meta.env?.NUMBL_USE_FLOAT32 === "true" ? true : false;
 
@@ -168,6 +169,15 @@ export class RuntimeTensor extends Refcounted {
     this.shape = shape;
     this._isLogical = _isLogical;
   }
+
+  shallowClone(): RuntimeTensor {
+    return new RuntimeTensor(
+      allocFloat64Array(this.data),
+      [...this.shape],
+      this.imag !== undefined ? allocFloat64Array(this.imag) : undefined,
+      this._isLogical
+    );
+  }
 }
 
 export class RuntimeChar extends Refcounted {
@@ -182,6 +192,10 @@ export class RuntimeChar extends Refcounted {
     super();
     this.value = value;
     this.shape = shape;
+  }
+
+  shallowClone(): RuntimeChar {
+    return new RuntimeChar(this.value, this.shape && [...this.shape]);
   }
 }
 
@@ -198,6 +212,10 @@ export class RuntimeStringArray extends Refcounted {
     super();
     this.data = data;
     this.shape = shape;
+  }
+
+  shallowClone(): RuntimeStringArray {
+    return new RuntimeStringArray(this.data.slice(), [...this.shape]);
   }
 }
 
@@ -223,6 +241,10 @@ export class RuntimeCell extends Refcounted {
     for (const v of data) incref(v);
   }
 
+  shallowClone(): RuntimeCell {
+    return new RuntimeCell(this.data.slice(), [...this.shape]);
+  }
+
   /** Replace element at idx, decref-old / incref-new. Caller resizes the
    *  shape if necessary; this method does not touch shape. */
   bindElement(rt: RefcountRuntime, idx: number, value: RuntimeValue): void {
@@ -245,6 +267,10 @@ export class RuntimeStruct extends Refcounted {
     super();
     this.fields = fields;
     for (const v of fields.values()) incref(v);
+  }
+
+  shallowClone(): RuntimeStruct {
+    return new RuntimeStruct(new Map(this.fields));
   }
 
   /** Set/replace a field value, decref-old / incref-new. */
@@ -317,6 +343,11 @@ export class RuntimeFunction extends Refcounted {
     for (const v of captures) incref(v);
   }
 
+  /** Function handles are immutable; no copy needed. */
+  shallowClone(): RuntimeFunction {
+    return this;
+  }
+
   protected _destroy(rt: RefcountRuntime): void {
     for (const v of this.captures) decref(rt, v);
     this.releaseExtra?.(rt);
@@ -352,6 +383,18 @@ export class RuntimeClassInstance extends Refcounted {
     this._enumMember = _enumMember;
     for (const v of fields.values()) incref(v);
     if (_builtinData !== undefined) incref(_builtinData);
+  }
+
+  /** Handle-class instances have reference semantics and are never copied. */
+  shallowClone(): RuntimeClassInstance {
+    if (this.isHandleClass) return this;
+    return new RuntimeClassInstance(
+      this.className,
+      new Map(this.fields),
+      false,
+      this._builtinData,
+      this._enumMember
+    );
   }
 
   /** Set/replace a field value (handle-class in-place mutation), with
@@ -392,6 +435,14 @@ export class RuntimeClassInstanceArray extends Refcounted {
     for (const el of elements) incref(el);
   }
 
+  shallowClone(): RuntimeClassInstanceArray {
+    return new RuntimeClassInstanceArray(
+      this.className,
+      this.elements.slice(),
+      [this.shape[0], this.shape[1]]
+    );
+  }
+
   protected _destroy(rt: RefcountRuntime): void {
     for (const el of this.elements) decref(rt, el);
   }
@@ -407,6 +458,10 @@ export class RuntimeComplexNumber extends Refcounted {
     this.re = re;
     this.im = im;
   }
+
+  shallowClone(): RuntimeComplexNumber {
+    return new RuntimeComplexNumber(this.re, this.im);
+  }
 }
 
 export class RuntimeDummyHandle extends Refcounted {
@@ -414,6 +469,10 @@ export class RuntimeDummyHandle extends Refcounted {
 
   constructor() {
     super();
+  }
+
+  shallowClone(): RuntimeDummyHandle {
+    return this;
   }
 }
 
@@ -428,6 +487,11 @@ export class RuntimeGraphicsHandle extends Refcounted {
     this._trace = _trace;
     this._traceType = _traceType;
   }
+
+  /** Graphics handles have reference semantics. */
+  shallowClone(): RuntimeGraphicsHandle {
+    return this;
+  }
 }
 
 /** A 1-D array of structs that all share the same field names. */
@@ -441,6 +505,13 @@ export class RuntimeStructArray extends Refcounted {
     this.fieldNames = fieldNames;
     this.elements = elements;
     for (const el of elements) incref(el);
+  }
+
+  shallowClone(): RuntimeStructArray {
+    return new RuntimeStructArray(
+      this.fieldNames.slice(),
+      this.elements.slice()
+    );
   }
 
   protected _destroy(rt: RefcountRuntime): void {
@@ -488,6 +559,17 @@ export class RuntimeSparseMatrix extends Refcounted {
     this.pr = pr;
     this.pi = pi;
   }
+
+  shallowClone(): RuntimeSparseMatrix {
+    return new RuntimeSparseMatrix(
+      this.m,
+      this.n,
+      this.ir.slice(),
+      this.jc.slice(),
+      this.pr.slice(),
+      this.pi?.slice()
+    );
+  }
 }
 
 /** Dictionary mapping unique keys to values (MATLAB R2022b+). */
@@ -511,6 +593,15 @@ export class RuntimeDictionary extends Refcounted {
       incref(key);
       incref(value);
     }
+  }
+
+  shallowClone(): RuntimeDictionary {
+    const entries = new Map<
+      string,
+      { key: RuntimeValue; value: RuntimeValue }
+    >();
+    for (const [h, e] of this.entries) entries.set(h, { ...e });
+    return new RuntimeDictionary(entries, this.keyType, this.valueType);
   }
 
   protected _destroy(rt: RefcountRuntime): void {
