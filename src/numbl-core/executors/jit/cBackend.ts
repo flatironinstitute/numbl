@@ -14,7 +14,6 @@ import {
   type SpecCSignature,
   type Type,
 } from "../../jit/index.js";
-import { jitTypeToCompilerType } from "./typeAdapter.js";
 import { getOrCreateSession } from "./session.js";
 import { compileAndLoadC, type CompiledC } from "./compileC.js";
 import {
@@ -66,10 +65,7 @@ export const cBackend: JitBackend<CArtifact> = {
   available: interp => !!interp.nativeBridge?.koffi,
 
   // Every type also needs a C-FFI representation.
-  mapType(jt) {
-    const t = jitTypeToCompilerType(jt);
-    return t !== null && compilerTypeToCDecl(t) !== null ? t : null;
-  },
+  accepts: t => compilerTypeToCDecl(t) !== null,
 
   compile(req, interp) {
     const bridge = interp.nativeBridge;

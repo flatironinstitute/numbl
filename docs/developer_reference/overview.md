@@ -37,7 +37,7 @@ A single entry point (the `executeCode` function) accepts source, options, and a
 - [compiler/interpreter.md](compiler/interpreter.md) — the AST walker and workspace resolution.
 - [compiler/function-resolution.md](compiler/function-resolution.md): what a name means in a scope, and the function body a call runs.
 - [compiler/classes.md](compiler/classes.md): the classdef class model, member access, Constant properties, meta.class.
-- [compiler/type-system.md](compiler/type-system.md) — `JitType`, unification, type refinement.
+- [compiler/type-system.md](compiler/type-system.md): the JIT's type lattice, unification, and how executor inputs are typed and widened.
 - [executors.md](executors.md) — pluggable executor registry that unifies the interpreter and JIT dispatch hooks.
 - [jit/overview.md](jit/overview.md) — when the JIT runs, opt levels, bailouts.
 - [jit/ir-codegen.md](jit/ir-codegen.md) — JIT IR and the JS backend.

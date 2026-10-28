@@ -39,10 +39,15 @@ export {
   tensorDoubleFromDims,
   tensorComplexFromDims,
   withoutExact,
+  widenArgType,
+  canonicalizeType,
+  typeToString,
+  signFromNumber,
+  structType,
   isMultiElement,
   UNKNOWN,
   VOID,
   DIM_ONE,
 } from "./lowering/types.js";
 
-export type { Type, DimInfo, NumericType } from "./lowering/types.js";
+export type { Type, DimInfo, NumericType, Sign } from "./lowering/types.js";

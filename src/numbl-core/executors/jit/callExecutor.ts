@@ -10,17 +10,16 @@
 
 import { RERUN, type Executor } from "../types.js";
 import type { CallClassification } from "../classification.js";
-import { jitTypeKey } from "../../jitTypes.js";
 import type { Span } from "../../parser/index.js";
 import type { FunctionDef } from "../../interpreter/types.js";
 import type { RuntimeValue } from "../../runtime/types.js";
-import type { Type as CompilerType } from "../../jit/index.js";
 import {
+  acceptsAll,
   compileUnit,
   declinedByAssertC,
+  describeTypes,
   insideCompiledLoop,
   invokeUnit,
-  mapTypes,
   type FuncStmt,
   type JitBackend,
 } from "./backend.js";
@@ -28,7 +27,6 @@ import { scopeOfStmts } from "./raise.js";
 
 interface CallData {
   readonly c: CallClassification;
-  readonly argTypes: CompilerType[];
   readonly args: readonly unknown[];
 }
 
@@ -74,8 +72,8 @@ export function makeCallExecutor<A>(
       const c = lowered.classification;
       if (declinedByAssertC(backend, interp, c.assertsCJit)) return null;
       if (c.nargout === 0) return null;
-      const argTypes = mapTypes(backend, c.argTypes);
-      return argTypes && { c, argTypes, args: lowered.args };
+      if (!acceptsAll(backend, c.argTypes)) return null;
+      return { c, args: lowered.args };
     },
 
     cacheKey: d => d.c.cacheKey,
@@ -87,10 +85,10 @@ export function makeCallExecutor<A>(
         {
           where: name,
           funcDecl: funcStmtFromDef(c.fn),
-          argTypes: d.argTypes,
+          argTypes: [...c.argTypes],
           nargout: c.nargout,
           synthetic: false,
-          describe: `(${c.argTypes.map(jitTypeKey).join(", ")}) -> nargout=${c.nargout}`,
+          describe: `${describeTypes(c.argTypes)} -> nargout=${c.nargout}`,
         },
         interp
       );

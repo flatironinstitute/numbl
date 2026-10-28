@@ -20,7 +20,7 @@ This folder is an internal orientation for developers and AI coding agents contr
 ## Guidelines for writing reference material
 
 1. **Be concise.** Prefer bullets to paragraphs. If a file grows past roughly two screens, split by sub-topic.
-2. **Avoid file paths and directory names.** Describe components by role and responsibility, not by where they live. The source organization changes; the reference should not break when it does. Concept names that appear in code (`IBuiltin`, `CodeIndex`, `JitType`, `RuntimeTensor`, etc.) are fine — those are stable and greppable.
+2. **Avoid file paths and directory names.** Describe components by role and responsibility, not by where they live. The source organization changes; the reference should not break when it does. Concept names that appear in code (`IBuiltin`, `CodeIndex`, `RuntimeTensor`, etc.) are fine — those are stable and greppable.
 3. **Don't mirror the code.** Describe *what* a component does and *how* it fits into the pipeline, not every field and method. If a reader needs the exact API, they can grep.
 4. **Don't duplicate.** Cross-link with relative markdown links instead of re-explaining.
 5. **One topic per file.** Each file should have a narrow scope named by its topic.

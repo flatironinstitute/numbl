@@ -11,7 +11,6 @@ import {
 import { typeToString } from "../../jit/lowering/types.js";
 import { decodeLoc } from "../../jit/codegen/runtime.js";
 import { CancellationError, RuntimeError } from "../../runtime/error.js";
-import { jitTypeToCompilerType } from "./typeAdapter.js";
 import { numblToJit, jitToNumbl } from "./valueAdapter.js";
 import { getOrCreateSession } from "./session.js";
 import { buildHostHelpers, type JitHostHelpers } from "./hostHelpers.js";
@@ -38,7 +37,7 @@ export const jsBackend: JitBackend<JsArtifact> = {
 
   available: () => true,
 
-  mapType: jitTypeToCompilerType,
+  accepts: t => t.kind !== "Unknown",
 
   compile(req, interp) {
     const { workspace, lowerer } = getOrCreateSession(interp);

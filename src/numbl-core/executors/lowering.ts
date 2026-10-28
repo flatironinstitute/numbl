@@ -11,15 +11,15 @@
  *   - `call`      — a user-function call (`tryLowerCall`).
  *
  * Lowering here is *classification only*: it analyses inputs/outputs,
- * infers types, and synthesizes a cacheKey. Codegen-feasibility decisions
- * live in each executor's `propose`, which keeps this layer free of
- * dependencies on the JIT compiler (`src/numbl-core/jit`).
+ * types them in the JIT compiler's `Type` lattice, and synthesizes a
+ * cacheKey. Codegen-feasibility decisions live in each executor's
+ * `propose`.
  */
 
 import type { Stmt } from "../parser/types.js";
 import type { FunctionDef } from "../interpreter/types.js";
 import type { Interpreter } from "../interpreter/interpreter.js";
-import type { JitType } from "../jitTypes.js";
+import type { Type } from "../jit/index.js";
 import {
   classifyTopLevel,
   classifyCall,
@@ -62,13 +62,13 @@ export interface CallLoweredStmt {
  *  several trackers (one per nargout for calls). WeakMap-scoped so entries
  *  are reclaimed when the AST is dropped. */
 export class WideningState {
-  private readonly last = new WeakMap<object, Map<string, JitType[]>>();
+  private readonly last = new WeakMap<object, Map<string, Type[]>>();
 
-  get(owner: object, slot: string): JitType[] | undefined {
+  get(owner: object, slot: string): Type[] | undefined {
     return this.last.get(owner)?.get(slot);
   }
 
-  set(owner: object, slot: string, types: readonly JitType[]): void {
+  set(owner: object, slot: string, types: readonly Type[]): void {
     let perOwner = this.last.get(owner);
     if (!perOwner) {
       perOwner = new Map();
@@ -112,7 +112,7 @@ export function tryLowerTopLevel(
 }
 
 /** Lower a user-function call. Null when classification declines (`~`
- *  params, type-unknown args, varargin arity mismatch). */
+ *  params, varargin arity mismatch). */
 export function tryLowerCall(
   fn: FunctionDef,
   args: unknown[],

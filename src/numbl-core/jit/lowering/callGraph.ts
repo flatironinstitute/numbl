@@ -42,12 +42,19 @@ export function reachableCallees(prog: IRProgram, entry: IRFunc): IRFunc[] {
   return out;
 }
 
-/** Whether `entry` can call itself, directly or through its callees. */
+/** Whether `entry`'s source function can call itself, directly or through
+ *  its callees. A call to another specialization of the same function
+ *  counts: `f(3)` specialized on a positive argument calls `f(n - 1)`,
+ *  which lowers to a different spec of the same code. */
 export function isRecursive(prog: IRProgram, entry: IRFunc): boolean {
   const seen = new Set<string>();
   let recursive = false;
   visitCalls(prog, entry.body, fn => {
-    if (fn.cName === entry.cName) recursive = true;
+    if (
+      fn.cName === entry.cName ||
+      (fn.name === entry.name && fn.span.file === entry.span.file)
+    )
+      recursive = true;
     if (recursive || seen.has(fn.cName)) return false;
     seen.add(fn.cName);
     return true;
