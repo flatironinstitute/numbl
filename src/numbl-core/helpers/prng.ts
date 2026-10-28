@@ -66,6 +66,32 @@ function rotl(x: number, k: number): number {
   return ((x << k) | (x >>> (32 - k))) >>> 0;
 }
 
+/** Opaque copy of the full PRNG state (generator, seed, Box-Muller spare),
+ *  shared by rand/randn/randi. */
+export interface RngSnapshot {
+  readonly state: Uint32Array | null;
+  readonly seed: number;
+  readonly spare: number | null;
+}
+
+/** Copy the PRNG state, e.g. before a JIT attempt that may bail and be
+ *  re-run by the interpreter. The unseeded (`Math.random`) stream cannot be
+ *  rewound; only seeded state is restored exactly. */
+export function snapshotRng(): RngSnapshot {
+  return {
+    state: _rngState && _rngState.slice(),
+    seed: _rngSeed,
+    spare: _bmSpare,
+  };
+}
+
+/** Restore a state taken by `snapshotRng`. */
+export function restoreRng(s: RngSnapshot): void {
+  _rngState = s.state && s.state.slice();
+  _rngSeed = s.seed;
+  _bmSpare = s.spare;
+}
+
 /** Return a random float in [0, 1) using seeded or unseeded PRNG */
 export function rngRandom(): number {
   if (_rngState === null) return Math.random();

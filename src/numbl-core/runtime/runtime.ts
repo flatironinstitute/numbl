@@ -110,16 +110,28 @@ import { isRuntimeChar, isRuntimeString, kstr } from "./types.js";
 import { allocFloat64Array } from "./alloc.js";
 import { valueShape } from "./utils.js";
 
+/** One `beginOutputCapture()` frame: the buffered output, plus the plot
+ *  state to restore if the attempt is discarded. */
+interface CaptureFrame {
+  text: string[];
+  plotLength: number;
+  holdState: boolean;
+  currentFigureHandle: number;
+  maxFigureHandle: number;
+  tiledLayoutState: Runtime["tiledLayoutState"];
+}
+
 // ── Runtime class ────────────────────────────────────────────────────
 
 export class Runtime {
   outputLines: string[] = [];
-  /** Stack of in-progress output-capture buffers. While non-empty,
-   *  `output()` appends to the top buffer instead of emitting, so a
+  /** Stack of in-progress capture frames. While non-empty, `output()`
+   *  appends to the top frame's buffer instead of emitting, so a
    *  speculative JIT attempt's side effects can be committed on success
    *  or discarded on bail (preventing duplicated output when the
-   *  interpreter re-runs the same code). */
-  private outputCaptureStack: string[][] = [];
+   *  interpreter re-runs the same code). Plot instructions are pushed
+   *  directly, so a frame records the plot state to roll back to. */
+  private outputCaptureStack: CaptureFrame[] = [];
   plotInstructions: PlotInstruction[] = [];
   variableValues: Record<string, RuntimeValue> = {};
   holdState = false;
@@ -479,7 +491,7 @@ export class Runtime {
   output(text: string): void {
     const depth = this.outputCaptureStack.length;
     if (depth > 0) {
-      this.outputCaptureStack[depth - 1].push(text);
+      this.outputCaptureStack[depth - 1].text.push(text);
       return;
     }
     this.outputLines.push(text);
@@ -490,21 +502,38 @@ export class Runtime {
    *  Pair with exactly one `commitOutputCapture()` or
    *  `discardOutputCapture()`. */
   beginOutputCapture(): void {
-    this.outputCaptureStack.push([]);
+    const t = this.tiledLayoutState;
+    this.outputCaptureStack.push({
+      text: [],
+      plotLength: this.plotInstructions.length,
+      holdState: this.holdState,
+      currentFigureHandle: this.currentFigureHandle,
+      maxFigureHandle: this.maxFigureHandle,
+      tiledLayoutState: t && { ...t },
+    });
   }
 
   /** Emit the buffered output (to the parent capture frame if nested,
    *  else to the real sink) — call when the attempt succeeded. */
   commitOutputCapture(): void {
-    const buf = this.outputCaptureStack.pop();
-    if (buf === undefined) return;
-    for (const text of buf) this.output(text);
+    const frame = this.outputCaptureStack.pop();
+    if (frame === undefined) return;
+    for (const text of frame.text) this.output(text);
   }
 
-  /** Drop the buffered output — call when the attempt bailed, so a
-   *  subsequent re-run is the only thing that emits. */
+  /** Drop the buffered output and roll back the plot instructions and
+   *  plot state the attempt produced — call when the attempt bailed, so
+   *  a subsequent re-run is the only thing that emits. */
   discardOutputCapture(): void {
-    this.outputCaptureStack.pop();
+    const frame = this.outputCaptureStack.pop();
+    if (frame === undefined) return;
+    if (this.plotInstructions.length > frame.plotLength) {
+      this.plotInstructions.length = frame.plotLength;
+    }
+    this.holdState = frame.holdState;
+    this.currentFigureHandle = frame.currentFigureHandle;
+    this.maxFigureHandle = frame.maxFigureHandle;
+    this.tiledLayoutState = frame.tiledLayoutState;
   }
 
   // ── Error handling ──────────────────────────────────────────────────

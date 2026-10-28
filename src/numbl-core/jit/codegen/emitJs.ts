@@ -19,10 +19,11 @@
  *
  * The emitted module has the shape:
  *   ```js
+ *   let $write, $plotDispatch, $rand, $elemwise;
  *   <inlined runtime snippet bodies>
  *   function <user-fn-spec-1>(...) { ... }
  *   function <user-fn-spec-2>(...) { ... }
- *   return function ($h) { globalThis.$write = $h.write; ...; return <entry-spec>; };
+ *   return function ($h) { $write = $h.write; ...; return <entry-spec>; };
  *   ```
  *
  * The host evals the source via `new Function(source)()`, then calls
@@ -91,19 +92,21 @@ export function emitJsProgram(
     userParts.push("");
   }
 
-  // The factory binds `$h.write` and returns the entry spec. Other hooks
-  // (`$h.plotDispatch`, `$h.rand`, `$h.elemwise`) surface as globals so emitted code /
-  // runtime helper snippets can call them without threading `$h` through
-  // every emit site; helper-side `typeof === "function"` checks gate
-  // behavior when a host omits a hook.
+  // The host hooks (`$write`, `$plotDispatch`, `$rand`, `$elemwise`) are
+  // module-scoped bindings that the factory assigns from `$h`, so emitted
+  // code and runtime helper snippets call them by bare name without
+  // threading `$h` through every emit site. They are per-module (not
+  // globals) so two runtimes in one process never share a host. Helper-side
+  // `typeof === "function"` checks gate behavior when a host omits a hook.
   const out: string[] = [];
+  out.push("let $write, $plotDispatch, $rand, $elemwise;");
   if (state.active.size > 0) {
     out.push(renderJsRuntimeBodies(state));
     out.push("");
   }
   out.push(...userParts);
   out.push(
-    `return function ($h) { globalThis.$write = $h.write; globalThis.$plotDispatch = $h.plotDispatch; globalThis.$rand = $h.rand; globalThis.$elemwise = $h.elemwise; return ${opts.exposeSpec}; };`
+    `return function ($h) { $write = $h.write; $plotDispatch = $h.plotDispatch; $rand = $h.rand; $elemwise = $h.elemwise; return ${opts.exposeSpec}; };`
   );
 
   return {

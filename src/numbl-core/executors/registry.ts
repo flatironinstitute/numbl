@@ -18,6 +18,7 @@ import type { ControlSignal, FunctionDef } from "../interpreter/types.js";
 import type { Interpreter } from "../interpreter/interpreter.js";
 import type { Executor, LoweredOf, RunResult, ShapeKind } from "./types.js";
 import { ExecutorCache } from "./cache.js";
+import { restoreRng, snapshotRng } from "../helpers/prng.js";
 import {
   WideningState,
   tryLowerCall,
@@ -155,18 +156,17 @@ export class Registry {
       this.cache.set(executor.name, owner, key, compiled);
     }
 
-    // Capture any output the attempt produces so a bail leaves no
-    // observable side effect: on bail we discard it and the caller
-    // falls through to the next executor or the interpreter, which
-    // re-runs the same code — committing here would duplicate it.
+    // Capture the attempt's side effects so a bail leaves none behind: on
+    // bail we discard its output and plots and rewind the PRNG, and the
+    // caller falls through to the next executor or the interpreter, which
+    // re-runs the same code — committing here would duplicate them.
     const rt = interp.rt;
     rt.beginOutputCapture();
+    const rng = snapshotRng();
     let committed = false;
     try {
       const result = executor.run(compiled, data, interp);
       if (result === null) {
-        rt.discardOutputCapture();
-        committed = true;
         this.cache.markBailed(executor.name, owner, key);
         return null;
       }
@@ -174,8 +174,11 @@ export class Registry {
       committed = true;
       return result;
     } finally {
-      // A throw from run() (not a bail) lands here with committed=false.
-      if (!committed) rt.discardOutputCapture();
+      // A bail, or a throw from run(), lands here with committed=false.
+      if (!committed) {
+        rt.discardOutputCapture();
+        restoreRng(rng);
+      }
     }
   }
 }
