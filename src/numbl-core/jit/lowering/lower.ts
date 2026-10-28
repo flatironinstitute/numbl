@@ -1593,7 +1593,8 @@ export class Lowerer {
    *  `endStack`. Outside an index slot it raises with a span. When the
    *  axis size is statically known, emit a `NumLit`; otherwise emit
    *  an `EndRef` IR node and let codegen render the runtime axis-size
-   *  read. */
+   *  read. No trailing-dimension collapse is needed: `resolveIndexBase`
+   *  only admits 1 (linear) or ndim subscripts. */
   private lowerEndKeyword(e: Extract<Expr, { type: "EndKeyword" }>): IRExpr {
     if (this.endStack.length === 0) {
       throw new UnsupportedConstruct(
