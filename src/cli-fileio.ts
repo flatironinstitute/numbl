@@ -5,6 +5,11 @@
  */
 
 import {
+  openSync,
+  closeSync,
+  readSync,
+  writeSync,
+  fstatSync,
   readFileSync,
   writeFileSync,
   statSync,
@@ -23,7 +28,11 @@ import { unzipSync, zipSync } from "fflate";
 import { execFileSync } from "child_process";
 import { homedir, tmpdir } from "os";
 import { join, resolve, relative, dirname, basename } from "path";
-import type { FileIOAdapter, WebOptions } from "./numbl-core/fileIOAdapter.js";
+import type {
+  FileHandleIO,
+  FileIOAdapter,
+  WebOptions,
+} from "./numbl-core/fileIOAdapter.js";
 import { scanMFiles } from "./cli-scan.js";
 import { globToRegExp } from "./numbl-core/helpers/glob.js";
 
@@ -75,7 +84,32 @@ function buildFetchOptions(options?: WebOptions): Record<string, unknown> {
   return init;
 }
 
+/** Random access through file descriptors. */
+const nodeHandles: FileHandleIO = {
+  openHandle: (path, mode) => openSync(expandTilde(path), mode),
+  readAt(fd, pos, len) {
+    const buf = new Uint8Array(len);
+    let got = 0;
+    while (got < len) {
+      const n = readSync(fd, buf, got, len - got, pos + got);
+      if (n === 0) break;
+      got += n;
+    }
+    return got < len ? buf.slice(0, got) : buf;
+  },
+  writeAt(fd, pos, bytes) {
+    let done = 0;
+    while (done < bytes.length) {
+      done += writeSync(fd, bytes, done, bytes.length - done, pos + done);
+    }
+  },
+  size: fd => fstatSync(fd).size,
+  close: fd => closeSync(fd),
+};
+
 export class NodeFileIOAdapter implements FileIOAdapter {
+  handles = nodeHandles;
+
   readFile(path: string): Uint8Array {
     const buf = readFileSync(expandTilde(path));
     return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);

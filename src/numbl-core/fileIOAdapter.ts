@@ -28,13 +28,35 @@ export interface FileAttribInfo {
 }
 
 /**
+ * Random access to open files. Hosts that provide it (Node) let open files
+ * be read and written in place with bounded memory; without it the core
+ * keeps each open file in memory.
+ */
+export interface FileHandleIO {
+  /** Open an existing file for reading ('r') or reading and writing
+   *  ('r+'). Throws (with a Node-style `code`) on failure. */
+  openHandle(path: string, mode: "r" | "r+"): number;
+  /** Up to `len` bytes at `pos`; fewer only at end of file. */
+  readAt(handle: number, pos: number, len: number): Uint8Array;
+  writeAt(handle: number, pos: number, bytes: Uint8Array): void;
+  size(handle: number): number;
+  /** Make written data visible to other readers of the file, if the host
+   *  buffers it. Optional. */
+  flush?(handle: number): void;
+  close(handle: number): void;
+}
+
+/**
  * Host filesystem access. numbl-core owns all stream semantics (fids,
  * modes, positions, EOF, encodings, buffering; see `FileTable`) and only
- * needs whole-file byte primitives from the host: `readFile`, `writeFile`,
- * `existsPath` and `resolvePath`. The remaining methods back individual
- * builtins (dir, mkdir, copyfile, zip, websave, ...).
+ * needs byte primitives from the host: `readFile`, `writeFile`,
+ * `existsPath`, `resolvePath`, and optionally `handles`. The remaining
+ * methods back individual builtins (dir, mkdir, copyfile, zip, websave, ...).
  */
 export interface FileIOAdapter {
+  /** Random access to open files. Optional. */
+  handles?: FileHandleIO;
+
   /** Read a whole file. Throws if it cannot be read. */
   readFile?(path: string): Uint8Array;
 

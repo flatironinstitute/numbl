@@ -1,14 +1,17 @@
 /**
  * MATLAB file-identifier semantics (fopen/fclose/fgetl/fread/fseek/...),
- * implemented once on top of a host's whole-file byte primitives.
+ * implemented once on top of a host's byte primitives.
  *
- * Every open file is held in memory. All fids on the same path share one
- * buffer, so a reader sees another fid's writes immediately, as in MATLAB.
- * Dirty buffers are written back to the host on fclose, before any other
- * adapter call (see `fileIOView`), and at the end of each execution.
+ * All fids on the same path share one FileStore, so a reader sees another
+ * fid's writes immediately, as in MATLAB. With host random access (Node)
+ * the store reads and writes the file in place through a small cache and
+ * write buffer; otherwise it holds the whole file in memory. Buffered
+ * writes reach the host on fclose, before any other adapter call (see
+ * `fileIOView`), and at the end of each execution.
  */
 
-import type { FileIOAdapter } from "./fileIOAdapter.js";
+import type { FileHandleIO, FileIOAdapter } from "./fileIOAdapter.js";
+import { HandleStore, MemoryStore, type FileStore } from "./fileStore.js";
 import { RuntimeError } from "./runtime/error.js";
 import {
   DEFAULT_TEXT_ENCODING,
@@ -23,17 +26,7 @@ interface FilePrimitives {
   existsPath(path: string): "file" | "dir" | null;
   resolvePath(path: string): string;
   isWritable(path: string): boolean;
-}
-
-/** In-memory contents of one open path, shared by all fids on it. */
-interface SharedFile {
-  path: string;
-  data: Uint8Array;
-  size: number;
-  /** False while `data` may alias a buffer the host still holds. */
-  owned: boolean;
-  dirty: boolean;
-  refs: number;
+  handles?: FileHandleIO;
 }
 
 interface Stream {
@@ -47,7 +40,7 @@ interface Stream {
   pos: number;
   eof: boolean;
   lastError: string;
-  file: SharedFile;
+  file: FileStore;
 }
 
 const INVALID_FID =
@@ -150,6 +143,7 @@ function primitivesFor(io: FileIOAdapter): FilePrimitives {
         },
     resolvePath: io.resolvePath ? p => io.resolvePath!(p) : p => p,
     isWritable: p => io.fileattrib?.(p)?.UserWrite ?? true,
+    handles: io.handles,
   };
 }
 
@@ -207,7 +201,7 @@ function legacyWriteFile(
 export class FileTable {
   private readonly fs: FilePrimitives;
   private readonly streams = new Map<number, Stream>();
-  private readonly shared = new Map<string, SharedFile>();
+  private readonly shared = new Map<string, FileStore>();
 
   constructor(io: FileIOAdapter) {
     this.fs = primitivesFor(io);
@@ -256,25 +250,24 @@ export class FileTable {
 
     let file = this.shared.get(path);
     try {
-      if (!file) {
-        const data =
-          kind === "file" && mode !== "w"
-            ? this.fs.readFile(path)
-            : new Uint8Array(0);
-        file = {
-          path,
-          data,
-          size: data.length,
-          owned: false,
-          dirty: false,
-          refs: 0,
-        };
-      }
       // 'w' truncates and 'a' creates the file at open time, as C does.
       if (mode === "w" || kind === null) {
-        file.size = 0;
         this.fs.writeFile(path, new Uint8Array(0));
-        file.dirty = false;
+        file?.reset();
+      }
+      if (!file) {
+        const { handles } = this.fs;
+        file = handles
+          ? new HandleStore(path, handles, writes)
+          : new MemoryStore(
+              path,
+              kind === "file" && mode !== "w"
+                ? this.fs.readFile(path)
+                : new Uint8Array(0),
+              this.fs.writeFile
+            );
+      } else if (writes) {
+        file.makeWritable();
       }
     } catch (e) {
       return fail(osMessage(e));
@@ -292,7 +285,7 @@ export class FileTable {
       append: mode === "a",
       machinefmt: fmt,
       encoding: enc,
-      pos: mode === "a" && !plus ? file.size : 0,
+      pos: mode === "a" && !plus ? file.size() : 0,
       eof: false,
       lastError: "",
       file,
@@ -356,33 +349,50 @@ export class FileTable {
   readLine(fid: number, keepNewline: boolean, maxChars?: number): string | -1 {
     const s = this.readable(fid);
     if (!s) return "";
-    const { data, size } = s.file;
+    const f = s.file;
+    const size = f.size();
     if (s.eof || s.pos >= size) {
       s.eof = true;
       return -1;
     }
-    let lineEnd = s.pos;
-    while (lineEnd < size && data[lineEnd] !== 10 && data[lineEnd] !== 13)
-      lineEnd++;
-    let termEnd = lineEnd;
-    if (lineEnd < size) {
-      termEnd =
-        data[lineEnd] === 13 && lineEnd + 1 < size && data[lineEnd + 1] === 10
-          ? lineEnd + 2
-          : lineEnd + 1;
+    // Collect the line's bytes up to its terminator.
+    const parts: Uint8Array[] = [];
+    let total = 0;
+    let term: number[] = [];
+    let p = s.pos;
+    scan: for (;;) {
+      const v = f.view(p, 8192);
+      if (v.length === 0) break;
+      for (let i = 0; i < v.length; i++) {
+        const b = v[i];
+        if (b !== 10 && b !== 13) continue;
+        parts.push(v.slice(0, i));
+        total += i;
+        if (b === 13) {
+          const next = i + 1 < v.length ? v[i + 1] : f.view(p + i + 1, 1)[0];
+          term = next === 10 ? [13, 10] : [13];
+        } else {
+          term = [10];
+        }
+        break scan;
+      }
+      parts.push(v.slice());
+      total += v.length;
+      p += v.length;
     }
+    if (keepNewline) {
+      parts.push(Uint8Array.from(term));
+      total += term.length;
+    }
+    const bytes = concatBytes(parts, total);
     let text: string;
     if (maxChars !== undefined) {
-      const r = s.encoding.decode(data, s.pos, termEnd, maxChars);
+      const r = s.encoding.decode(bytes, 0, bytes.length, maxChars);
       text = r.text;
-      s.pos = r.end;
+      s.pos += r.end;
     } else {
-      text = s.encoding.decode(
-        data,
-        s.pos,
-        keepNewline ? termEnd : lineEnd
-      ).text;
-      s.pos = termEnd;
+      text = s.encoding.decode(bytes, 0, bytes.length).text;
+      s.pos += keepNewline ? total : total + term.length;
     }
     if (s.pos >= size) s.eof = true;
     return text;
@@ -393,11 +403,11 @@ export class FileTable {
   readBytes(fid: number, count: number): Uint8Array {
     const s = this.readable(fid);
     if (!s || s.eof) return new Uint8Array(0);
-    const avail = s.file.size - s.pos;
+    const avail = s.file.size() - s.pos;
     const n = Math.max(0, Math.min(count, avail));
     if (count > avail) s.eof = true;
-    const out = s.file.data.slice(s.pos, s.pos + n);
-    s.pos += n;
+    const out = s.file.read(s.pos, n);
+    s.pos += out.length;
     return out;
   }
 
@@ -406,26 +416,30 @@ export class FileTable {
   readChars(fid: number, count: number): string {
     const s = this.readable(fid);
     if (!s || s.eof) return "";
-    const r = s.encoding.decode(s.file.data, s.pos, s.file.size, count);
+    // A character takes at most 4 bytes in the supported encodings.
+    const avail = s.file.size() - s.pos;
+    const bytes = s.file.read(s.pos, Math.min(avail, count * 4));
+    const r = s.encoding.decode(bytes, 0, bytes.length, count);
     if (r.text.length < count) s.eof = true;
-    s.pos = r.end;
+    s.pos += r.end;
     return r.text;
   }
 
-  /** The rest of the file as text, without moving (for fscanf). */
-  peekText(fid: number): string {
-    const s = this.readable(fid);
-    if (!s || s.eof) return "";
-    return s.encoding.decode(s.file.data, s.pos, s.file.size).text;
-  }
-
-  /** Move past `nchars` characters of `peekText`; sets the EOF flag when
+  /** The rest of the file as text (for fscanf), and a function that moves
+   *  past the first `nchars` characters of it, setting the EOF flag when
    *  that reaches the end of the file. */
-  advanceChars(fid: number, nchars: number): void {
+  scanText(fid: number): { text: string; consume(nchars: number): void } {
     const s = this.readable(fid);
-    if (!s || s.eof) return;
-    s.pos = s.encoding.decode(s.file.data, s.pos, s.file.size, nchars).end;
-    if (s.pos >= s.file.size) s.eof = true;
+    if (!s || s.eof) return { text: "", consume: () => {} };
+    const bytes = s.file.read(s.pos, s.file.size() - s.pos);
+    const text = s.encoding.decode(bytes, 0, bytes.length).text;
+    return {
+      text,
+      consume: nchars => {
+        s.pos += s.encoding.decode(bytes, 0, bytes.length, nchars).end;
+        if (s.pos >= s.file.size()) s.eof = true;
+      },
+    };
   }
 
   // ── Writing ───────────────────────────────────────────────────────
@@ -438,21 +452,9 @@ export class FileTable {
       s.lastError = BAD_FD;
       return 0;
     }
-    const f = s.file;
-    if (s.append) s.pos = f.size;
-    const end = s.pos + bytes.length;
-    if (!f.owned || end > f.data.length) {
-      const grown = new Uint8Array(
-        Math.max(end, f.owned ? f.data.length * 2 : f.size, 256)
-      );
-      grown.set(f.data.subarray(0, f.size));
-      f.data = grown;
-      f.owned = true;
-    }
-    f.data.set(bytes, s.pos);
-    s.pos = end;
-    if (end > f.size) f.size = end;
-    f.dirty = true;
+    if (s.append) s.pos = s.file.size();
+    s.file.write(s.pos, bytes);
+    s.pos += bytes.length;
     s.lastError = "";
     return bytes.length;
   }
@@ -463,11 +465,12 @@ export class FileTable {
     const s = this.stream(fid);
     if (!s.canWrite) return;
     const target = s.pos + n;
-    if (target <= s.file.size) {
+    const size = s.file.size();
+    if (target <= size) {
       s.pos = target;
     } else {
-      s.pos = s.file.size;
-      this.writeBytes(fid, new Uint8Array(target - s.file.size));
+      s.pos = size;
+      this.writeBytes(fid, new Uint8Array(target - size));
     }
   }
 
@@ -488,10 +491,10 @@ export class FileTable {
   seek(fid: number, offset: number, origin: number): number {
     if (STD_STREAMS[fid]) return -1;
     const s = this.stream(fid);
-    const base = origin === -1 ? 0 : origin === 0 ? s.pos : s.file.size;
+    const size = s.file.size();
+    const base = origin === -1 ? 0 : origin === 0 ? s.pos : size;
     const target = base + offset;
-    if (!Number.isFinite(target) || target < 0 || target > s.file.size)
-      return -1;
+    if (!Number.isFinite(target) || target < 0 || target > size) return -1;
     s.pos = Math.floor(target);
     s.eof = false;
     return 0;
@@ -523,9 +526,10 @@ export class FileTable {
 
   // ── Whole files and flushing ──────────────────────────────────────
 
-  /** Write every modified open file back to the host. */
+  /** Push buffered writes of every open file to the host and drop read
+   *  caches. */
   flush(): void {
-    for (const f of this.shared.values()) this.flushFile(f);
+    for (const f of this.shared.values()) f.sync();
   }
 
   /** Read a whole file (fileread), seeing unflushed writes. */
@@ -557,20 +561,22 @@ export class FileTable {
     return s;
   }
 
-  private flushFile(f: SharedFile): void {
-    if (!f.dirty) return;
-    f.dirty = false;
-    // The host may keep this buffer, so copy before the next write.
-    f.owned = false;
-    f.data = f.data.subarray(0, f.size);
-    this.fs.writeFile(f.path, f.data);
-  }
-
-  private release(f: SharedFile): void {
+  private release(f: FileStore): void {
     if (--f.refs > 0) return;
     this.shared.delete(f.path);
-    this.flushFile(f);
+    f.close();
   }
+}
+
+function concatBytes(parts: Uint8Array[], total: number): Uint8Array {
+  if (parts.length === 1) return parts[0];
+  const out = new Uint8Array(total);
+  let off = 0;
+  for (const p of parts) {
+    out.set(p, off);
+    off += p.length;
+  }
+  return out;
 }
 
 const tables = new WeakMap<FileIOAdapter, FileTable>();

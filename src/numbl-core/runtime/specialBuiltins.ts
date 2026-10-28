@@ -26,6 +26,7 @@ import {
   isRuntimeStructArray,
   isRuntimeSparseMatrix,
   isRuntimeStringArray,
+  RuntimeChar,
   type RuntimeTensor,
 } from "../runtime/types.js";
 import {
@@ -532,8 +533,9 @@ registerSpecial("fscanf", (nargout, args) => {
   }
 
   // Scan the rest of the file, then move past what the scan consumed.
-  const { results, consumed } = scanFormat(files.peekText(fid), fmt, maxCount);
-  files.advanceChars(fid, consumed);
+  const rest = files.scanText(fid);
+  const { results, consumed } = scanFormat(rest.text, fmt, maxCount);
+  rest.consume(consumed);
 
   const n = results.length;
   let out: RuntimeValue;
@@ -829,6 +831,7 @@ function isLittleEndian(machinefmt: string): boolean {
 
 /** Precisions whose char data is read and written as encoded text. */
 const TEXT_PRECISIONS = new Set(["char", "char*1"]);
+const SIGNED_BYTE = new Set(["int8", "schar", "signed char", "integer*1"]);
 const BYTE_PRECISIONS = new Set([
   "uint8",
   "uchar",
@@ -847,6 +850,7 @@ registerSpecial("fread", (nargout, args) => {
   // Parse arguments: fread(fid), fread(fid,sizeA), fread(fid,precision),
   // fread(fid,sizeA,precision), fread(...,skip), fread(...,machinefmt)
   let sizeA: number[] = [Infinity, 1]; // default: column vector, read all
+  let scalarSize = true;
   let precision = "uint8=>double";
   let skip = 0;
   let machinefmt = files.machineFormat(fid);
@@ -862,9 +866,11 @@ registerSpecial("fread", (nargout, args) => {
       // It's sizeA
       if (isRuntimeTensor(a)) {
         sizeA = Array.from(a.data);
+        scalarSize = sizeA.length < 2;
         argIdx++;
       } else if (isRuntimeNumber(a)) {
         sizeA = [toNumber(a), 1];
+        scalarSize = true;
         argIdx++;
       }
       // Check for precision as next arg
@@ -896,21 +902,42 @@ registerSpecial("fread", (nargout, args) => {
   const n = sizeA.length > 1 ? sizeA[1] : 1;
   const totalElems = m === Infinity || n === Infinity ? Infinity : m * n;
 
-  const values: number[] = [];
+  // Values accumulate in a growable Float64Array.
+  let values = new Float64Array(
+    Number.isFinite(totalElems) ? Math.min(totalElems, 1 << 24) : 1 << 16
+  );
+  let count = 0;
+  const reserve = (extra: number) => {
+    if (count + extra <= values.length) return;
+    const grown = new Float64Array(Math.max(count + extra, values.length * 2));
+    grown.set(values.subarray(0, count));
+    values = grown;
+  };
   const decodeInto = (bytes: Uint8Array) => {
-    const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     const elems = Math.floor(bytes.length / bytesPerVal);
-    for (let i = 0; i < elems; i++) {
-      values.push(readValue(dv, i * bytesPerVal, parsed.sourceType, le));
+    reserve(elems);
+    if (bytesPerVal === 1 && !SIGNED_BYTE.has(parsed.sourceType)) {
+      // uint8 and friends: bytes are the values
+      values.set(bytes.subarray(0, elems), count);
+    } else {
+      const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.length);
+      for (let i = 0; i < elems; i++)
+        values[count + i] = readValue(
+          dv,
+          i * bytesPerVal,
+          parsed.sourceType,
+          le
+        );
     }
+    count += elems;
     return elems;
   };
 
   if (skip > 0) {
     // Read `repeat` values (default 1), then skip `skip` bytes; repeat.
     const batchSize = parsed.repeat || 1;
-    while (values.length < totalElems) {
-      const batch = Math.min(batchSize, totalElems - values.length);
+    while (count < totalElems) {
+      const batch = Math.min(batchSize, totalElems - count);
       const got = decodeInto(files.readBytes(fid, batch * bytesPerVal));
       if (got < batch) break;
       files.readBytes(fid, skip);
@@ -918,37 +945,33 @@ registerSpecial("fread", (nargout, args) => {
   } else if (TEXT_PRECISIONS.has(parsed.sourceType)) {
     // Characters are decoded with the file's encoding.
     const text = files.readChars(fid, totalElems);
-    for (let i = 0; i < text.length; i++) values.push(text.charCodeAt(i));
+    reserve(text.length);
+    for (let i = 0; i < text.length; i++) values[count++] = text.charCodeAt(i);
   } else {
     decodeInto(files.readBytes(fid, totalElems * bytesPerVal));
   }
-  const count = values.length;
 
-  // If output type is char, return a char array instead of numeric tensor
-  const isCharOutput =
-    parsed.outputType === "char" || parsed.outputType === "char*1";
+  // A scalar size gives a count-by-1 column; [m, n] gives m rows and as
+  // many columns as the data fills, the last one zero-padded.
+  const rows = scalarSize || m === Infinity ? count : m;
+  const cols = count === 0 ? 0 : Math.ceil(count / rows);
+  const shape = count === 0 ? [0, 0] : [rows, cols];
+  let data: Float64Array = values;
+  if (data.length !== rows * cols) {
+    data = allocFloat64Array(rows * cols);
+    data.set(values.subarray(0, count));
+  }
 
-  // Shape the output
   let result: RuntimeValue;
-  if (isCharOutput) {
+  if (parsed.outputType === "char" || parsed.outputType === "char*1") {
+    // RuntimeChar stores rows one after another.
     let str = "";
-    for (const v of values) str += String.fromCharCode(v);
-    result = RTV.char(str);
-  } else if (count === 0) {
-    result = RTV.tensor(allocFloat64Array(0), [0, 0]);
-  } else if (count === 1 && m !== Infinity && n !== Infinity) {
-    result = RTV.tensor(allocFloat64Array(values), [m, n]);
-  } else if (m === Infinity || (m !== Infinity && n === Infinity)) {
-    if (m === Infinity) {
-      result = RTV.tensor(allocFloat64Array(values), [count, 1]);
-    } else {
-      const cols = Math.ceil(count / m);
-      while (values.length < m * cols) values.push(0);
-      result = RTV.tensor(allocFloat64Array(values), [m, cols]);
-    }
+    for (let r = 0; r < rows; r++)
+      for (let c = 0; c < cols; c++)
+        str += String.fromCharCode(data[c * rows + r]);
+    result = new RuntimeChar(str, shape);
   } else {
-    while (values.length < m * n) values.push(0);
-    result = RTV.tensor(allocFloat64Array(values.slice(0, m * n)), [m, n]);
+    result = RTV.tensor(data, shape);
   }
 
   if (nargout >= 2) {

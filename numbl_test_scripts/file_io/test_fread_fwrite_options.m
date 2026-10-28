@@ -53,5 +53,27 @@ assert(x == 513);
 fid = fopen(f, 'r'); x = fread(fid, 1, 'uint16'); fclose(fid);
 assert(x == 513);
 
+% --- Output shape when fewer values remain than requested -----------------
+fid = fopen(f, 'w'); fwrite(fid, 1:5); fclose(fid);
+fid = fopen(f, 'r'); x = fread(fid, 8); fclose(fid);
+assert(isequal(x, (1:5)'));
+fid = fopen(f, 'r'); x = fread(fid, [2 4]); fclose(fid);
+assert(isequal(x, [1 3 5; 2 4 0]));
+fid = fopen(f, 'r'); [x, c] = fread(fid, [4 4]); fclose(fid);
+assert(isequal(size(x), [4 2]) && c == 5);
+fid = fopen(f, 'r'); x = fread(fid, [1 8]); fclose(fid);
+assert(isequal(x, 1:5));
+fid = fopen(f, 'r'); x = fread(fid, [3 1]); fclose(fid);
+assert(isequal(x, [1; 2; 3]));
+fid = fopen(f, 'r'); x = fread(fid, [2 Inf]); fclose(fid);
+assert(isequal(x, [1 3 5; 2 4 0]));
+
+% --- Char output is shaped like numeric output -------------------------------
+fid = fopen(f, 'w'); fwrite(fid, 'abcde'); fclose(fid);
+fid = fopen(f, 'r'); x = fread(fid, '*char'); fclose(fid);
+assert(ischar(x) && isequal(size(x), [5 1]) && strcmp(x', 'abcde'));
+fid = fopen(f, 'r'); x = fread(fid, [2 Inf], '*char'); fclose(fid);
+assert(isequal(size(x), [2 3]) && strcmp(x(1, :), 'ace') && strcmp(x(2, 1:2), 'bd'));
+
 delete(f);
 disp('SUCCESS');

@@ -1,6 +1,10 @@
 import { describe, it, expect } from "vitest";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
 import { executeCode } from "../numbl-core/executeCode.js";
 import type { FileIOAdapter } from "../numbl-core/fileIOAdapter.js";
+import { NodeFileIOAdapter } from "../cli-fileio.js";
 import { VirtualFileSystem } from "../vfs/VirtualFileSystem.js";
 import { BrowserFileIOAdapter } from "../vfs/BrowserFileIOAdapter.js";
 
@@ -80,5 +84,53 @@ describe("FileTable", () => {
     );
     expect(out).toBe("hi\nthere\nhi\nthere\n\n");
     expect(dec(files.get("a.txt")!)).toBe("hi\nthere\n");
+  });
+
+  it("reads and appends through host handles without loading the file", () => {
+    const dir = mkdtempSync(join(tmpdir(), "numbl-filetable-"));
+    try {
+      const path = join(dir, "big.txt");
+      const line = "0123456789".repeat(9) + "\n";
+      writeFileSync(path, line.repeat(20000)); // 2 MB
+      const node = new NodeFileIOAdapter();
+      let wholeReads = 0;
+      let bytesRead = 0;
+      let bytesWritten = 0;
+      const io: FileIOAdapter = {
+        readFile: p => {
+          wholeReads++;
+          return node.readFile(p);
+        },
+        writeFile: (p, d) => node.writeFile(p, d),
+        existsPath: p => node.existsPath(p),
+        resolvePath: p => node.resolvePath(p),
+        handles: {
+          ...node.handles,
+          readAt: (h, pos, len) => {
+            const out = node.handles.readAt(h, pos, len);
+            bytesRead += out.length;
+            return out;
+          },
+          writeAt: (h, pos, bytes) => {
+            bytesWritten += bytes.length;
+            node.handles.writeAt(h, pos, bytes);
+          },
+        },
+      };
+      const out = run(
+        `fid = fopen('${path}');` +
+          "disp(fgetl(fid)); disp(sum(fread(fid, 3)));" +
+          "fseek(fid, -6, 'eof'); disp(fgetl(fid)); fclose(fid);" +
+          `fid = fopen('${path}', 'a'); fprintf(fid, 'tail\\n'); fclose(fid);`,
+        io
+      );
+      expect(out).toBe(line + "147\n" + "56789\n");
+      expect(wholeReads).toBe(0);
+      expect(bytesRead).toBeLessThan(300 * 1024);
+      expect(bytesWritten).toBe(5);
+      expect(readFileSync(path, "utf-8").endsWith(line + "tail\n")).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
