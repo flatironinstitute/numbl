@@ -27,8 +27,8 @@
  *     (declared inside `methods (Static)` block). v1 only supports
  *     methods with 0 or 1 outputs (same as user functions).
  */
-import type { Span, Stmt, Expr } from "../parser/index.js";
-import { UnaryOperation } from "../parser/index.js";
+import type { Span, Stmt, Expr } from "../numbl/index.js";
+import { UnaryOperation } from "../numbl/index.js";
 import { UnsupportedConstruct, TypeError } from "./errors.js";
 import {
   type Type,

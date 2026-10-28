@@ -21,13 +21,12 @@
 import { TypeError, UnsupportedConstruct } from "../../../lowering/errors.js";
 import type { Type } from "../../../lowering/types.js";
 import type { Builtin } from "../../registry.js";
+import { numericClassName } from "../_shared.js";
 
 function classNameForType(t: Type): string {
   switch (t.kind) {
     case "Numeric":
-      // Logical lane → "logical"; everything else (double or complex)
-      // → "double". Matches numbl's classifier.
-      return t.elem === "logical" ? "logical" : "double";
+      return numericClassName(t);
     case "Char":
       return "char";
     case "String":

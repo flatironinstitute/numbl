@@ -4,6 +4,7 @@
 
 import type { Expr } from "../parser/types.js";
 import { BinaryOperation, UnaryOperation } from "../parser/types.js";
+import { tryExtractDottedName } from "../parser/astUtils.js";
 import type { RuntimeValue } from "../runtime/types.js";
 import {
   isRuntimeChar,
@@ -481,16 +482,6 @@ function evalMember(
     );
   }
   return interp.rt.getMember(base, expr.name, nargout);
-}
-
-/** `a.b.c` as the string "a.b.c" when `expr` is a chain of plain names. */
-function tryExtractDottedName(expr: Expr): string | null {
-  if (expr.type === "Ident") return expr.name;
-  if (expr.type === "Member") {
-    const baseChain = tryExtractDottedName(expr.base);
-    if (baseChain) return `${baseChain}.${expr.name}`;
-  }
-  return null;
 }
 
 // ── Tensor and cell literals ─────────────────────────────────────────────

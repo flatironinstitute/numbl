@@ -16,8 +16,8 @@
  * only indexes real-double multi-element tensors.
  */
 
-import type { Expr, LValue, Span } from "../parser/index.js";
-import { unwindMemberChain } from "../parser/astUtils.js";
+import type { Expr, LValue, Span } from "../numbl/index.js";
+import { unwindMemberChain } from "../numbl/index.js";
 import { TypeError, UnsupportedConstruct } from "./errors.js";
 import type { IRExpr } from "./ir.js";
 import {

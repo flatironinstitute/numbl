@@ -6,6 +6,7 @@ import {
   isText,
   typeToString,
   type Type,
+  isDoubleOrLogical,
 } from "../../../lowering/types.js";
 
 /** Validate that args at positions [from..) are legal `jit_fprintf_arg_t`
@@ -26,7 +27,7 @@ export function validateFormatArgs(
           `'${builtinName}' on a complex arg is not yet supported`
         );
       }
-      if (a.elem !== "double" && a.elem !== "logical") {
+      if (!isDoubleOrLogical(a)) {
         throw new UnsupportedConstruct(
           `'${builtinName}' on a '${a.elem}' arg is not yet supported`
         );

@@ -7,7 +7,7 @@
  * backfills via `withSpan` at the call-site boundary.
  */
 
-import type { Span } from "../parser/index.js";
+import type { Span } from "../numbl/index.js";
 
 export class UnsupportedConstruct extends Error {
   span?: Span;

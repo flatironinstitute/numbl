@@ -16,6 +16,7 @@ import {
   scalarLogical,
   type NumericType,
   type Type,
+  isDoubleOrLogical,
 } from "../../../lowering/types.js";
 import type { Builtin } from "../../registry.js";
 import { exactDouble } from "../_shared.js";
@@ -34,7 +35,7 @@ function requireScalarReal(t: Type, what: string): NumericType {
       `'xor' on tensor operands is not JIT-compiled`
     );
   }
-  if (t.elem !== "double" && t.elem !== "logical") {
+  if (!isDoubleOrLogical(t)) {
     throw new TypeError(`${what} must be double or logical (got ${t.elem})`);
   }
   return t;

@@ -49,6 +49,7 @@ import {
   type NumericType,
   type Sign,
   type Type,
+  isDoubleOrLogical,
 } from "../../../lowering/types.js";
 import type { Builtin } from "../../registry.js";
 import { defineElemwiseRealBinaryFn } from "../arithmetic/_elemwise.js";
@@ -470,7 +471,7 @@ export function reductionTransfer(argTypes: Type[], spec: KernelSpec): Type {
       `'${spec.name}' arg must be numeric (got ${inputType.kind})`
     );
   }
-  if (inputType.elem !== "double" && inputType.elem !== "logical") {
+  if (!isDoubleOrLogical(inputType)) {
     throw new TypeError(
       `'${spec.name}' arg must be double or logical (got ${inputType.elem})`
     );
@@ -592,12 +593,12 @@ function elementwiseMinMaxTransfer(
   if (!isNumeric(a) || a.isComplex || !isNumeric(b) || b.isComplex) {
     throw new TypeError(`'${name}(a, b)' args must be real numeric`);
   }
-  if (a.elem !== "double" && a.elem !== "logical") {
+  if (!isDoubleOrLogical(a)) {
     throw new TypeError(
       `'${name}(a, b)' arg 1 must be double or logical (got ${a.elem})`
     );
   }
-  if (b.elem !== "double" && b.elem !== "logical") {
+  if (!isDoubleOrLogical(b)) {
     throw new TypeError(
       `'${name}(a, b)' arg 2 must be double or logical (got ${b.elem})`
     );

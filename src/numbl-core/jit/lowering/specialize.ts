@@ -16,8 +16,8 @@
  * synthesize a `decl: FuncStmt` and reuse the existing spec discipline.
  */
 
-import type { Stmt } from "../parser/index.js";
-import type { Span } from "../parser/index.js";
+import type { Stmt } from "../numbl/index.js";
+import type { Span } from "../numbl/index.js";
 import { TypeError, UnsupportedConstruct } from "./errors.js";
 import type { IRExpr, IRFunc, IRStmt } from "./ir.js";
 import {

@@ -17,7 +17,7 @@
  * resolver needs to apply class-method precedence.
  */
 
-import type { AbstractSyntaxTree, Stmt, Span } from "../parser/index.js";
+import type { AbstractSyntaxTree, Stmt, Span } from "../numbl/index.js";
 import {
   resolveFunction,
   type CodeIndex,

@@ -6,7 +6,7 @@ The interpreter is untyped. Types exist only in the JIT, which has a single type
 
 `Type` is a discriminated union:
 
-- `Numeric`: a scalar or array of double, logical or char elements, real or complex. It carries per-axis dimensions (`dims`, each exact or unknown), the full `shape` when every axis is exact, a sign (`positive`, `nonneg`, `negative`, `nonpositive`, `zero`, `nonzero` or `unknown`), and optionally an exact value (a scalar, or a small array of at most 256 elements). A 1×1 `Numeric` is a scalar; anything else is stored as a tensor.
+- `Numeric`: a scalar or array of double, logical or char elements, real or complex. It carries per-axis dimensions (`dims`, each exact or unknown), the full `shape` when every axis is exact, a sign (`positive`, `nonneg`, `negative`, `nonpositive`, `zero`, `nonzero` or `unknown`), and optionally an exact value (a scalar, or a small array of at most 256 elements). A 1×1 `Numeric` is a scalar; anything else is stored as a tensor. The compiler handles double and logical elements (`isDoubleOrLogical`); code that handles numeric values checks for the element types it supports rather than excluding logical, so an element type it does not model is rejected instead of being treated as double.
 - `String`, `Char`: text, with an optional exact value.
 - `Struct`: fields in insertion order, each with its own `Type`.
 - `Class`, `Cell`, `Handle`: class instances, cells (tuple or uniform) and function handles, used inside compiled code.
