@@ -9,9 +9,29 @@ An optional Node-API C++ module that provides fast implementations of numerical 
 - **Element-wise ops**: the kernels referenced by the ops-layer op-code table (real and complex binary and unary ops, reductions, comparisons, Bessel functions).
 - **Random number generation**: for large draws where the JS PRNG is a bottleneck.
 
-## The bridge
+## The bridge and the provider stack
 
-The addon and its pure-TypeScript fallback implement one interface, `LapackBridge` (`src/numbl-core/native/lapack-bridge.ts`). `setLapackBridge` installs an accelerated bridge (the addon, a wasm module, or a test stub; any of them may be partial), and `getLapackBridge()` returns a complete bridge in which each entry comes from the installed bridge when it provides it and from the TypeScript implementation (`ts-lapack-bridge.ts`) otherwise. Call sites are plain `getLapackBridge().X(...)`, with no availability checks and no inline fallbacks. The ops layer (`src/numbl-core/ops/dispatch.ts`) reaches the element-wise `tensorOp*` kernels the same way.
+The addon and its pure-TypeScript fallback implement one interface, `LapackBridge` (`src/numbl-core/native/lapack-bridge.ts`). Implementations are layered as a **provider stack**. A provider (`LapackProvider`) has a name, a priority and a partial set of entries, and may give a per-entry `accepts` predicate that takes the entry's own arguments; `registerProvider` adds one (or replaces the one with the same name) and `unregisterProvider` removes it. For each call, the providers that have the entry are asked in priority order, the first that accepts serves it, and the TypeScript implementation (`ts-lapack-bridge.ts`) serves whatever all of them decline. A size threshold therefore lives with the provider it concerns rather than in the caller.
+
+The built-in providers (priorities in `PROVIDER_PRIORITY`):
+
+| Provider                        | Priority | Registered by              | Declines                                                     |
+| ------------------------------- | -------- | -------------------------- | ------------------------------------------------------------ |
+| `inline` (`inline-matmul.ts`)   | 300      | always                     | matrix products above `MATMUL_INLINE_MAX_WORK` multiply-adds |
+| `native` (`native-provider.ts`) | 200      | `initNodePlatform`         | `fft1dComplex` of length 128 or less                         |
+| `wasm`                          | 100      | the browser worker (below) | `matmul` below `WASM_MATMUL_MIN_WORK`                        |
+| ts-lapack                       | last     | implied                    | nothing                                                      |
+
+`getLapackBridge()` returns a complete bridge built from the stack and cached until it changes. An entry whose first provider has no predicate is that provider's own function, so most entries cost nothing extra; the others are a small dispatcher. Call sites are plain `getLapackBridge().X(...)`, with no availability checks and no inline fallbacks. For the native-only entries, which have no TypeScript fallback, `providerFor(op, args)` returns the function that would serve the call, or undefined when none would; `fft.ts` uses it. The ops layer (`src/numbl-core/ops/dispatch.ts`) reaches the element-wise `tensorOp*` kernels through `getLapackBridge()` as well.
+
+### Matrix products across `--opt` levels
+
+BLAS `dgemm`/`zgemm` and a plain triple loop accumulate in different orders (blocking, FMA), so they differ in the last bits. To keep all `--opt` levels bit-identical, each size range has one algorithm:
+
+- **Small products** (`m*k*n <= MATMUL_INLINE_MAX_WORK`, currently 1024) run the reference loop: the `inline` provider in the interpreter, and the same loop inside the JIT's matmul helpers (`tensor_mtimes_real` / `tensor_mtimes_complex`, JS and C). At these sizes the loop also beats a BLAS call, whose fixed cost is about 1 us. The TypeScript `matmul` / `matmulComplex` sum in the same order.
+- **Larger products** go through the stack at every level. The JS-JIT helpers call the `$numeric` host hook (`numericHost` in `executors/jit/hostHelpers.ts`, alongside `$elemwise`), which returns null for small products. Compiled C calls host callbacks bound per `.so` with `jit_set_host_numeric` (`runtime/tensor_ops/host_numeric.h`; `bindHostNumeric` in `executors/jit/valueAdapterC.ts`); the callback views the C buffers with `koffi.view`, runs the stack, and copies the result into the C output buffer, and a failure bails the call. This covers the `1xk * kx1` scalar form too.
+
+The jit_parity scripts `C03` and `C06` pin both ranges.
 
 The TypeScript side is correct but slower. Its LAPACK routines come from a lightweight in-tree port (`src/ts-lapack/`) plus a few hand translations in `src/numbl-core/native/`: the complex eigensolvers (`ts-lapack-eig-complex.ts`, `ts-lapack-eig-hermitian.ts`), real column-pivoted QR and complex QR/LU (`ts-lapack-qr-lu.ts`), and the complex helpers they share, including `zlarfg` (`ts-lapack-complex.ts`). This is the path that runs in the browser and wherever the addon is not built.
 
@@ -20,7 +40,7 @@ Operations the TypeScript side does not implement are listed in one place, `TS_U
 - complex `svd` (`svdComplex`);
 - QZ, real and complex (`qz`, `qzComplex`), and hence `qz` itself and `eig(A, B)` for a pencil that is not symmetric/Hermitian-definite.
 
-A few addon entry points are native-only accelerators with no TypeScript counterpart in the bridge: the FFTW transforms (`fft1d`, `fft1dComplex`, `fftAlongDim`) and `fillRandn`. Their callers (`fft.ts`, `prng.ts`) keep their own JS paths, because the JS FFT and PRNG differ from the native ones in post-processing and state handling.
+A few addon entry points are native-only accelerators with no TypeScript counterpart in the bridge: the FFTW transforms (`fft1d`, `fft1dComplex`, `fftAlongDim`) and `fillRandn`. Their callers (`fft.ts`, `prng.ts`) keep their own JS paths, because the JS FFT and PRNG differ from the native ones in post-processing and state handling. The JIT has no FFT, so FFT parity across `--opt` levels is not at stake.
 
 ## Eigensolver dispatch
 
@@ -34,9 +54,9 @@ The pure-TypeScript side of this lives in `src/ts-lapack/src/` (`dsyev` = `dsytd
 
 ## Optional WASM accelerator bridge (browser)
 
-The native addon is Node-only. In the browser the LAPACK fallbacks are the pure-JS ts-lapack port (and, for matrix multiply under the JS-JIT, a naive triple-loop runtime snippet). An **optional, externally-hosted WebAssembly bridge** (e.g. libFLAME/BLIS compiled to wasm, served from GitHub Pages) can be loaded to accelerate heavy kernels: v1 covers real f64 `matmul`.
+The native addon is Node-only. In the browser the LAPACK fallbacks are the pure-JS ts-lapack port. An **optional, externally-hosted WebAssembly bridge** (e.g. libFLAME/BLIS compiled to wasm, served from GitHub Pages) can be loaded to accelerate heavy kernels: v1 covers real f64 `matmul`.
 
-- **Core (`src/numbl-core/native/wasm-lapack-bridge.ts`)**: platform-agnostic. Defines the versioned manifest (`AcceleratorManifest`, `ACCELERATOR_ABI`) and the wasm ABI (`WasmLapackExports`: `numbl_malloc`/`numbl_free`/`numbl_matmul_f64_colmajor` + exported `memory`, all column-major f64 pointers into `memory`). `installWasmLapackBridge` wires **two seams** from one instantiated module: (1) `setLapackBridge` for the interpreter path (opt 0), where `getLapackBridge` takes ts-lapack for any op the module omits; and (2) `globalThis.$matmulAccel`, the hook the JS-JIT matmul runtime snippet (`tensor_mtimes_real.js`) consults before its loop (opt 1). The `$matmulAccel` wrapper declines small matmuls (below a work threshold) and any error, so the JS loop stays the fallback.
+- **Core (`src/numbl-core/native/wasm-lapack-bridge.ts`)**: platform-agnostic. Defines the versioned manifest (`AcceleratorManifest`, `ACCELERATOR_ABI`) and the wasm ABI (`WasmLapackExports`: `numbl_malloc`/`numbl_free`/`numbl_matmul_f64_colmajor` + exported `memory`, all column-major f64 pointers into `memory`). `installWasmLapackBridge` registers the module as the `wasm` provider, which declines products below `WASM_MATMUL_MIN_WORK`; `uninstallWasmLapackBridge` removes it. Because the JS-JIT reaches large products through the stack, one registration serves both the interpreter and opt 1.
 - **Loader (`src/numbl-core/native/wasm-lapack-browser.ts`)**: `ensureWasmLapackBridge(url)` fetches the manifest, fetches and instantiates the wasm (numbl instantiates it itself with a numbl-controlled import object: no remote JS is executed, so the accelerator is sandboxed), and installs it. Best-effort and idempotent per URL, mirroring `qhull-browser.ts`.
 - **Wiring**: the IDE worker (`numbl-worker.ts`) loads it lazily on a `set_wasm_bridge` message; the main thread reads the settings (`src/utils/wasmLapackBridge.ts`, localStorage, enabled by default) and posts the effective URL on worker creation and when the Execution Settings dialog is saved. Downloaded wasm bytes are cached in IndexedDB (`src/utils/wasmByteCache.ts`).
 
@@ -55,5 +75,5 @@ The CLI loads the addon eagerly, before any code runs, in `run`, `eval`, `run-te
 ## When to reach for it
 
 - New tensor kernels that need to match interpreter behavior exactly should be added on both sides (JS fallback and native) and given an op code. Add them to the shared op-code list.
-- New LAPACK-backed operations need C++ wrapper code in the addon, a `LapackBridge` entry, and a TypeScript implementation in `ts-lapack-bridge.ts` (or, failing that, an entry in `TS_UNSUPPORTED`).
+- New LAPACK-backed operations need C++ wrapper code in the addon, a `LapackBridge` entry, and a TypeScript implementation in `ts-lapack-bridge.ts` (or, failing that, an entry in `TS_UNSUPPORTED`). If the addon is slower than TypeScript below some size, add an `accepts` predicate to `nativeAddonProvider` rather than a check in the caller.
 - Pure-scalar math that already runs fast in V8 generally does not need an addon implementation.

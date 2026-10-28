@@ -66,6 +66,9 @@ the diagnosis and the divergence observed at discovery time.
   use their own kernels → different float results / NaN handling. Resolved by
   defaulting the addon build to **no-fast-math** (deterministic reductions and
   transcendentals; opt in with `--fast-math`), plus a NaN-correct any/all.
+  Matrix products (C03, C06) were resolved by one algorithm per size range:
+  small products run the same reference loop in every mode, and larger ones
+  go through the LAPACK provider stack (BLAS) in every mode.
 - **D** — stdout pollution from a debug log (now on stderr).
 - **E** — C-JIT (`--opt 2`) **fails to compile or crashes** on a program the
   interpreter and JS-JIT run fine: a `setjmp` grow-bail guard armed without
@@ -110,8 +113,6 @@ as `EXCL`, with the reason printed, but don't affect the exit code). See
 
 - **Inherent FP / library-ULP differences** — can't be made bitwise-identical
   without dropping BLAS/libm:
-  - `C03 matmul` — BLAS `dgemm` (interpreter) vs a naive triple loop (JIT)
-    accumulate in different orders → last-bit differences.
   - `A35 complex-pow` — `(-1)^(0.5+1i)` keeps a `~2.6e-18` real residue
     (`exp(-π)·cos(π/2)`); MATLAB keeps it too, but it's the difference of
     transcendentals, so opt2 (libm) and opt0/opt1 (V8) disagree at ULP scale

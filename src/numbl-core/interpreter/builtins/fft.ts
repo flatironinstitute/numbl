@@ -18,7 +18,7 @@ import {
 import { RTV, RuntimeError } from "../../runtime/index.js";
 import { builtin } from "./builtin.js";
 import { builtinError, realScalarArg } from "./args.js";
-import { getLapackBridge } from "../../native/lapack-bridge.js";
+import { getLapackBridge, providerFor } from "../../native/lapack-bridge.js";
 import { allocFloat64Array, withScratch } from "../../runtime/alloc.js";
 
 // ── FFT algorithm ─────────────────────────────────────────────────────────
@@ -133,9 +133,9 @@ function computeFFT1D(
   inIm: Float64Array,
   inverse: boolean
 ): [Float64Array, Float64Array] {
-  const bridge = getLapackBridge();
-  if (bridge.fft1dComplex && inRe.length > 128) {
-    const result = bridge.fft1dComplex(inRe, inIm, inRe.length, inverse);
+  const fft = providerFor("fft1dComplex", [inRe, inIm, inRe.length, inverse]);
+  if (fft) {
+    const result = fft(inRe, inIm, inRe.length, inverse);
     return [result.re, result.im];
   }
   if (isPowerOf2(inRe.length)) {

@@ -21,6 +21,10 @@
  *    tensors, so --opt 0 and --opt 1 compute the same bits and large
  *    element-wise work runs as SIMD C rather than a scalar JS loop.
  *
+ *  - `numeric` — matrix multiply through the LAPACK provider stack, the
+ *    interpreter's own path (see `JitNumericHost`). The C-JIT reaches the
+ *    same functions through callbacks (`bindHostNumeric`).
+ *
  * The unknown-name fallthrough (when `dispatchPlotBuiltin` returns
  * false) is a programmer error: every name the JIT's plot builtin
  * registration covers is in `PLOT_ALL_NAMES`, which is sourced from
@@ -36,6 +40,8 @@ import { rngRandom } from "../../helpers/prng.js";
 import { jitToNumbl } from "./valueAdapter.js";
 import { tensorOps } from "../../ops/dispatch.js";
 import { OpReduce, OpRealBin, OpUnary } from "../../ops/opCodes.js";
+import { getLapackBridge } from "../../native/lapack-bridge.js";
+import { matmulIsInline } from "../../native/inline-matmul.js";
 
 /** Element-wise kernels exposed to the JS runtime snippets as
  *  `$elemwise` (see `runtime-globals.d.ts`). `out` has `a`'s length. */
@@ -110,6 +116,51 @@ const elemwiseHost: JitElemwiseHost = {
   },
 };
 
+/** Matrix products for the runtime snippets, exposed as `$numeric` (see
+ *  `runtime-globals.d.ts`). Arrays are column-major. Each returns null for
+ *  a product small enough to run inline (`matmulIsInline`): the caller then
+ *  runs its own loop, the same one the stack's inline provider runs, so
+ *  every `--opt` level computes the same bits. */
+export interface JitNumericHost {
+  matmul(
+    a: Float64Array,
+    m: number,
+    k: number,
+    b: Float64Array,
+    n: number
+  ): Float64Array | null;
+  /** An absent imaginary part is zero; the result always has `im`. */
+  matmulComplex(
+    aRe: Float64Array,
+    aIm: Float64Array | undefined,
+    m: number,
+    k: number,
+    bRe: Float64Array,
+    bIm: Float64Array | undefined,
+    n: number
+  ): { re: Float64Array; im: Float64Array } | null;
+}
+
+export const numericHost: JitNumericHost = {
+  matmul(a, m, k, b, n) {
+    if (matmulIsInline(m, k, n)) return null;
+    return getLapackBridge().matmul(a, m, k, b, n);
+  },
+  matmulComplex(aRe, aIm, m, k, bRe, bIm, n) {
+    if (matmulIsInline(m, k, n)) return null;
+    const r = getLapackBridge().matmulComplex(
+      aRe,
+      aIm ?? new Float64Array(m * k),
+      m,
+      k,
+      bRe,
+      bIm ?? new Float64Array(k * n),
+      n
+    );
+    return { re: r.re, im: r.im ?? new Float64Array(m * n) };
+  },
+};
+
 export interface JitHostHelpers {
   write: (s: string) => void;
   warning: (identifier: string, msg: string) => void;
@@ -119,6 +170,7 @@ export interface JitHostHelpers {
    *  `rand` draw from one shared, `rng(seed)`-controllable stream. */
   rand: () => number;
   elemwise: JitElemwiseHost;
+  numeric: JitNumericHost;
   /** The cancel flag emitted loops poll: the runtime's (a
    *  SharedArrayBuffer view), or a private zero word when it has none. */
   cancel: Int32Array;
@@ -134,6 +186,7 @@ export function buildHostHelpers(rt: Runtime): JitHostHelpers {
       jitWarning(rt, identifier, msg),
     rand: () => rngRandom(),
     elemwise: elemwiseHost,
+    numeric: numericHost,
     cancel: rt.cancelFlag ?? new Int32Array(1),
     plotDispatch: (name: string, args: unknown[]) => {
       const runtimeArgs: RuntimeValue[] = args.map(a => jitToNumbl(a));

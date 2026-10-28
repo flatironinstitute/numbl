@@ -31,7 +31,7 @@ Every runtime error or bail in compiled C goes through `jit_raise(kind, identifi
 
 Because errors do not end the process, C-JIT also runs inside `try`.
 
-Program output reaches the host through a koffi callback while the call runs, so it streams (see [executors.md](../executors.md#output-streaming)). That callback may run user code (`onOutput`); a `.so`'s file-scope raise and allocator state makes it non-reentrant, so the backend bails a call into a `.so` that is already running.
+Program output reaches the host through a koffi callback while the call runs, so it streams (see [executors.md](../executors.md#output-streaming)). That callback may run user code (`onOutput`); a `.so`'s file-scope raise and allocator state makes it non-reentrant, so the backend bails a call into a `.so` that is already running. Large matrix products also call back into the host, through the LAPACK provider stack, so they match the interpreter bit for bit (see [native-addon.md](../runtime/native-addon.md#matrix-products-across---opt-levels)).
 
 ## Native compile/load
 

@@ -1,4 +1,4 @@
-/* @snippet name=jit_tensor_mtimes_complex deps=jit_tensor_t,jit_alloc */
+/* @snippet name=jit_tensor_mtimes_complex deps=jit_tensor_t,jit_alloc,jit_host_numeric */
 /* JIT runtime helper: 2-D matrix multiplication producing a complex
  * result.
  *
@@ -34,6 +34,13 @@ static double _Complex jit_tensor_mtimes_complex_scalar(jit_tensor_t a,
     jit_raise_errorf("", "Inner matrix dimensions must agree: %ld vs %ld", a.dims[1], b.dims[0]);
   }
   long k = a.dims[1];
+  if (jit_host_matmul_complex && jit_host_matmul_wanted(1, k, 1)) {
+    double outR, outI;
+    if (jit_host_matmul_complex(a.real, a.imag, 1, k, b.real, b.imag, 1,
+                                &outR, &outI) != 0)
+      jit_raise_bail("jit_tensor_mtimes_complex_scalar: host matmul failed");
+    return outR + outI * I;
+  }
   double accR = 0.0;
   double accI = 0.0;
   int aHasI = a.imag != NULL;
@@ -69,6 +76,12 @@ static jit_tensor_t jit_tensor_mtimes_complex(jit_tensor_t a,
   r.ndim = 2;
   r.dims[0] = m;
   r.dims[1] = n;
+  if (jit_host_matmul_complex && jit_host_matmul_wanted(m, k, n)) {
+    if (jit_host_matmul_complex(a.real, a.imag, m, k, b.real, b.imag, n,
+                                r.real, r.imag) != 0)
+      jit_raise_bail("jit_tensor_mtimes_complex: host matmul failed");
+    return r;
+  }
   int aHasI = a.imag != NULL;
   int bHasI = b.imag != NULL;
   for (long j = 0; j < n; j++) {

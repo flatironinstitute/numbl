@@ -1,11 +1,11 @@
-% DIAGNOSIS: A*B (matrix multiply) diverges in low-order bits. The interpreter
-% uses the native LAPACK addon's BLAS dgemm (blocked/SIMD accumulation); the
-% JS-JIT emits a naive triple-loop matmul. Different accumulation order ->
-% different floating-point rounding. (Same native-vs-JIT class as sum/exp.)
-% NOTE: opt0 also prints a spurious "[matmul] using bridge" line (see finding 05);
-% it is stripped here via stderr/2>/dev/null when comparing the numbers.
+% DIAGNOSIS: A*B (matrix multiply) diverged in low-order bits. The interpreter
+% used the native LAPACK addon's BLAS dgemm (blocked/SIMD accumulation); the
+% JS-JIT emitted a naive triple-loop matmul. Different accumulation order ->
+% different floating-point rounding.
+% FIX: an 8x8 product is below the inline threshold, so every mode now runs
+% the same reference loop (the interpreter through the inline provider).
 %
-% --opt 0 output (number only):
+% --opt 0 output (before the fix):
 % 0.57277808314492906
 %
 % --opt 1 output:

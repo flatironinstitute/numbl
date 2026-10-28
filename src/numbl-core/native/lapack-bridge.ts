@@ -3,16 +3,22 @@
  * kernels, satisfied both by the native addon and by the pure-TypeScript
  * implementation (ts-lapack-bridge.ts).
  *
- * `getLapackBridge()` always returns a complete bridge: each entry comes from
- * the bridge installed with `setLapackBridge` (the native addon under Node,
- * optionally a wasm accelerator in the browser) when it provides it, and from
- * the TypeScript implementation otherwise. Call sites therefore use
+ * Implementations are layered as a provider stack (`registerProvider`): the
+ * native addon under Node, optionally a wasm accelerator in the browser, and
+ * the inline provider for small products (`inline-matmul.ts`), with the
+ * TypeScript implementation underneath. `getLapackBridge()` always returns a
+ * complete bridge whose entries resolve through that stack, so call sites use
  * `getLapackBridge().X(...)` with no availability checks. Operations the
  * TypeScript side cannot do are listed in `TS_UNSUPPORTED` in
  * ts-lapack-bridge.ts and throw a clear error there.
  */
 
 import { getTsLapackBridge } from "./ts-lapack-bridge.js";
+import {
+  matmulComplexLoop,
+  matmulIsInline,
+  matmulLoop,
+} from "./inline-matmul.js";
 
 /**
  * Expected native addon version. Bump this whenever the C++ addon API changes
@@ -753,7 +759,65 @@ export interface LapackBridge {
   ): { data: Float64Array; spare: number; hasSpare: boolean };
 }
 
-let _installed: Partial<LapackBridge> | null = null;
+// ── Provider stack ──────────────────────────────────────────────────────────
+
+/** Name of a bridge entry point. */
+export type LapackOp = keyof LapackBridge;
+
+/** The function type of entry `K`. */
+export type LapackEntry<K extends LapackOp> = NonNullable<LapackBridge[K]>;
+
+/**
+ * One layer of the provider stack: a (partial) set of bridge entries, such as
+ * the native addon or a wasm module. For each call, the providers that have
+ * the entry are asked in priority order; the first whose `accepts` returns
+ * true (or that has no `accepts`) serves it, and the TypeScript
+ * implementation serves whatever every provider declines.
+ */
+export interface LapackProvider {
+  /** Registering a name again replaces the earlier provider. */
+  readonly name: string;
+  /** Higher runs first; see `PROVIDER_PRIORITY`. */
+  readonly priority: number;
+  readonly entries: Partial<LapackBridge>;
+  /** Per entry, whether to serve a call (same arguments as the entry);
+   *  false passes it to the next provider that has the entry, so a size
+   *  threshold lives with the provider it concerns. Entries without a
+   *  predicate take every call and cost nothing extra. */
+  readonly accepts?: {
+    readonly [K in LapackOp]?: (...args: Parameters<LapackEntry<K>>) => boolean;
+  };
+}
+
+/** Priorities of the built-in providers (higher is asked first). */
+export const PROVIDER_PRIORITY = {
+  inline: 300,
+  native: 200,
+  wasm: 100,
+} as const;
+
+/** Small matrix products on the reference loop (see `inline-matmul.ts`).
+ *  Always registered. */
+const inlineProvider: LapackProvider = {
+  name: "inline",
+  priority: PROVIDER_PRIORITY.inline,
+  entries: { matmul: matmulLoop, matmulComplex: matmulComplexLoop },
+  accepts: {
+    matmul: (_a, m, k, _b, n) => matmulIsInline(m, k, n),
+    matmulComplex: (_ar, _ai, m, k, _br, _bi, n) => matmulIsInline(m, k, n),
+  },
+};
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type AnyFn = (...args: any[]) => unknown;
+interface Layer {
+  readonly name: string;
+  readonly fn: AnyFn;
+  readonly accepts?: AnyFn;
+}
+
+let _providers: LapackProvider[] = [inlineProvider];
+let _chains: Map<string, Layer[]> | null = null;
 let _bridge: LapackBridge | null = null;
 let _log: ((message: string) => void) | null = null;
 
@@ -762,34 +826,101 @@ export function setBridgeLog(log: ((message: string) => void) | null): void {
   _log = log;
 }
 
-/**
- * Install an accelerated bridge (native addon, wasm module, test stub), or
- * clear it with null. Entries it omits fall back to TypeScript.
- */
-export function setLapackBridge(bridge: Partial<LapackBridge> | null): void {
-  _installed = bridge;
+/** Add a provider, or replace the registered one with the same name. */
+export function registerProvider(provider: LapackProvider): void {
+  _providers = _providers
+    .filter(p => p.name !== provider.name)
+    .concat(provider)
+    .sort((a, b) => b.priority - a.priority);
+  _chains = null;
   _bridge = null;
 }
 
-/** The complete bridge: installed entries over the TypeScript ones. */
+/** Remove the provider with this name, if registered. */
+export function unregisterProvider(name: string): void {
+  _providers = _providers.filter(p => p.name !== name);
+  _chains = null;
+  _bridge = null;
+}
+
+/** Registered provider names, highest priority first (ts-lapack, always
+ *  last, is implied). */
+export function providerNames(): string[] {
+  return _providers.map(p => p.name);
+}
+
+/** Per entry, the layers that have it in call order, ending at the first
+ *  that takes every call (the TypeScript entry when there is one). */
+function chains(): Map<string, Layer[]> {
+  if (_chains) return _chains;
+  const ts = getTsLapackBridge() as unknown as Record<string, unknown>;
+  const ops = new Set(Object.keys(ts));
+  for (const p of _providers)
+    for (const k of Object.keys(p.entries)) ops.add(k);
+  _chains = new Map();
+  for (const op of ops) {
+    const chain: Layer[] = [];
+    for (const p of _providers) {
+      const fn = (p.entries as Record<string, unknown>)[op];
+      if (typeof fn !== "function") continue;
+      const accepts = (p.accepts as Record<string, AnyFn> | undefined)?.[op];
+      chain.push({ name: p.name, fn: fn as AnyFn, accepts });
+      if (!accepts) break;
+    }
+    if (
+      (chain.length === 0 || chain[chain.length - 1].accepts) &&
+      typeof ts[op] === "function"
+    )
+      chain.push({ name: "ts-lapack", fn: ts[op] as AnyFn });
+    if (chain.length > 0) _chains.set(op, chain);
+  }
+  return _chains;
+}
+
+function select(chain: Layer[], args: unknown[]): AnyFn | null {
+  for (const l of chain) if (!l.accepts || l.accepts(...args)) return l.fn;
+  return null;
+}
+
+/**
+ * The function that serves `op` for these arguments, or undefined when no
+ * provider has it or all of them decline, which can happen only for the
+ * native-only entries (FFTW, `fillRandn`) that have no TypeScript fallback.
+ */
+export function providerFor<K extends LapackOp>(
+  op: K,
+  args: Parameters<LapackEntry<K>>
+): LapackEntry<K> | undefined {
+  const chain = chains().get(op);
+  const fn = chain ? select(chain, args) : null;
+  return (fn ?? undefined) as LapackEntry<K> | undefined;
+}
+
+/** The complete bridge. Each entry resolves through the provider stack: it
+ *  is the first provider's function when that provider takes every call,
+ *  and otherwise a dispatcher that picks a provider per call. */
 export function getLapackBridge(): LapackBridge {
   if (_bridge) return _bridge;
-  const ts = getTsLapackBridge();
-  if (!_installed) {
-    _bridge = ts;
-    _log?.("LAPACK bridge: ts-lapack (TypeScript)");
-    return _bridge;
+  const bridge: Record<string, AnyFn> = {};
+  const tsOnly: string[] = [];
+  for (const [op, chain] of chains()) {
+    bridge[op] = chain[0].accepts
+      ? (...args: unknown[]) => {
+          const fn = select(chain, args);
+          if (!fn) throw new Error(`${op}: every provider declined the call`);
+          return fn(...args);
+        }
+      : chain[0].fn;
+    if (chain.every(l => l.name === "ts-lapack" || l.name === "inline"))
+      tsOnly.push(op);
   }
-  const merged: Record<string, unknown> = { ...ts };
-  for (const [key, fn] of Object.entries(_installed))
-    if (typeof fn === "function") merged[key] = fn;
-  const fromTs = Object.keys(ts).filter(
-    k => merged[k] === ts[k as keyof LapackBridge]
-  );
+  const names = providerNames().filter(n => n !== "inline");
   _log?.(
-    "LAPACK bridge: installed" +
-      (fromTs.length ? `, ts-lapack for ${fromTs.join(", ")}` : "")
+    names.length === 0
+      ? "LAPACK providers: ts-lapack (TypeScript)"
+      : `LAPACK providers: ${names.join(", ")}` +
+          (tsOnly.length ? `; ts-lapack for ${tsOnly.join(", ")}` : "")
   );
-  _bridge = merged as unknown as LapackBridge;
+  _bridge = bridge as unknown as LapackBridge;
   return _bridge;
 }
