@@ -41,6 +41,7 @@ import { Registry } from "../executors/registry.js";
 import { execStmt } from "./execStatements.js";
 import { callResolved, declaredNargout, interpretTarget } from "./calls.js";
 import { callBody } from "./callConvention.js";
+import { MEXCEPTION_CLASS } from "../runtime/mexception.js";
 
 // ── Interpreter ──────────────────────────────────────────────────────────
 
@@ -207,6 +208,9 @@ export class Interpreter {
     // functions (as MATLAB's string-named calls).
     this.rt.resolveNamedCall = (name, args, targetClassName) => {
       if (targetClassName) {
+        // A method of a built-in class (MException, or a class without a
+        // classdef such as graph) is a builtin taking the object first.
+        if (!this.classDefinesMethod(targetClassName, name)) return null;
         const target = resolveFunction(
           name,
           args.map(resolutionArgType),
@@ -241,6 +245,25 @@ export class Interpreter {
       this.code.classes.ancestors(className);
 
     this.rt.declaredNargout = (name: string) => declaredNargout(this, name);
+  }
+
+  /** False when a call `obj.name(...)` on an instance of `className` is not
+   *  a classdef method: the class has no classdef (a built-in class) or
+   *  derives from MException and no class in its lineage defines `name`. */
+  private classDefinesMethod(className: string, name: string): boolean {
+    const classes = this.code.classes;
+    const info = classes.get(className);
+    if (!info) return false;
+    if (!classes.ancestors(className).includes(MEXCEPTION_CLASS)) return true;
+    return classes
+      .lineage(info)
+      .some(
+        c =>
+          c.methodNames.has(name) ||
+          c.externalMethodFiles.has(name) ||
+          c.staticMethodNames.has(name) ||
+          c.constructorName === name
+      );
   }
 
   /** Run a complete AST (main script). */

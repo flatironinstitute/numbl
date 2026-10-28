@@ -14,6 +14,7 @@ import {
   isRuntimeStructArray,
   isRuntimeSparseMatrix,
   isRuntimeStringArray,
+  isRuntimeClassInstance,
 } from "../../runtime/types.js";
 import type { RuntimeValue, RuntimeTensor } from "../../runtime/types.js";
 import { builtin } from "./builtin.js";
@@ -21,8 +22,12 @@ import { builtinError } from "./args.js";
 import { RuntimeError } from "../../runtime/error.js";
 import { isEnumInstance, enumScalarEquals } from "../../runtime/runtimeEnum.js";
 import { sprintfFormat } from "../../helpers/string.js";
-import { RTV } from "../../runtime/constructors.js";
-import { emptyStackField } from "../../runtime/runtime.js";
+import {
+  isMException,
+  makeMException,
+  raiseException,
+  exceptionText,
+} from "../../runtime/mexception.js";
 import { sparseToDense } from "../../helpers/sparse-arithmetic.js";
 
 // ── isequal ──────────────────────────────────────────────────────────────
@@ -90,6 +95,22 @@ function valuesEqualSimple(a: RuntimeValue, b: RuntimeValue): boolean {
     }
     return true;
   }
+  if (isRuntimeStructArray(a) && isRuntimeStructArray(b)) {
+    if (a.elements.length !== b.elements.length) return false;
+    return a.elements.every((el, i) => valuesEqualSimple(el, b.elements[i]));
+  }
+  // Objects of the same class compare by their property values (a handle
+  // object only equals itself).
+  if (isRuntimeClassInstance(a) && isRuntimeClassInstance(b)) {
+    if (a === b) return true;
+    if (a.className !== b.className || a.isHandleClass) return false;
+    if (a.fields.size !== b.fields.size) return false;
+    for (const [key, val] of a.fields) {
+      const other = b.fields.get(key);
+      if (other === undefined || !valuesEqualSimple(val, other)) return false;
+    }
+    return true;
+  }
   if (isRuntimeStringArray(a) && isRuntimeStringArray(b)) {
     if (a.shape[0] !== b.shape[0] || a.shape[1] !== b.shape[1]) return false;
     for (let i = 0; i < a.data.length; i++) {
@@ -139,7 +160,7 @@ builtin({
 
 /** A MATLAB message identifier: component:mnemonic, word chars and colons
  *  (e.g. 'MATLAB:badInput'). */
-const MATLAB_ID_RE = /^[A-Za-z]\w*(:[A-Za-z]\w*)+$/;
+export const MATLAB_ID_RE = /^[A-Za-z]\w*(:[A-Za-z]\w*)+$/;
 
 builtin({
   name: "assert",
@@ -186,8 +207,30 @@ builtin({
   name: "error",
   nargin: [1, Infinity],
   nargout: 0,
-  apply: args => {
+  apply: (args, _n, ctx) => {
+    let s = args[0];
+    if (isRuntimeStructArray(s)) {
+      // error(errStruct) with an empty struct is a no-op.
+      if (s.elements.length === 0) return;
+      if (s.elements.length === 1) s = s.elements[0];
+    }
+    if (isRuntimeStruct(s) && args.length === 1) {
+      // error(errStruct): its message, identifier and (if given) stack.
+      const { identifier, message } = exceptionText(s);
+      const stack = s.fields.get("stack");
+      throw raiseException(
+        makeMException(identifier, message, stack),
+        stack !== undefined
+      );
+    }
+    if (isMException(s, c => ctx.rt.classAncestors(c)) || isRuntimeStruct(s))
+      throw builtinError(
+        "MATLAB:error:invalidMessageType",
+        "The message must be specified as either a character vector, string scalar, or a message structure."
+      );
     const first = textValue(args[0]) ?? String(args[0]);
+    // error('') (an empty message alone) is a no-op.
+    if (args.length === 1 && first === "") return;
     // error(id, fmt, ...): the first arg is a MATLAB identifier. As in
     // MATLAB, the id form always formats its message (escapes too), while
     // a lone error(msg) is taken literally.
@@ -202,152 +245,5 @@ builtin({
     }
     const msg = args.length === 1 ? first : sprintfFormat(first, args.slice(1));
     throw new RuntimeError(msg);
-  },
-});
-
-// ── rethrow ─────────────────────────────────────────────────────────────
-
-builtin({
-  name: "rethrow",
-  nargin: 1,
-  nargout: 0,
-  apply: args => {
-    const me = args[0];
-    if (isRuntimeStruct(me)) {
-      const msgVal = me.fields.get("message");
-      const idVal = me.fields.get("identifier");
-      const msg = msgVal ? (textValue(msgVal) ?? String(msgVal)) : "";
-      const err = new RuntimeError(msg);
-      if (idVal) err.identifier = textValue(idVal) ?? "";
-      throw err;
-    }
-    throw new RuntimeError(String(me));
-  },
-});
-
-// ── MException ──────────────────────────────────────────────────────────
-
-/** Build an MException-shaped struct. Field order matches MATLAB:
- *  identifier, message, cause, stack. */
-function makeMException(identifier: string, message: string): RuntimeValue {
-  return RTV.struct(
-    new Map<string, RuntimeValue>([
-      ["identifier", RTV.char(identifier)],
-      ["message", RTV.char(message)],
-      ["cause", RTV.cell([], [0, 0])],
-      ["stack", emptyStackField()],
-    ])
-  );
-}
-
-builtin({
-  name: "MException",
-  help: {
-    signatures: [
-      "ME = MException(errID, msg)",
-      "ME = MException(errID, msg, A1, ..., An)",
-    ],
-    description:
-      "Construct an exception object with an error identifier and message. Extra arguments format the message with sprintf-style conversion specifiers. In numbl the result is a struct with fields identifier, message, cause, and stack.",
-  },
-  nargin: [2, Infinity],
-  apply: args => {
-    const errID = textValue(args[0]);
-    if (errID === null)
-      throw builtinError(
-        "MATLAB:dispatcher:noMatchingConstructor",
-        "No constructor 'MException' with matching signature found."
-      );
-    const fmt = textValue(args[1]);
-    if (fmt === null)
-      throw builtinError(
-        "MATLAB:MException:MessageMustBeChar",
-        "MESSAGE input must be a character vector or string scalar."
-      );
-    const msg = args.length === 2 ? fmt : sprintfFormat(fmt, args.slice(2));
-    return makeMException(errID, msg);
-  },
-});
-
-// ── throw / throwAsCaller ────────────────────────────────────────────────
-
-function throwException(me: RuntimeValue): never {
-  if (isRuntimeStruct(me)) {
-    const msgVal = me.fields.get("message");
-    const idVal = me.fields.get("identifier");
-    const msg = msgVal ? (textValue(msgVal) ?? String(msgVal)) : "";
-    const err = new RuntimeError(msg);
-    if (idVal) err.identifier = textValue(idVal) ?? "";
-    throw err;
-  }
-  throw new RuntimeError(String(me));
-}
-
-builtin({
-  name: "throw",
-  help: {
-    signatures: ["throw(ME)"],
-    description:
-      "Throw an exception. ME is an MException-shaped struct with identifier and message fields.",
-  },
-  nargin: 1,
-  nargout: 0,
-  apply: args => throwException(args[0]),
-});
-
-builtin({
-  name: "throwAsCaller",
-  help: {
-    signatures: ["throwAsCaller(ME)"],
-    description:
-      "Throw an exception as if from the calling function. In numbl this is equivalent to throw(ME) — the throw site is not hidden from the stack.",
-  },
-  nargin: 1,
-  nargout: 0,
-  apply: args => throwException(args[0]),
-});
-
-// ── getReport ────────────────────────────────────────────────────────────
-
-builtin({
-  name: "getReport",
-  help: {
-    signatures: ["S = getReport(ME)", "S = getReport(ME, TYPE)"],
-    description:
-      "Return a formatted error report for an MException-shaped struct as a char string. TYPE is 'basic' or 'extended' (default 'extended'). The 'extended' form appends stack frames if present.",
-  },
-  nargin: [1, 4],
-  apply: args => {
-    const me = args[0];
-    if (!isRuntimeStruct(me)) {
-      return RTV.char(String(me));
-    }
-    const msgVal = me.fields.get("message");
-    const message = msgVal ? (textValue(msgVal) ?? String(msgVal)) : "";
-    let type = "extended";
-    if (args.length >= 2) {
-      const t = textValue(args[1]);
-      if (t === "basic" || t === "extended") type = t;
-    }
-    if (type === "basic") return RTV.char(message);
-    // Extended: append stack frames if present.
-    const stackVal = me.fields.get("stack");
-    const lines: string[] = [message];
-    const appendFrame = (frame: RuntimeValue) => {
-      if (!isRuntimeStruct(frame)) return;
-      const nameVal = frame.fields.get("name");
-      const lineVal = frame.fields.get("line");
-      const name = nameVal ? (textValue(nameVal) ?? "") : "";
-      const lineNum = typeof lineVal === "number" ? lineVal : 0;
-      if (name) lines.push(`Error in ${name} (line ${lineNum})`);
-    };
-    if (stackVal) {
-      if (isRuntimeStructArray(stackVal)) {
-        for (const el of stackVal.elements) appendFrame(el);
-      } else if (isRuntimeStruct(stackVal)) {
-        appendFrame(stackVal);
-      }
-    }
-    return RTV.char(lines.join("\n"));
   },
 });

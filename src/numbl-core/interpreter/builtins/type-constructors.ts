@@ -888,7 +888,8 @@ builtin({
     const v = args[0];
     const hasField = (name: string): boolean => {
       if (isRuntimeStructArray(v)) return v.fieldNames.includes(name);
-      if (!isRuntimeStruct(v) && !isRuntimeClassInstance(v)) return false;
+      // As in MATLAB, an object has properties, not fields.
+      if (!isRuntimeStruct(v)) return false;
       return v.fields.has(name);
     };
     // Cell array of field names → logical array of the same size

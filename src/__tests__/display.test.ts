@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { displayValue } from "../numbl-core/runtime/display.js";
+import { RTV } from "../numbl-core/runtime/constructors.js";
+import { makeMException } from "../numbl-core/runtime/mexception.js";
 
 describe("displayValue numeric formatting", () => {
   it("preserves the exponent for tiny values (regression: was 1.0000e-1)", () => {
@@ -20,5 +22,27 @@ describe("displayValue numeric formatting", () => {
   it("still strips trailing zeros for non-exponential reals", () => {
     expect(displayValue(0.5)).toBe("0.5");
     expect(displayValue(3.14)).toBe("3.14");
+  });
+});
+
+describe("MException display", () => {
+  it("lists the properties as MATLAB does", () => {
+    const stack = RTV.structArray(
+      ["file", "name", "line"],
+      [RTV.struct({ file: RTV.char("f.m"), name: RTV.char("f"), line: 3 })]
+    );
+    const me = makeMException("my:id", "bad value 3", stack);
+    expect(displayValue(me)).toBe(
+      [
+        "  MException with properties:",
+        "",
+        "    identifier: 'my:id'",
+        "       message: 'bad value 3'",
+        "         cause: {}",
+        "         stack: [1×1 struct]",
+        "    Correction: []",
+        "",
+      ].join("\n")
+    );
   });
 });
