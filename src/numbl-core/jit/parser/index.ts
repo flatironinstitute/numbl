@@ -4,7 +4,11 @@
  * JIT's call sites import from.
  */
 
-export { BinaryOperation, UnaryOperation } from "../numbl/index.js";
+export {
+  BinaryOperation,
+  UnaryOperation,
+  offsetToLineCol,
+} from "../numbl/index.js";
 
 export type {
   Span,

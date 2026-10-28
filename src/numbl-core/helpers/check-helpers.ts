@@ -7,8 +7,10 @@ import {
   isRuntimeChar,
   isRuntimeNumber,
   isRuntimeString,
+  type RuntimeValue,
 } from "../runtime/types.js";
-import { colMajorIndex, RTV, RuntimeValue } from "../runtime/index.js";
+import { colMajorIndex } from "../runtime/utils.js";
+import { RTV } from "../runtime/constructors.js";
 import { allocFloat64Array } from "../runtime/alloc.js";
 
 /** Ensure data is Float64Array (needed by LAPACK bridges). */

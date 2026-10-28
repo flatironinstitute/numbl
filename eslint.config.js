@@ -6,6 +6,22 @@ import tseslint from "typescript-eslint";
 import { defineConfig, globalIgnores } from "eslint/config";
 import eslintConfigPrettier from "eslint-config-prettier";
 
+// numbl-core files that may import Node-only modules.
+const NODE_ONLY_CORE_FILES = ["src/numbl-core/**/*.node.ts"];
+
+const NO_GRAPHICS_IMPORT = {
+  regex: "(^|/)graphics/",
+  message:
+    "numbl-core must not import from src/graphics/; put shared plot code in src/numbl-core/plotting/.",
+};
+
+const NO_NODE_IMPORT = {
+  regex:
+    "^(node:.*|fs|fs/.*|path|path/.*|child_process|os|worker_threads|koffi)$",
+  message:
+    "numbl-core also runs in the browser; import Node-only modules from a *.node.ts file wired in at Node bootstrap.",
+};
+
 export default defineConfig([
   globalIgnores([
     "dist",
@@ -51,21 +67,22 @@ export default defineConfig([
   },
   // numbl-core must not depend on the renderer; plot data types and pure
   // helpers shared with it live in src/numbl-core/plotting/.
+  // It also runs in the browser, so Node-only modules may be imported only
+  // from files named *.node.ts (wired in at Node bootstrap).
   {
     files: ["src/numbl-core/**/*.ts"],
+    ignores: NODE_ONLY_CORE_FILES,
     rules: {
       "no-restricted-imports": [
         "error",
-        {
-          patterns: [
-            {
-              regex: "(^|/)graphics/",
-              message:
-                "numbl-core must not import from src/graphics/; put shared plot code in src/numbl-core/plotting/.",
-            },
-          ],
-        },
+        { patterns: [NO_GRAPHICS_IMPORT, NO_NODE_IMPORT] },
       ],
+    },
+  },
+  {
+    files: NODE_ONLY_CORE_FILES,
+    rules: {
+      "no-restricted-imports": ["error", { patterns: [NO_GRAPHICS_IMPORT] }],
     },
   },
 ]);

@@ -2,7 +2,7 @@
  * streamline / stream2: trace 2-D streamlines through a gridded vector field.
  */
 
-import type { RuntimeValue } from "../runtime/index.js";
+import type { RuntimeValue } from "../runtime/types.js";
 import type { PlotInstruction } from "./types.js";
 import {
   isRuntimeNumber,

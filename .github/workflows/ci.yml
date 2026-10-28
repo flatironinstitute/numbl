@@ -41,6 +41,9 @@ jobs:
       - name: Check generated builtin names are in sync
         run: npm run gen:builtin-names:check
 
+      - name: Check import cycles in numbl-core do not increase
+        run: npm run check:cycles
+
   test:
     name: Test
     runs-on: ubuntu-latest
@@ -57,22 +60,20 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build
-        run: npm run build
-
-      # Published library entry points (otherwise only built at publish time).
+      # `npm run build` (web app, test runner, CLI, viewers) runs in
+      # test-browser, which needs its output; this job only builds the
+      # published library entry points (otherwise only built at publish time).
       - name: Build library (numbl, numbl/node)
         run: npm run build:lib
 
       - name: Build graphics library (numbl/graphics)
         run: npm run build:graphics
 
-      - name: Run tests (float64)
+      - name: Run unit tests
         run: npm run test
 
   test-browser:
     name: Test Browser (Playwright)
-    needs: test
     runs-on: ubuntu-latest
     # Browsers and their system libraries come preinstalled in this image, so
     # there is no slow install step. Keep the tag in sync with the
@@ -111,7 +112,6 @@ jobs:
 
   test-lapack:
     name: Test LAPACK Addon
-    needs: test
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -126,11 +126,10 @@ jobs:
       - name: Install libopenblas and libfftw3
         run: sudo apt-get update && sudo apt-get install -y libopenblas-dev libfftw3-dev
 
+      # No `npm run build` here: the .m suites run from source via tsx and
+      # jit_parity/run.mjs bundles its own CLI.
       - name: Install dependencies
         run: npm ci
-
-      - name: Build
-        run: npm run build
 
       - name: Build native addon
         run: npm run build:addon

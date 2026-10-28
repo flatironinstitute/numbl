@@ -3,7 +3,7 @@
  * its runtime arguments and pushing the resulting `PlotInstruction`s.
  */
 
-import { type RuntimeValue, toNumber, toString } from "../runtime/index.js";
+import { toNumber, toString } from "../runtime/convert.js";
 import type { PlotInstruction } from "./types.js";
 import {
   isRuntimeNumber,
@@ -11,6 +11,7 @@ import {
   isRuntimeTensor,
   isRuntimeFunction,
   isRuntimeCell,
+  type RuntimeValue,
 } from "../runtime/types.js";
 import { RTV } from "../runtime/constructors.js";
 import type { Runtime } from "../runtime/runtime.js";

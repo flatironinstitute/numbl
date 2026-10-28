@@ -28,8 +28,11 @@
  */
 
 import type { Expr, LValue, Stmt, Span } from "../parser/index.js";
-import { BinaryOperation, UnaryOperation } from "../parser/index.js";
-import { offsetToLineCol } from "../parser/sourceLoc.js";
+import {
+  BinaryOperation,
+  UnaryOperation,
+  offsetToLineCol,
+} from "../parser/index.js";
 import {
   tryExtractDottedName,
   unwindMemberLvalue,

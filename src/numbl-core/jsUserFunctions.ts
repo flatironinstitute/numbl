@@ -16,7 +16,9 @@
  */
 
 import type { WorkspaceFile, NativeBridge } from "./workspace/index.js";
-import { RTV, RuntimeError, toNumber } from "./runtime/index.js";
+import { RTV } from "./runtime/constructors.js";
+import { RuntimeError } from "./runtime/error.js";
+import { toNumber } from "./runtime/convert.js";
 import type { RuntimeValue } from "./runtime/types.js";
 import { getCurrentRuntime } from "./runtime/refcount.js";
 import {
