@@ -59,6 +59,19 @@ interface ListenerEntry {
 }
 
 /** The listeners of a run, by source object. */
+/** Event listeners (`addlistener`) live as long as the session, so a
+ *  listener added by one command fires in the next. */
+const sessionRegistries = new WeakMap<object, EventRegistry>();
+
+export function sessionEventRegistry(session: object): EventRegistry {
+  let reg = sessionRegistries.get(session);
+  if (!reg) {
+    reg = new EventRegistry();
+    sessionRegistries.set(session, reg);
+  }
+  return reg;
+}
+
 export class EventRegistry {
   private readonly bySource = new WeakMap<
     RuntimeClassInstance,

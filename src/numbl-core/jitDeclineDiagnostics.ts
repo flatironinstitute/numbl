@@ -14,19 +14,9 @@
  * relevant one. It is a diagnostic aid, not a precise per-unit binding.
  */
 
-import { currentSession } from "./sessionState.js";
+import { currentSession, type JitDecline } from "./sessionState.js";
 
-export interface JitDecline {
-  /** The thrown error's message (e.g. "unsupported builtin 'rand'"). */
-  message: string;
-  /** Error class name: "UnsupportedConstruct" | "JitTypeError". */
-  kind: string;
-  /** Which executor declined, e.g. "jit-loop" or "cjit-call". */
-  where: string;
-  /** Source position of the offending construct, when the thrown error
-   *  carried one. Only used for diagnostics. */
-  at?: { file: string; start: number };
-}
+export type { JitDecline };
 
 /** Record a swallowed JIT decline reason (called from executor catch blocks). */
 export function recordJitDecline(d: JitDecline): void {

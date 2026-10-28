@@ -7,10 +7,22 @@
  */
 
 import type { RuntimeValue } from "./runtime/types.js";
-import type { JitDecline } from "./jitDeclineDiagnostics.js";
-import type { EventRegistry } from "./interpreter/events.js";
 import { Environment } from "./interpreter/types.js";
 import { getCurrentRuntime } from "./runtime/refcount.js";
+
+/** A JIT decline reason, kept for `%!numbl:assert_jit` messages (see
+ *  jitDeclineDiagnostics.ts). */
+export interface JitDecline {
+  /** The thrown error's message (e.g. "unsupported builtin 'rand'"). */
+  message: string;
+  /** Error class name: "UnsupportedConstruct" | "JitTypeError". */
+  kind: string;
+  /** Which executor declined, e.g. "jit-loop" or "cjit-call". */
+  where: string;
+  /** Source position of the offending construct, when the thrown error
+   *  carried one. Only used for diagnostics. */
+  at?: { file: string; start: number };
+}
 
 /** State of the seedable PRNG shared by rand/randn/randi/randperm (see
  *  helpers/prng.ts). */
@@ -45,14 +57,14 @@ export class SessionState {
   spparms: Float64Array | null = null;
   /** setappdata storage: handle → name → value. */
   readonly appdata = new Map<number, Map<string, RuntimeValue>>();
-  /** Event listeners (`addlistener`), made by the first run. */
-  events: EventRegistry | null = null;
   /** The most recent JIT decline (for `%!numbl:assert_jit` messages). */
   lastJitDecline: JitDecline | null = null;
 
   // Host capabilities that belong to the session rather than to a run (for
   // example a compute device context) belong here too, so that every run
-  // of the session sees the same instance.
+  // of the session sees the same instance. State owned by a module that
+  // imports the interpreter (event listeners, see sessionEventRegistry)
+  // is kept by that module, keyed by session, to keep this file a leaf.
 
   /** `clear global`: remove every global, or the named ones. */
   clearGlobals(names?: string[]): void {

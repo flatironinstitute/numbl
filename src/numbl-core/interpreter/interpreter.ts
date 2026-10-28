@@ -50,6 +50,7 @@ import { constantPropertyValue } from "./oop.js";
 import { META_CLASS_ALIASES } from "./metaClass.js";
 import {
   EventRegistry,
+  sessionEventRegistry,
   destroyHandle,
   isValid,
   propertyEvent,
@@ -181,7 +182,7 @@ export class Interpreter {
   constructor(rt: Runtime, code: CodeIndex, baseEnv = new Environment()) {
     this.rt = rt;
     this.code = code;
-    this.events = rt.session.events ??= new EventRegistry();
+    this.events = sessionEventRegistry(rt.session);
     baseEnv.rt = rt;
     this.baseFrame = new CallFrame(
       code,
