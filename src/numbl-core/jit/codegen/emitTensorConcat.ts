@@ -27,13 +27,9 @@ import { emitExpr } from "./emitExpr.js";
  *  error. Registered on demand by the dynamic path. */
 const CONCAT_CHECK_SNIPPET = {
   name: "jit_concat_check",
-  headers: ["<stdio.h>", "<stdlib.h>"],
   code: `static void jit_concat_check(long got, long want) {
-  if (got != want) {
-    fprintf(stderr,
-      "Dimensions of arrays being concatenated are not consistent\\n");
-    exit(1);
-  }
+  if (got != want)
+    jit_raise_error("", "Dimensions of arrays being concatenated are not consistent");
 }`,
 };
 
@@ -50,7 +46,10 @@ export function emitTensorConcat(
   const allStatic =
     e.shape.every(s => s !== null) &&
     e.rowHeights.every(h => h !== null) &&
-    e.cellCols.every(row => row.every(c => c !== null));
+    e.cellCols.every(row => row.every(c => c !== null)) &&
+    // A cell whose extent was only inferred from its row/column neighbours
+    // (`[ones(2,2), ones(k,1)]`) must be checked at run time.
+    e.cells.every(row => row.every(cellDimsExact));
   if (allStatic) {
     return emitTensorConcatStatic(
       e.cells,
@@ -128,8 +127,11 @@ function emitTensorConcatDynamic(
     const c = e.cells[i][j];
     if (c.ty.kind !== "Numeric") return "1L";
     if (c.ty.dims.length === 0 || isScalar(c.ty)) return "1L";
-    const r = e.rowHeights[i];
-    if (r !== null) return `${r}L`;
+    // The cell's own height: the row's statically known height would make
+    // the consistency check below vacuous for a cell whose height is only
+    // known at run time.
+    const d0 = c.ty.dims[0];
+    if (d0.kind === "exact") return `${d0.value}L`;
     return `${cellStrs[i][j]}.dims[0]`;
   };
   const cellColsExpr = (i: number, j: number): string => {
@@ -214,4 +216,10 @@ function emitTensorConcatDynamic(
   }
   lines.push(`_jit_t;`);
   return `({ ${lines.join(" ")} })`;
+}
+
+function cellDimsExact(c: IRExpr): boolean {
+  if (c.ty.kind !== "Numeric") return true;
+  if (c.ty.dims.length === 0 || isScalar(c.ty)) return true;
+  return c.ty.dims.every(d => d.kind === "exact");
 }

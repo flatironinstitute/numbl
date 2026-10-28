@@ -48,7 +48,8 @@ end
 try
     assert(false);
 catch e
-    assert(strcmp(e.message, 'Assertion failed'));
+    assert(strcmp(e.message, 'Assertion failed.'));
+    assert(strcmp(e.identifier, 'MATLAB:assertion:failed'));
 end
 
 disp('SUCCESS');

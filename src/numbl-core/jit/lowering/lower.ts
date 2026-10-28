@@ -268,11 +268,18 @@ export class Lowerer {
   private lowerStmt(s: Stmt): IRStmt | IRStmt[] | null {
     const hoistMark = this.pendingExprHoists.length;
     const inner = this.lowerStmtInner(s);
-    if (this.pendingExprHoists.length === hoistMark) return inner;
-    const drained = this.pendingExprHoists.splice(hoistMark);
-    if (inner === null) return drained;
-    if (Array.isArray(inner)) return [...drained, ...inner];
-    return [...drained, inner];
+    const drained =
+      this.pendingExprHoists.length === hoistMark
+        ? []
+        : this.pendingExprHoists.splice(hoistMark);
+    const out =
+      inner === null
+        ? drained
+        : [...drained, ...(Array.isArray(inner) ? inner : [inner])];
+    // Tag each produced stmt with its source statement (statements of a
+    // nested body were already tagged by their own `lowerStmt`).
+    if (s.span) for (const ir of out) ir.src ??= s.span;
+    return out;
   }
 
   private lowerStmtInner(s: Stmt): IRStmt | IRStmt[] | null {

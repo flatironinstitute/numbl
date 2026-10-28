@@ -2,7 +2,7 @@
  *
  *   jit_dot_real(a, b) → double
  *     Vector form on real inputs: `sum_i a.real[i] * b.real[i]`.
- *     Length mismatch aborts (the static type system rejects the
+ *     Length mismatch raises (the static type system rejects the
  *     case when both lengths are known at compile time, so a
  *     mismatch only reaches the helper through dim-unknown shapes).
  *
@@ -34,8 +34,7 @@ static double jit_dot_real(jit_tensor_t a, jit_tensor_t b) {
   for (int i = 0; i < a.ndim; i++) na *= a.dims[i];
   for (int i = 0; i < b.ndim; i++) nb *= b.dims[i];
   if (na != nb) {
-    fprintf(stderr, "C-JIT: dot: vectors must be same length\n");
-    abort();
+    jit_raise_error("", "dot: vectors must be same length");
   }
   double acc = 0.0;
   for (long i = 0; i < na; i++) acc += a.real[i] * b.real[i];
@@ -68,8 +67,7 @@ static double _Complex jit_dot_complex(jit_tensor_t a, jit_tensor_t b) {
   for (int i = 0; i < a.ndim; i++) na *= a.dims[i];
   for (int i = 0; i < b.ndim; i++) nb *= b.dims[i];
   if (na != nb) {
-    fprintf(stderr, "C-JIT: dot_complex: vectors must be same length\n");
-    abort();
+    jit_raise_error("", "dot: vectors must be same length");
   }
   int aHasImag = (a.imag != NULL);
   int bHasImag = (b.imag != NULL);

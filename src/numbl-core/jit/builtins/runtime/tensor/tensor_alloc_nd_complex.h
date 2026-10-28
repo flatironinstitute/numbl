@@ -9,9 +9,7 @@
 
 static jit_tensor_t jit_tensor_alloc_nd_complex(int ndim, const long *dims) {
   if (ndim < 1 || ndim > JIT_MAX_NDIM) {
-    fprintf(stderr,
-      "C-JIT: tensor ndim %d out of range [1, %d]\n", ndim, JIT_MAX_NDIM);
-    abort();
+    jit_raise_bailf("tensor ndim %d out of range [1, %d]", ndim, JIT_MAX_NDIM);
   }
   jit_tensor_t out;
   size_t n = 1;
@@ -21,17 +19,13 @@ static jit_tensor_t jit_tensor_alloc_nd_complex(int ndim, const long *dims) {
     size_t new_n;
 #if defined(__has_builtin) && __has_builtin(__builtin_mul_overflow)
     if (__builtin_mul_overflow(n, (size_t)d, &new_n)) {
-      fprintf(stderr,
-        "C-JIT: complex tensor allocation overflow at dim %d (size %ld)\n",
+      jit_raise_bailf("complex tensor allocation overflow at dim %d (size %ld)",
         i, d);
-      abort();
     }
 #else
     if ((size_t)d != 0 && n > (SIZE_MAX / sizeof(double)) / (size_t)d) {
-      fprintf(stderr,
-        "C-JIT: complex tensor allocation overflow at dim %d (size %ld)\n",
+      jit_raise_bailf("complex tensor allocation overflow at dim %d (size %ld)",
         i, d);
-      abort();
     }
     new_n = n * (size_t)d;
 #endif
@@ -41,9 +35,7 @@ static jit_tensor_t jit_tensor_alloc_nd_complex(int ndim, const long *dims) {
   size_t bytes;
 #if defined(__has_builtin) && __has_builtin(__builtin_mul_overflow)
   if (__builtin_mul_overflow(n, sizeof(double), &bytes)) {
-    fprintf(stderr,
-      "C-JIT: complex tensor allocation overflow at byte-count (%zu elements)\n", n);
-    abort();
+    jit_raise_bailf("complex tensor allocation overflow at byte-count (%zu elements)", n);
   }
 #else
   bytes = n * sizeof(double);

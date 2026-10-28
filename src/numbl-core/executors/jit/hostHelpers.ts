@@ -114,6 +114,9 @@ export interface JitHostHelpers {
    *  `rand` draw from one shared, `rng(seed)`-controllable stream. */
   rand: () => number;
   elemwise: JitElemwiseHost;
+  /** Set by the emitted module's factory: reads its current statement
+   *  location (`$loc`), so a raise can be attributed to a line. */
+  loc?: () => number;
 }
 
 export function buildHostHelpers(rt: Runtime): JitHostHelpers {

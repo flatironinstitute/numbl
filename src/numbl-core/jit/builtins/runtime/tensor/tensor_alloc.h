@@ -4,7 +4,7 @@
  * `jit_tensor_free` (or hand it to `jit_tensor_assign`, which takes
  * ownership).
  *
- * `jit_alloc` aborts on OOM, so the returned struct's `real` is
+ * `jit_alloc` raises on OOM, so the returned struct's `real` is
  * always non-NULL. Used by codegen as the workhorse for elementwise-
  * result construction at every multi-element Assign RHS that isn't a
  * plain tensor literal.
@@ -16,9 +16,9 @@
 
 static jit_tensor_t jit_tensor_alloc(long rows, long cols) {
   /* MATLAB / numbl clamp negative dim values to 0 (resulting in an
-   * empty tensor) rather than aborting; without this the bare
+   * empty tensor) rather than raising; without this the bare
    * `(size_t)rows` cast below would wrap a negative `long` to
-   * SIZE_MAX and trigger a spurious "allocation overflow" abort. */
+   * SIZE_MAX and trigger a spurious "allocation overflow" raise. */
   if (rows < 0) rows = 0;
   if (cols < 0) cols = 0;
   jit_tensor_t out;
@@ -27,15 +27,11 @@ static jit_tensor_t jit_tensor_alloc(long rows, long cols) {
   size_t bytes;
   if (__builtin_mul_overflow((size_t)rows, (size_t)cols, &n) ||
       __builtin_mul_overflow(n, sizeof(double), &bytes)) {
-    fprintf(stderr,
-      "C-JIT: tensor allocation overflow (%ldx%ld elements)\n", rows, cols);
-    abort();
+    jit_raise_bailf("tensor allocation overflow (%ldx%ld elements)", rows, cols);
   }
 #else
   if ((size_t)cols != 0 && (size_t)rows > (SIZE_MAX / sizeof(double)) / (size_t)cols) {
-    fprintf(stderr,
-      "C-JIT: tensor allocation overflow (%ldx%ld elements)\n", rows, cols);
-    abort();
+    jit_raise_bailf("tensor allocation overflow (%ldx%ld elements)", rows, cols);
   }
   n = (size_t)rows * (size_t)cols;
   size_t bytes = n * sizeof(double);

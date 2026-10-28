@@ -11,9 +11,11 @@
 //       - lines beginning with "warning:" are dropped (JIT bail notices; these
 //         normally go to stderr, filtered here too for safety),
 //       - trailing whitespace/newlines are trimmed.
-//   * a run that exits non-zero is reduced to the single outcome token <ERROR>
-//     (the interpreter and C-JIT word their error messages differently, but
-//     "it correctly refused" is the contract we test, not the message text).
+//   * a run that exits non-zero must also agree on its error: its key is the
+//     stdout produced before the error, the token <ERROR>, and stderr (the
+//     error message with its location), with "warning:" lines dropped. The
+//     JITs raise the interpreter's exact error (see
+//     src/numbl-core/executors/jit/raise.ts), so the text must match.
 //   * a run that times out is reduced to <TIMEOUT>.
 //
 // Speed: every (script, opt) pair is an independent child process, so they're
@@ -195,16 +197,20 @@ async function runPool(jobs, concurrency, worker) {
   return results;
 }
 
-function normalize({ stdout, status, timedOut }) {
-  if (timedOut) return "<TIMEOUT>";
-  if (status !== 0) return "<ERROR>";
-  const kept = stdout.split("\n").filter(l => !/^\s*warning:/i.test(l));
+function keepLines(text) {
+  const kept = text.split("\n").filter(l => !/^\s*warning:/i.test(l));
   return kept.join("\n").replace(/\s+$/, "");
 }
 
+function normalize({ stdout, stderr, status, timedOut }) {
+  if (timedOut) return "<TIMEOUT>";
+  const out = keepLines(stdout);
+  if (status === 0) return out;
+  return `${out}${out ? "\n" : ""}<ERROR>\n${keepLines(stderr)}`;
+}
+
 function previewBlock(s, label) {
-  const body =
-    s === "<ERROR>" || s === "<TIMEOUT>" ? s : s.length ? s : "(empty)";
+  const body = s.length ? s : "(empty)";
   const lines = body.split("\n");
   const shown = lines.slice(0, 12);
   const tail =

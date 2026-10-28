@@ -18,7 +18,16 @@ What C-JIT can accept is gated by `executors/jit/typeAdapter.ts` (numbl `JitType
 
 A loop or top-level wrapper may leave an output unassigned (the loop variable and body locals of a zero-trip `for`). C has no unassigned state, so `compileSpecC` adds a flag output for each output that is not definitely assigned (`lowering/assignedFlags.ts`), and the host skips writing back an output whose flag is still 0.
 
-A runtime error in compiled C (out-of-bounds index, `error(...)`) exits the process rather than throwing, so the C backend declines while the interpreter is inside a `try` body (`Interpreter.tryDepth`).
+## Runtime errors: the raise channel
+
+Every runtime error or bail in compiled C goes through `jit_raise(kind, identifier, message)` (`runtime/system/raise.h`, emitted first in every `.so`). Nothing calls `exit` or `abort`.
+
+- **Guard.** The host does not call the entry spec directly but an exported wrapper, `<spec>__host` (`emitHostEntry` in `codegen/emit.ts`), which clears the status, arms a `setjmp` guard, and calls the spec. The spec is `static __attribute__((noinline))`, so the `setjmp` (which makes the compiler spill values live across it) stays out of the hot body, and a recursive spec does not re-arm the guard. The guard costs one `setjmp` per call, which is small next to the koffi call itself.
+- **Raise.** `jit_raise` records the kind (`JIT_RAISE_BAIL` or `JIT_RAISE_ERROR`), the identifier, the message (NULL for an error whose wording the JIT leaves to the interpreter) and the current statement location, then `longjmp`s to the guard, which returns a zeroed value. The C backend reads the status after each call (`bindRaise`: `jit_raise_kind` / `_id` / `_msg` / `_loc`) and throws the normalized `JitRaise`; see [executors.md](../executors.md#runtime-errors-and-bails) for how it is mapped. Helpers: `jit_raise_error`, `jit_raise_errorf`, `jit_raise_dims_mismatch` (exact interpreter wording), `jit_raise_error_deferred` (wording left to the interpreter), `jit_raise_bail` / `jit_raise_bailf`.
+- **Location.** Emitted code stores the current source statement in `jit__loc` at the start of each statement (`emitBody`), as the interpreter sets `rt.$line`. The value packs a file index and an offset (`locCode` / `decodeLoc` in `codegen/runtime.ts`); the compile result carries the file table (`locFiles`). The cost is one store per statement.
+- **Memory.** A raise abandons the frames between it and the guard together with the tensors they own. Every allocation therefore goes through a tracked allocator: `raise.h` defines `malloc` / `calloc` / `realloc` / `free` as macros for versions that link each block (16-byte header) into one live list, and the guard frees every live block (`jit__free_all`). Between calls the list holds only returned output buffers, which the host frees with `jit_free`; input buffers the host allocates with `jit_malloc` belong to the callee and are freed by the guard on a raise. A raise therefore leaks nothing.
+
+Since errors no longer end the process, C-JIT also runs inside `try`.
 
 ## Native compile/load
 

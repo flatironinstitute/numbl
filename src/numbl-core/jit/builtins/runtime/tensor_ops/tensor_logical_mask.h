@@ -3,8 +3,8 @@
  * `jit_logical_mask_indices` scans `mask` column-major and fills
  * `out_indices` with the 0-based positions where the mask is truthy.
  * Each truthy position must be less than `axis_len`; otherwise this
- * aborts with a numbl-style "Index exceeds array bounds" message via
- * `jit_oob_abort`. Returns the truthy count, which is also the
+ * raises the interpreter's logical-index error via
+ * `jit_mask_oob`. Returns the truthy count, which is also the
  * number of entries written into `out_indices`. `out_indices` must
  * have room for at least `mask.numel()` longs.
  *
@@ -28,7 +28,8 @@ static long jit_logical_mask_indices(
   for (long i = 0; i < mask_n; i++) {
     if (mask.real[i] != 0.0) {
       if (i >= axis_len) {
-        jit_oob_abort(loc, axis, i + 1, 1, axis_len);
+        (void)loc;
+        jit_mask_oob(axis);
       }
       out_indices[count++] = i;
     }

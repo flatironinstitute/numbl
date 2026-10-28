@@ -31,8 +31,7 @@ static jit_tensor_t jit_uniquetol_real(jit_tensor_t a, double tol,
   if (n > 0) {
     uniques = (double *)malloc((size_t)n * sizeof(double));
     if (!uniques) {
-      fprintf(stderr, "C-JIT: out of memory (uniquetol)\n");
-      abort();
+      jit_raise_bailf("out of memory (uniquetol)");
     }
     for (long i = 0; i < n; i++) {
       double x = a.real[i];

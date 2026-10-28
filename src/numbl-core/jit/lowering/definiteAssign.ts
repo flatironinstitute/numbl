@@ -34,7 +34,7 @@ import { UnsupportedConstruct } from "./errors.js";
  *  `ty` / `span` subtrees are skipped (they carry no reads), and handle
  *  literals are not descended into (their params/captures rebind names,
  *  so descending would produce false positives). */
-function collectReads(node: unknown, out: Set<string>): void {
+function collectReads(node: unknown, out: Var[]): void {
   if (node === null || typeof node !== "object") return;
   if (Array.isArray(node)) {
     for (const el of node) collectReads(el, out);
@@ -43,7 +43,7 @@ function collectReads(node: unknown, out: Set<string>): void {
   const kind = (node as { kind?: unknown }).kind;
   if (typeof kind === "string") {
     if (kind === "Var") {
-      out.add((node as Var).name);
+      out.push(node as Var);
       return;
     }
     // Do not descend into a handle's body: its parameters and captured
@@ -51,7 +51,7 @@ function collectReads(node: unknown, out: Set<string>): void {
     if (kind === "HandleLit" || kind === "HandleCaptureLoad") return;
   }
   for (const key of Object.keys(node as Record<string, unknown>)) {
-    if (key === "ty" || key === "span") continue;
+    if (key === "ty" || key === "span" || key === "src") continue;
     collectReads((node as Record<string, unknown>)[key], out);
   }
 }
@@ -115,28 +115,26 @@ function forProvablyRunsOnce(s: Extract<IRStmt, { kind: "For" }>): boolean {
   return count >= 1;
 }
 
+/** Called for each read of a local that is not yet definitely assigned. */
+type OnUnassignedRead = (read: Var) => void;
+
 /**
  * Walk `stmts` threading the set of definitely-assigned names. Returns the
- * set as of the end of the (fall-through) sequence. Throws
- * `UnsupportedConstruct` on the first read of a `local` name that is not yet
- * definitely assigned.
+ * set as of the end of the (fall-through) sequence. Calls `onUnassigned`
+ * for each read of a `local` name that is not yet definitely assigned.
  */
 function walk(
   stmts: IRStmt[],
   assigned: Set<string>,
-  locals: Set<string>
+  locals: Set<string>,
+  onUnassigned: OnUnassignedRead
 ): Set<string> {
-  const checkReads = (node: unknown, span: Var["span"]): void => {
-    const reads = new Set<string>();
+  const checkReads = (node: unknown): void => {
+    const reads: Var[] = [];
     collectReads(node, reads);
-    for (const name of reads) {
-      if (locals.has(name) && !assigned.has(name)) {
-        throw new UnsupportedConstruct(
-          `'${name}' may be used before it is assigned (assigned only on a ` +
-            `path that need not run); declining C-JIT so the interpreter can ` +
-            `reproduce MATLAB's undefined-variable semantics`,
-          span
-        );
+    for (const read of reads) {
+      if (locals.has(read.name) && !assigned.has(read.name)) {
+        onUnassigned(read);
       }
     }
   };
@@ -144,16 +142,16 @@ function walk(
   for (const s of stmts) {
     switch (s.kind) {
       case "Assign":
-        checkReads(s.expr, s.span);
+        checkReads(s.expr);
         assigned.add(s.name);
         break;
       case "ExprStmt":
-        checkReads(s.expr, s.span);
+        checkReads(s.expr);
         break;
       case "If": {
-        checkReads(s.cond, s.span);
-        const thenA = walk(s.thenBody, new Set(assigned), locals);
-        const elseA = walk(s.elseBody, new Set(assigned), locals);
+        checkReads(s.cond);
+        const thenA = walk(s.thenBody, new Set(assigned), locals, onUnassigned);
+        const elseA = walk(s.elseBody, new Set(assigned), locals, onUnassigned);
         // Only names assigned on BOTH arms are definite afterwards. (An
         // arm that exits via return/break makes this conservative — the
         // intersection drops names the surviving arm did assign — which
@@ -163,18 +161,18 @@ function walk(
         break;
       }
       case "While": {
-        checkReads(s.cond, s.span);
+        checkReads(s.cond);
         // The body may run zero times, so its assignments are not definite
         // afterwards; walk it (with a copy) only to check reads inside.
-        walk(s.body, new Set(assigned), locals);
+        walk(s.body, new Set(assigned), locals, onUnassigned);
         break;
       }
       case "For": {
-        checkReads(s.start, s.span);
-        checkReads(s.end, s.span);
+        checkReads(s.start);
+        checkReads(s.end);
         const bodyAssigned = new Set(assigned);
         bodyAssigned.add(s.varName); // loop var is bound inside the body
-        const afterBody = walk(s.body, bodyAssigned, locals);
+        const afterBody = walk(s.body, bodyAssigned, locals, onUnassigned);
         // If the loop provably runs at least once, the body's fall-through
         // assignments (and the loop variable) are definite afterwards.
         // Otherwise the loop may run zero times, so they are not.
@@ -184,26 +182,26 @@ function walk(
         break;
       }
       case "MultiAssignCall":
-        checkReads(s.args, s.span);
+        checkReads(s.args);
         for (const o of s.outputs) if (o.binding) assigned.add(o.binding.name);
         break;
       case "IndexStore":
-        checkReads(s.indices, s.span);
-        checkReads(s.rhs, s.span);
+        checkReads(s.indices);
+        checkReads(s.rhs);
         assigned.add(s.base.name); // store can create/grow the base
         break;
       case "IndexSliceStore":
-        checkReads(s.index, s.span);
-        checkReads(s.rhs, s.span);
+        checkReads(s.index);
+        checkReads(s.rhs);
         assigned.add(s.base.name);
         break;
       case "CellIndexStore":
-        checkReads(s.indices, s.span);
-        checkReads(s.rhs, s.span);
+        checkReads(s.indices);
+        checkReads(s.rhs);
         assigned.add(s.base.name);
         break;
       case "MemberStore":
-        checkReads(s.rhs, s.span);
+        checkReads(s.rhs);
         assigned.add(s.base.name);
         break;
       case "ReturnFromFunction":
@@ -240,7 +238,14 @@ export function assertDefiniteAssignment(
   // Parameters are always bound; never flag reads of them.
   for (const p of fn.params) locals.delete(p);
   const assigned = new Set<string>(fn.params);
-  walk(fn.body, assigned, locals);
+  walk(fn.body, assigned, locals, read => {
+    throw new UnsupportedConstruct(
+      `'${read.name}' may be used before it is assigned (assigned only on a ` +
+        `path that need not run); declining C-JIT so the interpreter can ` +
+        `reproduce MATLAB's undefined-variable semantics`,
+      read.span
+    );
+  });
   if (!opts.checkOutputs) return assigned;
   // An output that is not definitely assigned on the fall-through path would
   // be returned as C's predeclared default (0 / empty) instead of raising
@@ -257,4 +262,16 @@ export function assertDefiniteAssignment(
     }
   }
   return assigned;
+}
+
+/** The reads in `fn` of a local that may not be assigned yet. The JS
+ *  backend guards these (an unassigned local is `undefined` there) so such
+ *  a read raises instead of computing with `undefined`. */
+export function maybeUnassignedReads(fn: IRFunc): Set<Var> {
+  const locals = new Set<string>();
+  collectAssignedNames(fn.body, locals);
+  for (const p of fn.params) locals.delete(p);
+  const out = new Set<Var>();
+  walk(fn.body, new Set<string>(fn.params), locals, read => out.add(read));
+  return out;
 }

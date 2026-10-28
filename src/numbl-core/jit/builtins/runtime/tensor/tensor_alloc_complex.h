@@ -19,17 +19,13 @@ static jit_tensor_t jit_tensor_alloc_complex(long rows, long cols) {
   size_t bytes;
   if (__builtin_mul_overflow((size_t)rows, (size_t)cols, &n) ||
       __builtin_mul_overflow(n, sizeof(double), &bytes)) {
-    fprintf(stderr,
-      "C-JIT: complex tensor allocation overflow (%ldx%ld elements)\n",
+    jit_raise_bailf("complex tensor allocation overflow (%ldx%ld elements)",
       rows, cols);
-    abort();
   }
 #else
   if ((size_t)cols != 0 && (size_t)rows > (SIZE_MAX / sizeof(double)) / (size_t)cols) {
-    fprintf(stderr,
-      "C-JIT: complex tensor allocation overflow (%ldx%ld elements)\n",
+    jit_raise_bailf("complex tensor allocation overflow (%ldx%ld elements)",
       rows, cols);
-    abort();
   }
   n = (size_t)rows * (size_t)cols;
   size_t bytes = n * sizeof(double);

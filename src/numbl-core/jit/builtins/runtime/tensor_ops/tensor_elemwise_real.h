@@ -95,8 +95,8 @@
        * Mirrors the JS bcast_kernel guard; without it an incompatible     \
        * pair reads past an operand instead of raising. */                  \
       if (adim[i] != bdim[i] && adim[i] != 1 && bdim[i] != 1) {            \
-        fprintf(stderr, "Matrix dimensions must agree\n");                  \
-        exit(1);                                                            \
+        jit_raise_dims_mismatch("Matrix dimensions must agree", a.ndim,       \
+                                a.dims, b.ndim, b.dims);                    \
       }                                                                     \
       rdim[i] = (adim[i] == 1) ? bdim[i] : adim[i];                         \
       astride[i] = (adim[i] == 1) ? 0 : aacc;                               \

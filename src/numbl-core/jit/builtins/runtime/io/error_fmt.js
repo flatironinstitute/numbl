@@ -1,20 +1,19 @@
-// JS sibling of `error_fmt.h`: format the message and throw. Any throw
-// from emitted code makes the executor bail, and the interpreter re-runs
-// the unit to raise numbl's canonical error (with its identifier), so
-// the error built here is never what the user sees.
+// JS sibling of `error_fmt.h`: raise a MATLAB error through the raise
+// channel (`raise.js`), which the host turns into numbl's RuntimeError
+// with the same message and identifier. `jit_error_fmt` formats the
+// message; `jit_error_text` takes it literally (the interpreter's rule for
+// a lone `error(msg)`).
 
 import { jit_sprintf_format } from "./format_engine.js";
+import { jit_raise_error } from "../system/raise.js";
 
-export function jit_error_fmt(fmt, ...args) {
-  const msg = jit_sprintf_format(fmt, args);
-  const err = new Error(msg);
-  err.identifier = "";
-  throw err;
+export function jit_error_fmt(identifier, fmt, ...args) {
+  jit_raise_error(identifier, jit_sprintf_format(fmt, args));
 }
 
-export function jit_error_fmt_id(identifier, fmt, ...args) {
-  const msg = jit_sprintf_format(fmt, args);
-  const err = new Error(msg);
-  err.identifier = identifier;
-  throw err;
+export function jit_error_text(identifier, msg) {
+  jit_raise_error(
+    identifier,
+    typeof msg === "object" && msg !== null ? msg.value : String(msg)
+  );
 }

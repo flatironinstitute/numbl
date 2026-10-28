@@ -1,32 +1,22 @@
-/* JIT runtime helper: `assert(cond, fmt, args...)` — printf-style
- * assertion failure.
+/* JIT runtime helpers: `assert(cond, msg)` with a non-literal message and
+ * `assert(cond, [id,] fmt, args...)`: raise a MATLAB error (`raise.h`)
+ * when `cond` is not MATLAB-truthy (non-zero and not NaN).
  *
- * Tests `cond` for MATLAB truthiness (non-zero and not NaN); on
- * failure, writes "C-JIT: assertion failed: " followed by the
- * formatted body to stderr and aborts. Uses the shared format engine
- * (`jit__format_walk`), so the spec set / escape rules / arg
- * cycling match `fprintf` / `error`.
+ *   jit_assert_text        message taken literally (the 2-arg form)
+ *   jit_assert_scalar_fmt  message formatted with the shared format engine
+ *                          (spec set / escapes / arg cycling as `fprintf`)
  *
- * Routed to by the lowerer whenever `assert(cond, ...)` has 2+ args
- * AND the message is either an opaque text variable or carries
- * additional format args. The simpler 2-arg literal-message form
- * stays on `jit_assert_scalar` (no engine activation needed).
+ * `id` is the error identifier ("" for none), resolved at lowering.
  */
 
-#include <stdio.h>
-#include <stdlib.h>
-
-static void jit__assert_fmt_writer(void *ctx, const char *bytes, long len) {
-  (void)ctx;
-  if (len > 0) fwrite(bytes, 1, (size_t)len, stderr);
+static void jit_assert_text(double cond, const char *id, jit_text_view_t msg) {
+  if (cond != 0.0 && cond == cond) return;
+  jit_error_text(id, msg);
 }
 
-static void jit_assert_scalar_fmt(double cond, jit_text_view_t fmt,
-                                    int nargs,
-                                    const jit_fprintf_arg_t *args) {
+static void jit_assert_scalar_fmt(double cond, const char *id,
+                                  jit_text_view_t fmt, int nargs,
+                                  const jit_fprintf_arg_t *args) {
   if (cond != 0.0 && cond == cond) return;
-  fputs("C-JIT: assertion failed: ", stderr);
-  jit__format_walk(jit__assert_fmt_writer, (void *)0, fmt, nargs, args);
-  fputc('\n', stderr);
-  abort();
+  jit_error_fmt(id, fmt, nargs, args);
 }

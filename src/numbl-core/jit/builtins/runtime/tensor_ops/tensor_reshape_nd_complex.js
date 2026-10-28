@@ -3,6 +3,11 @@
 // the real reshape; both lanes are reinterpreted (no rearrangement).
 
 import { jit_tensor_alloc_nd_complex } from "../tensor/tensor_alloc_nd_complex.js";
+import {
+  jit_raise_bail,
+  jit_raise_error,
+  jit_raise_error_deferred,
+} from "../system/raise.js";
 
 export function jit_reshape_nd_complex(input, ndim, dims) {
   let inTotal = 1;
@@ -12,13 +17,11 @@ export function jit_reshape_nd_complex(input, ndim, dims) {
   for (let i = 0; i < ndim; i++) {
     if (dims[i] === -1) {
       if (inferIdx !== -1) {
-        throw new Error("reshape: at most one '[]' auto-infer slot allowed");
+        jit_raise_bail("reshape: at most one '[]' auto-infer slot allowed");
       }
       inferIdx = i;
     } else if (dims[i] < 0) {
-      throw new Error(
-        `reshape: dim ${i + 1} must be a non-negative integer (got ${dims[i]})`
-      );
+      jit_raise_error_deferred();
     } else {
       explicitProd *= dims[i];
     }
@@ -28,23 +31,17 @@ export function jit_reshape_nd_complex(input, ndim, dims) {
   let outTotal;
   if (inferIdx !== -1) {
     if (explicitProd === 0 && inTotal !== 0) {
-      throw new Error(
-        `reshape: input has ${inTotal} elements but explicit dims around '[]' multiply to 0`
-      );
+      jit_raise_error_deferred();
     }
     if (explicitProd > 0 && inTotal % explicitProd !== 0) {
-      throw new Error(
-        `reshape: input has ${inTotal} elements, not divisible by ${explicitProd}`
-      );
+      jit_raise_error("", "reshape: number of elements must not change");
     }
     resolved[inferIdx] = explicitProd === 0 ? 0 : inTotal / explicitProd;
     outTotal = inTotal;
   } else {
     outTotal = explicitProd;
     if (inTotal !== outTotal) {
-      throw new Error(
-        `reshape: number of elements must not change (in=${inTotal}, out=${outTotal})`
-      );
+      jit_raise_error("", "reshape: number of elements must not change");
     }
   }
   const out = jit_tensor_alloc_nd_complex(ndim, resolved);

@@ -8,7 +8,7 @@
  * `insideCompiledLoop`): the call then runs inside that compiled loop.
  */
 
-import type { Executor } from "../types.js";
+import { RERUN, type Executor } from "../types.js";
 import type { CallClassification } from "../classification.js";
 import { jitTypeKey } from "../../jitTypes.js";
 import type { Span } from "../../parser/index.js";
@@ -19,10 +19,12 @@ import {
   compileUnit,
   declinedByAssertC,
   insideCompiledLoop,
+  invokeUnit,
   mapTypes,
   type FuncStmt,
   type JitBackend,
 } from "./backend.js";
+import { scopeOfStmts } from "./raise.js";
 
 interface CallData {
   readonly c: CallClassification;
@@ -93,14 +95,22 @@ export function makeCallExecutor<A>(
 
     run(art, d, interp) {
       if (art === null) return null;
-      const outs = backend.invoke(
+      const fd = d.c.fn;
+      const scope = {
+        ...scopeOfStmts(fd.body, "<jit>", fd.name),
+        reentrant: backend.recursive(art),
+      };
+      const outs = invokeUnit(
+        backend,
         art,
         d.args as readonly RuntimeValue[],
+        scope,
         interp,
         name
       );
-      // An unassigned output bails so the interpreter raises its error.
-      if (outs === null || outs.includes(undefined)) return null;
+      if (!Array.isArray(outs)) return outs;
+      // An unassigned output is the interpreter's error to raise.
+      if (outs.includes(undefined)) return RERUN;
       // Same shape as the interpreter's call path: a bare value for
       // nargout 1, an array otherwise.
       return { result: d.c.nargout >= 2 ? outs : outs[0] };

@@ -5,19 +5,18 @@
 // freshly-allocated 1×1 tensor.
 
 import { jit_tensor_alloc } from "../tensor/tensor_alloc.js";
+import { jit_raise_bail, jit_raise_error } from "../system/raise.js";
 
 export function jit_tensor_mtimes_real(a, b) {
   if (a.shape.length !== 2 || b.shape.length !== 2) {
-    throw new Error("jit_tensor_mtimes_real: inputs must be 2-D");
+    jit_raise_bail("jit_tensor_mtimes_real: inputs must be 2-D");
   }
   const m = a.shape[0];
   const k = a.shape[1];
   const k2 = b.shape[0];
   const n = b.shape[1];
   if (k !== k2) {
-    throw new Error(
-      `jit_tensor_mtimes_real: inner dimensions disagree (${k} vs ${k2})`
-    );
+    jit_raise_error("", `Inner matrix dimensions must agree: ${k} vs ${k2}`);
   }
   // Optional WASM LAPACK accelerator. When a host installs `$matmulAccel`
   // (browser worker, after loading a bridge), delegate the multiply; a
@@ -46,7 +45,7 @@ export function jit_tensor_mtimes_real(a, b) {
 
 export function jit_tensor_mtimes_real_scalar(a, b) {
   if (a.shape.length !== 2 || b.shape.length !== 2) {
-    throw new Error("jit_tensor_mtimes_real_scalar: inputs must be 2-D");
+    jit_raise_bail("jit_tensor_mtimes_real_scalar: inputs must be 2-D");
   }
   // The translate-time type system has already proven a is 1×k and b
   // is k×1; this helper trusts that and just runs the inner product.

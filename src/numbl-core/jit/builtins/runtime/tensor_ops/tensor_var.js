@@ -7,6 +7,7 @@
 // inlined into one generated module.
 
 import { jit_tensor_alloc_nd } from "../tensor/tensor_alloc_nd.js";
+import { jit_raise_bad_dim } from "../system/raise.js";
 
 function var_squeeze_trailing(dims) {
   while (dims.length > 2 && dims[dims.length - 1] === 1) dims.pop();
@@ -29,7 +30,7 @@ function var_all_impl(t, w, transform) {
 }
 
 function var_dim_impl(t, dim, w, transform) {
-  if (dim < 1) throw new Error(`var/std _dim: dim must be >= 1 (got ${dim})`);
+  if (dim < 1) jit_raise_bad_dim();
   if (dim > t.shape.length) {
     // No-op axis: numbl's reduceDim copies the input verbatim when
     // dim > ndim (forEachSlice returns null), regardless of the

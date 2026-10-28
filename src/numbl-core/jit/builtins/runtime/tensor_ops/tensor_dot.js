@@ -4,10 +4,11 @@
 
 import { jit_tensor_alloc_nd } from "../tensor/tensor_alloc_nd.js";
 import { jit_tensor_alloc_nd_complex } from "../tensor/tensor_alloc_nd_complex.js";
+import { jit_raise_error } from "../system/raise.js";
 
 export function jit_dot_real(a, b) {
   if (a.data.length !== b.data.length) {
-    throw new Error("dot: vectors must be same length");
+    jit_raise_error("", "dot: vectors must be same length");
   }
   let acc = 0.0;
   for (let i = 0; i < a.data.length; i++) acc += a.data[i] * b.data[i];
@@ -31,7 +32,7 @@ export function jit_dot_real_matrix(a, b) {
 
 export function jit_dot_complex(a, b) {
   if (a.data.length !== b.data.length) {
-    throw new Error("dot_complex: vectors must be same length");
+    jit_raise_error("", "dot: vectors must be same length");
   }
   const aIm = a.imag;
   const bIm = b.imag;

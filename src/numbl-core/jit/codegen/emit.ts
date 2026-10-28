@@ -16,7 +16,7 @@
  * `jit_tensor_free` for every owned local.
  */
 
-import type { IRExpr, IRStmt, IRProgram } from "../lowering/ir.js";
+import type { IRExpr, IRFunc, IRStmt, IRProgram } from "../lowering/ir.js";
 import { requireOwnedHelpers } from "./cHelpers.js";
 import {
   cellTypedefName,
@@ -55,7 +55,16 @@ export interface EmitOptions {
   exposeSpec: string;
 }
 
-export function emitProgram(prog: IRProgram, opts: EmitOptions): string {
+export interface EmitResult {
+  source: string;
+  /** Exported host-entry symbol: a wrapper around `exposeSpec` that arms
+   *  the raise guard (see `emitHostEntry`). */
+  hostEntry: string;
+  /** Files named by statement locations, by index (see `locCode`). */
+  locFiles: string[];
+}
+
+export function emitProgram(prog: IRProgram, opts: EmitOptions): EmitResult {
   const state = newRuntimeState();
   const userParts: string[] = [];
 
@@ -65,25 +74,9 @@ export function emitProgram(prog: IRProgram, opts: EmitOptions): string {
     );
   }
 
-  // Grow-bail pre-pass: scan every function for an indexed store. Done
-  // up front — before any function body is emitted — so the host-entry
-  // function's `setjmp` guard is emitted regardless of whether the
-  // growing store sits in the entry itself or in a callee emitted later
-  // in the loop below. The `setjmp` guard references `jit_grow_bail_buf`
-  // and needs `<setjmp.h>`, both provided by the `jit_grow_bail`
-  // snippet — so activate it HERE, tied to the guard decision. (Per-path
-  // activation in `emitNdScalarOffset` / `emitLinearRangeSetup` covers
-  // the scalar/linear-range *grow* helpers, but slice/colon stores arm
-  // the guard via `bodyHasIndexStore` without touching those paths, so
-  // relying on lazy activation alone left the buffer/`<setjmp.h>`
-  // undeclared and the C compile failed.)
-  for (const fn of prog.functions.values()) {
-    if (bodyHasIndexStore(fn.body)) {
-      state.usedGrowBail = true;
-      useRuntimeByName(state, "jit_grow_bail");
-      break;
-    }
-  }
+  // The raise channel and tracked allocator come first, so the allocator
+  // macros cover every later snippet and the user code (see `raise.h`).
+  useRuntimeByName(state, "jit_raise");
 
   // Struct / class / handle typedefs — one per distinct shape.
   // Emitted ahead of forward decls so user code can refer to them,
@@ -108,20 +101,27 @@ export function emitProgram(prog: IRProgram, opts: EmitOptions): string {
   }
   if (namedTypedefs.length > 0) userParts.push("");
 
-  // Forward declarations. The exposed spec gets `extern` linkage so
-  // `dlsym` / koffi can resolve it; everything else stays `static`.
+  // Forward declarations. Every spec is `static`; the host calls the
+  // exported wrapper emitted below. The exposed spec is `noinline` so the
+  // wrapper's `setjmp` does not pessimize its body.
+  const storage = (cName: string): string =>
+    cName === opts.exposeSpec ? "static __attribute__((noinline))" : "static";
   for (const fn of prog.functions.values()) {
-    const sc = fn.cName === opts.exposeSpec ? "" : "static ";
-    userParts.push(`${sc}${fnRetType(fn)} ${fn.cName}(${fnParamList(fn)});`);
+    userParts.push(
+      `${storage(fn.cName)} ${fnRetType(fn)} ${fn.cName}(${fnParamList(fn)});`
+    );
   }
   if (prog.functions.size > 0) userParts.push("");
 
   // Function bodies.
   for (const fn of prog.functions.values()) {
-    const sc = fn.cName === opts.exposeSpec ? "" : "static";
-    userParts.push(emitFunction(fn, state, sc));
+    userParts.push(emitFunction(fn, state, storage(fn.cName)));
     userParts.push("");
   }
+  const entry = prog.functions.get(opts.exposeSpec)!;
+  const hostEntry = `${entry.cName}__host`;
+  userParts.push(emitHostEntry(entry, hostEntry));
+  userParts.push("");
 
   // Headers: BASE_HEADERS ∪ activated-snippet headers, deduped.
   const headers = new Set<string>(BASE_HEADERS);
@@ -179,7 +179,39 @@ export function emitProgram(prog: IRProgram, opts: EmitOptions): string {
   );
   out.push("void jit_free(void *p) { free(p); }");
   out.push("");
-  return out.join("\n");
+  return { source: out.join("\n"), hostEntry, locFiles: state.locFiles };
+}
+
+/** The exported wrapper the host calls: clears the raise status, arms the
+ *  raise guard, and calls the entry spec. A `jit_raise` anywhere below
+ *  `longjmp`s back here; the guard frees every block the call allocated
+ *  (`jit__free_all`) and returns a zeroed value, which the host discards
+ *  after reading the status. Kept separate from the spec so the spec's own
+ *  recursive calls do not re-arm the guard, and so `setjmp` (which makes
+ *  the compiler spill values live across it) stays out of the hot body. */
+function emitHostEntry(fn: IRFunc, name: string): string {
+  const ret = fnRetType(fn);
+  const args = [...fn.cParams];
+  if (fn.outputs.length >= 2) {
+    for (let i = 0; i < fn.outputs.length; i++) args.push(`_jit_o${i}`);
+  }
+  const call = `${fn.cName}(${args.join(", ")})`;
+  const lines: string[] = [];
+  lines.push(`${ret} ${name}(${fnParamList(fn)}) {`);
+  lines.push(`  jit__raise_reset();`);
+  lines.push(`  if (setjmp(jit__raise_buf)) {`);
+  lines.push(`    jit__free_all();`);
+  if (ret === "void") {
+    lines.push(`    return;`);
+  } else {
+    lines.push(`    ${ret} _jit_z;`);
+    lines.push(`    memset(&_jit_z, 0, sizeof _jit_z);`);
+    lines.push(`    return _jit_z;`);
+  }
+  lines.push(`  }`);
+  lines.push(ret === "void" ? `  ${call};` : `  return ${call};`);
+  lines.push(`}`);
+  return lines.join("\n");
 }
 
 type NamedType = StructType | ClassType | HandleType | CellType;
@@ -192,25 +224,6 @@ type NamedType = StructType | ClassType | HandleType | CellType;
  *  is the only thing the IR mentions directly. Also walks `HandleLit`
  *  capture value types — those drive the per-capture C field types
  *  even when the outer expression's `ty` is enough by itself. */
-/** True if `stmts` (recursing into control-flow bodies, but NOT into
- *  nested function defs — those are separate IRFuncs) contains a store
- *  that can grow-bail at runtime — a scalar `IndexStore` or a slice
- *  `IndexSliceStore`. Drives the grow-bail `setjmp` guard decision; an
- *  unused guard (e.g. a Colon slice that can't grow) is harmless. */
-function bodyHasIndexStore(stmts: ReadonlyArray<IRStmt>): boolean {
-  for (const s of stmts) {
-    if (s.kind === "IndexStore" || s.kind === "IndexSliceStore") return true;
-    if (s.kind === "If") {
-      if (bodyHasIndexStore(s.thenBody) || bodyHasIndexStore(s.elseBody)) {
-        return true;
-      }
-    } else if (s.kind === "While" || s.kind === "For") {
-      if (bodyHasIndexStore(s.body)) return true;
-    }
-  }
-  return false;
-}
-
 function collectNamedTypedefs(prog: IRProgram): NamedType[] {
   const seen = new Map<string, NamedType>();
 

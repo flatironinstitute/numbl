@@ -26,9 +26,8 @@ static jit_string_t jit_string_copy(jit_string_t s) {
   }
   char *buf = (char *)malloc((size_t)s.len);
   if (!buf) {
-    fprintf(stderr, "C-JIT: out of memory in jit_string_copy (%ld bytes)\n",
+    jit_raise_bailf("out of memory in jit_string_copy (%ld bytes)",
             s.len);
-    abort();
   }
   memcpy(buf, s.data, (size_t)s.len);
   out.data = buf;

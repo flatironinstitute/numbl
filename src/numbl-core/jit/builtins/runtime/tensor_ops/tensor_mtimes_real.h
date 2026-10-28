@@ -8,7 +8,7 @@
  * The translate-time check guarantees both inputs are 2-D and
  * `a.dims[1] == b.dims[0]` when both shapes are statically known.
  * When one or both shapes are partly unknown, the check fires at
- * runtime; mismatch aborts with a clear message (the JIT doesn't have
+ * runtime; mismatch raises with a clear message (the JIT doesn't have
  * an exception-throwing channel).
  *
  * The inner-product accumulator runs over the shared dimension k. The
@@ -33,22 +33,16 @@
 static double jit_tensor_mtimes_real_scalar(jit_tensor_t a,
                                                jit_tensor_t b) {
   if (a.ndim != 2 || b.ndim != 2) {
-    fprintf(stderr,
-            "jit_tensor_mtimes_real_scalar: inputs must be 2-D (got %d-D, %d-D)\n",
+    jit_raise_bailf("jit_tensor_mtimes_real_scalar: inputs must be 2-D (got %d-D, %d-D)",
             a.ndim, b.ndim);
-    abort();
   }
   if (a.dims[0] != 1 || b.dims[1] != 1) {
-    fprintf(stderr,
-            "jit_tensor_mtimes_real_scalar: scalar-result form requires 1×k * k×1 (got %ld×%ld * %ld×%ld)\n",
+    jit_raise_bailf("jit_tensor_mtimes_real_scalar: scalar-result form requires 1×k * k×1 (got %ld×%ld * %ld×%ld)",
             a.dims[0], a.dims[1], b.dims[0], b.dims[1]);
-    abort();
   }
   if (a.dims[1] != b.dims[0]) {
-    fprintf(stderr,
-            "jit_tensor_mtimes_real_scalar: inner-dim mismatch (%ld×%ld * %ld×%ld)\n",
-            a.dims[0], a.dims[1], b.dims[0], b.dims[1]);
-    abort();
+    jit_raise_errorf("", "Inner matrix dimensions must agree: %ld vs %ld",
+            a.dims[1], b.dims[0]);
   }
   long k = a.dims[1];
   double acc = 0.0;
@@ -61,20 +55,16 @@ static double jit_tensor_mtimes_real_scalar(jit_tensor_t a,
 static jit_tensor_t jit_tensor_mtimes_real(jit_tensor_t a,
                                                 jit_tensor_t b) {
   if (a.ndim != 2 || b.ndim != 2) {
-    fprintf(stderr,
-            "jit_tensor_mtimes_real: inputs must be 2-D (got %d-D, %d-D)\n",
+    jit_raise_bailf("jit_tensor_mtimes_real: inputs must be 2-D (got %d-D, %d-D)",
             a.ndim, b.ndim);
-    abort();
   }
   long m = a.dims[0];
   long k = a.dims[1];
   long k2 = b.dims[0];
   long n = b.dims[1];
   if (k != k2) {
-    fprintf(stderr,
-            "jit_tensor_mtimes_real: inner-dim mismatch (%ld×%ld * %ld×%ld)\n",
-            m, k, k2, n);
-    abort();
+    jit_raise_errorf("", "Inner matrix dimensions must agree: %ld vs %ld",
+            k, k2);
   }
   jit_tensor_t r;
   r.real = jit_alloc((size_t)m * (size_t)n * sizeof(double));

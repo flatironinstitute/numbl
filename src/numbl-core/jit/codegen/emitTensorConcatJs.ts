@@ -12,6 +12,7 @@
 
 import type { IRExpr } from "../lowering/ir.js";
 import { isScalar } from "../lowering/types.js";
+import { UnsupportedConstruct } from "../lowering/errors.js";
 import { useRuntimeByName, type RuntimeState } from "./runtime.js";
 
 export function emitTensorConcatJs(
@@ -29,7 +30,10 @@ export function emitTensorConcatJs(
   const allStatic =
     e.shape.every(s => s !== null) &&
     e.rowHeights.every(h => h !== null) &&
-    e.cellCols.every(row => row.every(c => c !== null));
+    e.cellCols.every(row => row.every(c => c !== null)) &&
+    // A cell whose extent was only inferred from its row/column neighbours
+    // (`[ones(2,2), ones(k,1)]`) must be checked at run time.
+    e.cells.every(row => row.every(cellDimsExact));
   if (allStatic) {
     return emitTensorConcatJsStatic(
       e.cells,
@@ -133,8 +137,9 @@ function emitTensorConcatJsDynamic(
   emit: (e: IRExpr, state: RuntimeState) => string
 ): string {
   if (isComplex) {
-    throw new Error(
-      "emitJs: dynamic-shape complex TensorConcat is not yet supported"
+    throw new UnsupportedConstruct(
+      "dynamic-shape complex concatenation is not yet supported",
+      e.span
     );
   }
   const lines: string[] = [];
@@ -143,8 +148,11 @@ function emitTensorConcatJsDynamic(
     const c = e.cells[i][j];
     if (c.ty.kind !== "Numeric") return "1";
     if (c.ty.dims.length === 0 || isScalar(c.ty)) return "1";
-    const r = e.rowHeights[i];
-    if (r !== null) return `${r}`;
+    // The cell's own height: the row's statically known height would make
+    // the consistency check below vacuous for a cell whose height is only
+    // known at run time.
+    const d0 = c.ty.dims[0];
+    if (d0.kind === "exact") return `${d0.value}`;
     return `${cellStrs[i][j]}.shape[0]`;
   };
   const cellColsExpr = (i: number, j: number): string => {
@@ -185,7 +193,7 @@ function emitTensorConcatJsDynamic(
       // Matches the interpreter's consistency error.
       if (j > 0) {
         lines.push(
-          `if ((${rowsHere}) !== ${rhLocals[i]}) throw new Error("Dimensions of arrays being concatenated are not consistent");`
+          `if ((${rowsHere}) !== ${rhLocals[i]}) jit_raise_error("", "Dimensions of arrays being concatenated are not consistent");`
         );
       }
       const isScalarCell =
@@ -214,10 +222,16 @@ function emitTensorConcatJsDynamic(
     }
     // Each row's total width must match the result width (set by row 0).
     lines.push(
-      `if (_jit_col_off_${i} !== _jit_tc) throw new Error("Dimensions of arrays being concatenated are not consistent");`
+      `if (_jit_col_off_${i} !== _jit_tc) jit_raise_error("", "Dimensions of arrays being concatenated are not consistent");`
     );
     lines.push(`_jit_row_off += ${rhLocals[i]};`);
   }
   lines.push(`return _jit_t;`);
   return `(() => { ${lines.join(" ")} })()`;
+}
+
+function cellDimsExact(c: IRExpr): boolean {
+  if (c.ty.kind !== "Numeric") return true;
+  if (c.ty.dims.length === 0 || isScalar(c.ty)) return true;
+  return c.ty.dims.every(d => d.kind === "exact");
 }

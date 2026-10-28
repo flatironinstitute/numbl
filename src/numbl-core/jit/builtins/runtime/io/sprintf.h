@@ -32,8 +32,7 @@ static void jit__sprintf_writer(void *ctx, const char *bytes, long len) {
     while (new_cap < b->len + len) new_cap *= 2;
     char *nb = (char *)realloc(b->data, (size_t)new_cap);
     if (!nb) {
-      fprintf(stderr, "C-JIT: out of memory in jit_sprintf\n");
-      abort();
+      jit_raise_bailf("out of memory in jit_sprintf");
     }
     b->data = nb;
     b->cap = new_cap;

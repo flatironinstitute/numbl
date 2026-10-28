@@ -27,14 +27,14 @@ import { emitExpr } from "./emitExpr.js";
  *  IndexLoad / IndexStore: 1-arg linear, 2-arg row/col, or N-arg N-D.
  *  Each axis index is wrapped in a runtime bounds-check call
  *  (`jit_idx_axis` for per-axis; `jit_idx_lin` for 1-arg linear)
- *  so an OOB access aborts with a numbl-style "Index exceeds array
+ *  so an OOB access raises with a numbl-style "Index exceeds array
  *  bounds" message instead of silently reading/writing past the
  *  buffer. Mirrors mtoc's `emitNdScalarOffset` — one source of truth
  *  for the offset formula.
  *
  *  `grow` selects the indexed-STORE variant: the `*_grow` bounds
  *  checks bail (longjmp to the host-entry guard → host re-runs on the
- *  interpreter) instead of aborting when the index exceeds the extent,
+ *  interpreter) instead of raising when the index exceeds the extent,
  *  because a store past the end GROWS the array in MATLAB — which the
  *  JIT can't model. Reads pass `grow = false` (OOB is a genuine
  *  error). See `grow_bail.h`. */
@@ -46,7 +46,6 @@ export function emitNdScalarOffset(
 ): string {
   if (grow) {
     useRuntimeByName(state, "jit_grow_bail");
-    state.usedGrowBail = true;
   } else {
     useRuntimeByName(state, "jit_oob_abort");
   }
@@ -100,17 +99,16 @@ export function emitSliceSlotSetup(
       slotSrc.push(kVar);
     } else if (slot.kind === "Scalar") {
       // Per-axis bounds check at setup time. Reads use `jit_idx_axis`,
-      // which aborts with a numbl-style "Index in position N exceeds array
+      // which raises with a numbl-style "Index in position N exceeds array
       // bounds"; writes use the `_grow` variant, which bails to the
       // interpreter for an index past the extent (MATLAB would grow the
-      // array there, which the JIT cannot model) and still aborts on a
+      // array there, which the JIT cannot model) and still raises on a
       // genuine sub-1 index. Without the grow variant a write like
       // `A(k, :) = row` could not be compiled at all unless `k` were
       // statically known — which it never is inside a loop.
       const axisFn = grow ? "jit_idx_axis_grow" : "jit_idx_axis";
       if (grow) {
         useRuntimeByName(state, "jit_grow_bail");
-        state.usedGrowBail = true;
       } else {
         useRuntimeByName(state, "jit_oob_abort");
       }
@@ -250,8 +248,8 @@ function emitLinearRangeSetup(
     // Store path: each target index is grow-aware. An index past the
     // end grow-bails to the interpreter (which has full grow semantics
     // — the canonical `v(end+1:end+k) = ...` append); a sub-1 index
-    // aborts. No up-front abort check — a growing range must bail, not
-    // abort.
+    // raises. No up-front check: a growing range must bail, not
+    // raise.
     useRuntimeByName(state, "jit_grow_bail");
     return k =>
       `jit_idx_lin_grow(&${baseCName}, jit_to_idx(_jit_start + ${stepStr} * (double)${k}), ${loc})`;
@@ -314,25 +312,36 @@ function emitLinearLogicalMaskSetup(
   };
 }
 
-/** Emit a "lhs/rhs element count mismatch" runtime check for a tensor
- *  RHS in a slice store. Assumes `_jit_n` is already declared as the
- *  lhs slice element count. Pushes `_jit_rhs_n` and the abort branch;
- *  uses `exit(1)` rather than `abort()` so the CLI's
- *  `process.exit(run.status ?? 0)` sees a non-zero status (SIGABRT
- *  surfaces as `signal`, which the CLI would treat as a clean run). */
+/** Emit the RHS size check of a slice store with a tensor RHS, mirroring
+ *  the interpreter's `planStore` (runtime/indexPlan.ts). Assumes `_jit_n`
+ *  holds the selection's element count. A linear store needs equal element
+ *  counts. A subscripted store (`counts`: its per-slot extents) needs equal
+ *  non-singleton dimensions; on a mismatch the interpreter either grows an
+ *  empty base (`A = []; A(:, 1) = v`), which bails, or words a size error,
+ *  which it raises on the re-run. */
 function emitTensorRhsSizeCheck(
   rhs: Extract<IRExpr, { kind: "Var" }>,
+  baseCName: string,
+  baseTy: Type,
+  counts: readonly string[] | null,
   lines: string[],
-  indent: string
+  indent: string,
+  state: RuntimeState
 ): void {
+  if (counts === null) {
+    lines.push(
+      `${indent}if (_jit_n != ${dimsProductExpr(rhs.cName, rhs.ty)}) jit_raise_error("", "Unable to perform assignment because the left and right sides have a different number of elements.");`
+    );
+    return;
+  }
+  useRuntimeByName(state, "jit_oob_abort");
   lines.push(
-    `${indent}long _jit_rhs_n = ${dimsProductExpr(rhs.cName, rhs.ty)};`
+    `${indent}if (!jit_store_shape_ok(${counts.length}, (long[]){${counts.join(", ")}}, &${rhs.cName})) {`
   );
-  lines.push(`${indent}if (_jit_n != _jit_rhs_n) {`);
   lines.push(
-    `${indent}  fprintf(stderr, "C-JIT: Subscripted assignment dimension mismatch (lhs slice has %ld elements, rhs has %ld)\\n", _jit_n, _jit_rhs_n);`
+    `${indent}  if (${dimsProductExpr(baseCName, baseTy)} == 0) jit_raise_bail("slice store into an empty array");`
   );
-  lines.push(`${indent}  exit(1);`);
+  lines.push(`${indent}  jit_raise_error_deferred();`);
   lines.push(`${indent}}`);
 }
 
@@ -403,7 +412,7 @@ export function emitIndexSliceProducer(
       // Single-slot linear logical-mask read: scan the mask once,
       // collect 0-based positions where it's truthy, then walk the
       // buffer. Each truthy mask position must be < numel(base);
-      // `jit_logical_mask_indices` aborts otherwise. Result shape
+      // `jit_logical_mask_indices` raises otherwise. Result shape
       // mirrors single-slot Range: row-vec base → row; col-vec base
       // → col; matrix / N-D base → column vector.
       const linMask = emitLinearLogicalMaskSetup(
@@ -631,7 +640,15 @@ export function emitIndexSliceStore(
           `emit internal: IndexSliceStore tensor RHS must be a Var (got ${s.rhs.kind})`
         );
       }
-      emitTensorRhsSizeCheck(s.rhs, lines, `${indent}  `);
+      emitTensorRhsSizeCheck(
+        s.rhs,
+        baseCName,
+        slotTy,
+        null,
+        lines,
+        `${indent}  `,
+        state
+      );
       lines.push(
         `${indent}  for (long _jit_k = 0; _jit_k < _jit_n; _jit_k++) {`
       );
@@ -685,7 +702,15 @@ export function emitIndexSliceStore(
         `emit internal: IndexSliceStore tensor RHS must be a Var (got ${s.rhs.kind})`
       );
     }
-    emitTensorRhsSizeCheck(s.rhs, lines, `${indent}  `);
+    emitTensorRhsSizeCheck(
+      s.rhs,
+      baseCName,
+      slotTy,
+      totalParts,
+      lines,
+      `${indent}  `,
+      state
+    );
   }
 
   for (let i = ndim - 1; i >= 0; i--) {

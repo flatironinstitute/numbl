@@ -21,7 +21,7 @@
  *     `jit_tensor_<kind>_nd(<N>, (long[]){<lit-or-cast>,…})`
  *
  * The element cap (8 = JIT_MAX_NDIM) is enforced at the source side
- * too; the runtime helper aborts beyond that, but raising at lowering
+ * too; the runtime helper raises beyond that, but raising at lowering
  * time gives a proper span.
  */
 
@@ -204,17 +204,15 @@ function exactShapeOf(r: ResolvedShape): number[] | undefined {
  *  raising. */
 export const CHECK_DIM_SNIPPET: InlineSnippet = {
   name: "jit_check_dim",
-  headers: ["<math.h>", "<stdio.h>", "<stdlib.h>"],
+  headers: ["<math.h>"],
   code: `static long jit_check_dim(double x) {
-  if (!isfinite(x) || x != floor(x)) {
-    fprintf(stderr, "Size inputs must be nonnegative integers.\\n");
-    exit(1);
-  }
+  if (!isfinite(x) || x != floor(x))
+    jit_raise_error("", "Size inputs must be nonnegative integers.");
   return x < 0.0 ? 0L : (long)x;
 }`,
   jsCode: `function jit_check_dim(x) {
   if (!Number.isFinite(x) || !Number.isInteger(x))
-    throw new Error("Size inputs must be nonnegative integers.");
+    jit_raise_error("", "Size inputs must be nonnegative integers.");
   return x < 0 ? 0 : x;
 }`,
 };
