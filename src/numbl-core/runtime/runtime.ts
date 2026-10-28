@@ -48,6 +48,7 @@ import { COLON_SENTINEL, END_SENTINEL } from "./sentinels.js";
 import type { PlotInstruction } from "../plotting/types.js";
 import type { ExecOptions } from "../executeCode.js";
 import type { FileIOAdapter } from "../fileIOAdapter.js";
+import { type FileTable, fileIOView, fileTableFor } from "../fileTable.js";
 import type { SystemAdapter } from "../systemAdapter.js";
 import { ensureRuntimeValue } from "./runtimeHelpers.js";
 import {
@@ -266,8 +267,13 @@ export class Runtime {
   /** Counter for uihtml component ids. */
   public uihtmlSeq = 0;
 
-  // File I/O adapter (injected from host environment)
+  // File I/O adapter (injected from host environment), viewed so each call
+  // first flushes `files`.
   public fileIO?: FileIOAdapter;
+
+  // Open file identifiers (fopen/fread/...), shared across runs that use
+  // the same adapter.
+  public files?: FileTable;
 
   // System adapter (injected from host environment)
   public system?: SystemAdapter;
@@ -321,7 +327,10 @@ export class Runtime {
     private initialVariableValues?: Record<string, RuntimeValue>
   ) {
     this.profilingEnabled = !!options.profile;
-    this.fileIO = options.fileIO;
+    if (options.fileIO) {
+      this.fileIO = fileIOView(options.fileIO);
+      this.files = fileTableFor(options.fileIO);
+    }
     this.system = options.system;
     this.onHtmlSourceEvent = options.onHtmlSourceEvent;
     if (options.initialHoldState) {

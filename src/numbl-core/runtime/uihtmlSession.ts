@@ -80,6 +80,7 @@ export function createUihtmlSession(
       invokeHandle(fn, [src, event]);
     } finally {
       popCurrentRuntime(rt);
+      rt.files?.flush();
     }
 
     const newInstrs = rt.plotInstructions.slice(before);

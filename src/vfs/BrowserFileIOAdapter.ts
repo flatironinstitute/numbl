@@ -1,6 +1,7 @@
 /**
  * Browser implementation of FileIOAdapter using an in-memory VirtualFileSystem.
- * Mirrors NodeFileIOAdapter patterns from cli-fileio.ts.
+ * Mirrors NodeFileIOAdapter patterns from cli-fileio.ts. Stream semantics
+ * (fids, positions, EOF) live in the core FileTable.
  */
 
 import { unzipSync, zipSync } from "fflate";
@@ -14,181 +15,30 @@ import { VirtualFileSystem, type VfsChanges } from "./VirtualFileSystem.js";
 import { globToRegExp } from "../numbl-core/helpers/glob.js";
 import { corsProxiedUrl } from "../browser/mip.js";
 
-interface VFSOpenFile {
-  path: string;
-  permission: string;
-  lastError: string;
-  buffer: string; // text-mode read buffer
-  eof: boolean;
-  pos: number; // byte position
-  data: Uint8Array; // file contents snapshot (for reading) or growing buffer (for writing)
-  dataLen: number; // actual used length in data (may be < data.length due to pre-allocation)
-  dirty: boolean;
-}
-
 const TEXT_DECODER = new TextDecoder("utf-8");
-const TEXT_ENCODER = new TextEncoder();
-const READ_CHUNK_SIZE = 8192;
 
 export class BrowserFileIOAdapter implements FileIOAdapter {
-  private nextFid = 3; // 0=stdin, 1=stdout, 2=stderr reserved
-  private openFiles = new Map<number, VFSOpenFile>();
+  constructor(private vfs: VirtualFileSystem) {
+    // tempdir() always exists, as on a real system.
+    vfs.mkdir(this.tempdir());
+  }
 
-  constructor(private vfs: VirtualFileSystem) {}
-
-  fopen(filename: string, permission: string): number {
-    // Strip 'b' suffix for binary mode (handled the same way internally)
-    const perm = permission.replace(/b/g, "");
-    const path = this.vfs.normalizePath(filename);
-
-    try {
-      let data: Uint8Array;
-      let pos = 0;
-
-      if (perm === "r" || perm === "r+") {
-        if (this.vfs.exists(filename) !== "file") return -1;
-        data = new Uint8Array(this.vfs.readFile(filename));
-      } else if (perm === "w" || perm === "w+") {
-        data = new Uint8Array(0);
-      } else if (perm === "a" || perm === "a+") {
-        if (this.vfs.exists(filename) === "file") {
-          data = new Uint8Array(this.vfs.readFile(filename));
-          pos = data.length;
-        } else {
-          data = new Uint8Array(0);
-        }
-      } else {
-        return -1;
-      }
-
-      const fid = this.nextFid++;
-      this.openFiles.set(fid, {
-        path,
-        permission: perm,
-        lastError: "",
-        buffer: "",
-        eof: false,
-        pos,
-        data,
-        dataLen: data.length,
-        dirty: perm === "w" || perm === "a", // w starts dirty (truncated or new)
+  readFile(path: string): Uint8Array {
+    if (this.vfs.exists(path) !== "file")
+      throw Object.assign(new Error(`File not found: ${path}`), {
+        code: "ENOENT",
       });
-      return fid;
-    } catch {
-      return -1;
-    }
+    return this.vfs.readFile(path);
   }
 
-  fclose(fidOrAll: number | "all"): number {
-    if (fidOrAll === "all") {
-      for (const [, entry] of this.openFiles) {
-        this.flushEntry(entry);
-      }
-      this.openFiles.clear();
-      return 0;
-    }
-    const entry = this.openFiles.get(fidOrAll);
-    if (!entry) return -1;
-    this.flushEntry(entry);
-    this.openFiles.delete(fidOrAll);
-    return 0;
+  writeFile(path: string, data: Uint8Array): void {
+    this.vfs.writeFile(path, data);
   }
 
-  fgetl(fid: number): string | number {
-    const entry = this.getEntry(fid);
-    if (!entry) return -1;
-    return this.readLine(entry, false);
-  }
-
-  fgets(fid: number): string | number {
-    const entry = this.getEntry(fid);
-    if (!entry) return -1;
-    return this.readLine(entry, true);
-  }
-
-  fileread(filename: string): string {
-    const data = this.vfs.readFile(filename);
-    return TEXT_DECODER.decode(data);
-  }
-
-  feof(fid: number): number {
-    const entry = this.getEntry(fid);
-    if (!entry) return 1;
-    if (entry.buffer.length > 0) return 0;
-    if (entry.eof) return 1;
-    // Check if we're at the end
-    if (entry.pos >= entry.dataLen) {
-      entry.eof = true;
-      return 1;
-    }
-    return 0;
-  }
-
-  ferror(fid: number): string {
-    const entry = this.getEntry(fid);
-    if (!entry) return "Invalid file identifier";
-    return entry.lastError;
-  }
-
-  fwrite(fid: number, text: string): void {
-    const entry = this.getEntry(fid);
-    if (!entry) throw new Error(`Invalid file identifier: ${fid}`);
-    const bytes = TEXT_ENCODER.encode(text);
-    this.writeBytes(entry, bytes);
-    entry.lastError = "";
-  }
-
-  freadBytes(fid: number, count: number): Uint8Array {
-    const entry = this.getEntry(fid);
-    if (!entry) throw new Error(`Invalid file identifier: ${fid}`);
-    // Clear text buffer when switching to binary mode
-    if (entry.buffer.length > 0) {
-      entry.buffer = "";
-    }
-    const available = entry.dataLen - entry.pos;
-    const toRead = Math.min(count, available);
-    if (toRead <= 0) {
-      entry.eof = true;
-      return new Uint8Array(0);
-    }
-    const result = new Uint8Array(toRead);
-    result.set(entry.data.subarray(entry.pos, entry.pos + toRead));
-    entry.pos += toRead;
-    if (entry.pos >= entry.dataLen) entry.eof = true;
-    entry.lastError = "";
-    return result;
-  }
-
-  fwriteBytes(fid: number, data: Uint8Array): number {
-    const entry = this.getEntry(fid);
-    if (!entry) throw new Error(`Invalid file identifier: ${fid}`);
-    this.writeBytes(entry, data);
-    entry.lastError = "";
-    return data.length;
-  }
-
-  fseek(fid: number, offset: number, origin: number): number {
-    const entry = this.getEntry(fid);
-    if (!entry) return -1;
-    entry.buffer = "";
-    entry.eof = false;
-    if (origin === -1) {
-      // SEEK_SET (bof)
-      entry.pos = offset;
-    } else if (origin === 0) {
-      // SEEK_CUR (cof)
-      entry.pos += offset;
-    } else {
-      // SEEK_END (eof)
-      entry.pos = entry.dataLen + offset;
-    }
-    return 0;
-  }
-
-  ftell(fid: number): number {
-    const entry = this.getEntry(fid);
-    if (!entry) return -1;
-    return entry.pos;
+  setFileMode(path: string, mode: { write?: boolean }): boolean {
+    if (this.vfs.exists(path) === null) return false;
+    if (mode.write !== undefined) this.vfs.setWritable(path, mode.write);
+    return true;
   }
 
   scanDirectory(dirPath: string): WorkspaceFile[] {
@@ -286,12 +136,25 @@ export class BrowserFileIOAdapter implements FileIOAdapter {
     return this.vfs.rmdir(dirPath, recursive);
   }
 
-  movefile(source: string, destination: string): boolean {
+  movefile(source: string, destination: string, force: boolean): boolean {
+    if (!force && this.replacesReadOnly(source, destination)) return false;
     return this.vfs.movefile(source, destination);
   }
 
-  copyfile(source: string, destination: string): boolean {
+  copyfile(source: string, destination: string, force: boolean): boolean {
+    if (!force && this.replacesReadOnly(source, destination)) return false;
     return this.vfs.copyfile(source, destination);
+  }
+
+  /** Whether moving/copying source to destination would overwrite a
+   *  read-only file, which MATLAB only does with the 'f' option. */
+  private replacesReadOnly(source: string, destination: string): boolean {
+    const src = this.vfs.normalizePath(source);
+    let dst = this.vfs.normalizePath(destination);
+    if (this.vfs.exists(dst) === "dir")
+      dst =
+        (dst === "/" ? "" : dst) + "/" + src.slice(src.lastIndexOf("/") + 1);
+    return this.vfs.exists(dst) === "file" && !this.vfs.isWritable(dst);
   }
 
   fileattrib(path: string): FileAttribInfo | null {
@@ -465,88 +328,10 @@ export class BrowserFileIOAdapter implements FileIOAdapter {
     return names;
   }
 
-  /** Get the VFS changes for syncing back to the main thread. */
+  /** Get the VFS changes for syncing back to the main thread. Open files
+   *  are flushed by executeCode when each run ends. */
   getChanges(): VfsChanges {
-    // Flush all open files first
-    for (const [, entry] of this.openFiles) {
-      this.flushEntry(entry);
-    }
     return this.vfs.getChanges();
-  }
-
-  private getEntry(fid: number): VFSOpenFile | undefined {
-    return this.openFiles.get(fid);
-  }
-
-  private flushEntry(entry: VFSOpenFile): void {
-    if (entry.dirty) {
-      const finalData =
-        entry.dataLen === entry.data.length
-          ? entry.data
-          : entry.data.subarray(0, entry.dataLen);
-      this.vfs.writeFile(entry.path, finalData);
-      entry.dirty = false;
-    }
-  }
-
-  private writeBytes(entry: VFSOpenFile, bytes: Uint8Array): void {
-    const needed = entry.pos + bytes.length;
-    if (needed > entry.data.length) {
-      // Grow the buffer
-      const newSize = Math.max(needed, entry.data.length * 2, 256);
-      const newData = new Uint8Array(newSize);
-      newData.set(entry.data.subarray(0, entry.dataLen));
-      entry.data = newData;
-    }
-    entry.data.set(bytes, entry.pos);
-    entry.pos += bytes.length;
-    if (entry.pos > entry.dataLen) {
-      entry.dataLen = entry.pos;
-    }
-    entry.dirty = true;
-  }
-
-  /**
-   * `entry.pos` stays the logical (consumed) byte position: the text buffer
-   * holds the bytes starting at `entry.pos`, and consuming a line advances
-   * `entry.pos` by its byte length. This keeps fgetl/fgets coherent with
-   * freadBytes/fseek/ftell (and fscanf, which mixes the two).
-   */
-  private readLine(entry: VFSOpenFile, keepNewline: boolean): string | number {
-    // Fill text buffer from binary data
-    while (!entry.eof) {
-      const nlIdx = entry.buffer.indexOf("\n");
-      if (nlIdx !== -1) break;
-
-      const bufStart = entry.pos + TEXT_ENCODER.encode(entry.buffer).length;
-      const available = entry.dataLen - bufStart;
-      if (available <= 0) {
-        entry.eof = true;
-        break;
-      }
-      const toRead = Math.min(READ_CHUNK_SIZE, available);
-      const chunk = entry.data.subarray(bufStart, bufStart + toRead);
-      entry.buffer += TEXT_DECODER.decode(chunk, { stream: true });
-    }
-
-    if (entry.buffer.length === 0) {
-      return -1;
-    }
-
-    const nlIdx = entry.buffer.indexOf("\n");
-    if (nlIdx !== -1) {
-      const consumed = entry.buffer.slice(0, nlIdx + 1);
-      const line = keepNewline ? consumed : entry.buffer.slice(0, nlIdx);
-      entry.buffer = entry.buffer.slice(nlIdx + 1);
-      entry.pos += TEXT_ENCODER.encode(consumed).length;
-      return line;
-    }
-
-    // No newline found but we have data (EOF mid-line)
-    const line = entry.buffer;
-    entry.buffer = "";
-    entry.pos += TEXT_ENCODER.encode(line).length;
-    return line;
   }
 
   private listDirGlob(pattern: string): {

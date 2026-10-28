@@ -1,17 +1,15 @@
-/* eslint-disable @typescript-eslint/no-unused-vars */
 /**
  * Node.js implementation of FileIOAdapter using synchronous fs operations.
+ * Stream semantics (fids, positions, EOF) live in the core FileTable; this
+ * adapter only supplies byte-level filesystem access.
  */
 
 import {
-  openSync,
-  closeSync,
-  readSync,
-  writeSync,
   readFileSync,
   writeFileSync,
   statSync,
-  fstatSync,
+  accessSync,
+  constants as fsConstants,
   mkdirSync,
   unlinkSync,
   readdirSync,
@@ -36,6 +34,15 @@ function expandTilde(filepath: string): string {
   return filepath;
 }
 
+function isWritable(path: string): boolean {
+  try {
+    accessSync(path, fsConstants.W_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function copyDirRecursive(src: string, dst: string): void {
   mkdirSync(dst, { recursive: true });
   for (const entry of readdirSync(src, { withFileTypes: true })) {
@@ -48,37 +55,6 @@ function copyDirRecursive(src: string, dst: string): void {
     }
   }
 }
-
-interface OpenFile {
-  fd: number;
-  permission: string;
-  lastError: string;
-  buffer: string;
-  eof: boolean;
-  /** Byte offset tracked for binary I/O (fread/fwrite/fseek/ftell). -1 means not tracking (text mode). */
-  pos: number;
-}
-
-function permissionToFlags(permission: string): string {
-  switch (permission) {
-    case "r":
-      return "r";
-    case "w":
-      return "w";
-    case "a":
-      return "a";
-    case "r+":
-      return "r+";
-    case "w+":
-      return "w+";
-    case "a+":
-      return "a+";
-    default:
-      return permission; // pass through for binary modes like 'rb'
-  }
-}
-
-const READ_CHUNK_SIZE = 8192;
 
 /** Build fetch init options from WebOptions. */
 function buildFetchOptions(options?: WebOptions): Record<string, unknown> {
@@ -100,170 +76,31 @@ function buildFetchOptions(options?: WebOptions): Record<string, unknown> {
 }
 
 export class NodeFileIOAdapter implements FileIOAdapter {
-  private nextFid = 3; // 0=stdin, 1=stdout, 2=stderr reserved
-  private openFiles = new Map<number, OpenFile>();
-
-  fopen(filename: string, permission: string): number {
-    try {
-      const flags = permissionToFlags(permission);
-      const fd = openSync(expandTilde(filename), flags);
-      const fid = this.nextFid++;
-      this.openFiles.set(fid, {
-        fd,
-        permission,
-        lastError: "",
-        buffer: "",
-        eof: false,
-        pos: 0,
-      });
-      return fid;
-    } catch (e) {
-      return -1;
-    }
+  readFile(path: string): Uint8Array {
+    const buf = readFileSync(expandTilde(path));
+    return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
   }
 
-  fclose(fidOrAll: number | "all"): number {
-    if (fidOrAll === "all") {
-      for (const [, entry] of this.openFiles) {
-        try {
-          closeSync(entry.fd);
-        } catch {
-          // ignore close errors during close-all
-        }
-      }
-      this.openFiles.clear();
-      return 0;
-    }
-    const entry = this.openFiles.get(fidOrAll);
-    if (!entry) return -1;
+  writeFile(path: string, data: Uint8Array): void {
+    writeFileSync(expandTilde(path), data);
+  }
+
+  setFileMode(
+    path: string,
+    mode: { write?: boolean; execute?: boolean }
+  ): boolean {
     try {
-      closeSync(entry.fd);
+      const p = expandTilde(path);
+      let bits = statSync(p).mode & 0o7777;
+      if (mode.write !== undefined)
+        bits = mode.write ? bits | 0o200 : bits & ~0o200;
+      if (mode.execute !== undefined)
+        bits = mode.execute ? bits | 0o100 : bits & ~0o100;
+      chmodSync(p, bits);
+      return true;
     } catch {
-      return -1;
+      return false;
     }
-    this.openFiles.delete(fidOrAll);
-    return 0;
-  }
-
-  fgetl(fid: number): string | number {
-    const entry = this.getEntry(fid);
-    if (!entry) return -1;
-    return this.readLine(entry, false);
-  }
-
-  fgets(fid: number): string | number {
-    const entry = this.getEntry(fid);
-    if (!entry) return -1;
-    return this.readLine(entry, true);
-  }
-
-  fileread(filename: string): string {
-    return readFileSync(expandTilde(filename), "utf-8");
-  }
-
-  feof(fid: number): number {
-    const entry = this.getEntry(fid);
-    if (!entry) return 1;
-    if (entry.buffer.length > 0) return 0;
-    if (entry.eof) return 1;
-    // Buffer is empty and eof not yet detected — try reading to check
-    const buf = Buffer.alloc(1);
-    try {
-      const bytesRead = readSync(entry.fd, buf, 0, 1, entry.pos);
-      if (bytesRead === 0) {
-        entry.eof = true;
-        return 1;
-      }
-      // Got data — put it back in the buffer (it starts at entry.pos)
-      entry.buffer = buf.toString("utf-8", 0, bytesRead);
-      return 0;
-    } catch {
-      entry.eof = true;
-      return 1;
-    }
-  }
-
-  ferror(fid: number): string {
-    const entry = this.getEntry(fid);
-    if (!entry) return "Invalid file identifier";
-    return entry.lastError;
-  }
-
-  fwrite(fid: number, text: string): void {
-    const entry = this.getEntry(fid);
-    if (!entry) throw new Error(`Invalid file identifier: ${fid}`);
-    try {
-      writeSync(entry.fd, text);
-      entry.lastError = "";
-    } catch (e) {
-      entry.lastError = e instanceof Error ? e.message : String(e);
-      throw e;
-    }
-  }
-
-  freadBytes(fid: number, count: number): Uint8Array {
-    const entry = this.getEntry(fid);
-    if (!entry) throw new Error(`Invalid file identifier: ${fid}`);
-    // Clear any text buffer (switching to binary mode)
-    if (entry.buffer.length > 0) {
-      entry.buffer = "";
-    }
-    const buf = Buffer.alloc(count);
-    try {
-      const bytesRead = readSync(entry.fd, buf, 0, count, entry.pos);
-      entry.pos += bytesRead;
-      if (bytesRead === 0) entry.eof = true;
-      else if (bytesRead < count) entry.eof = true;
-      entry.lastError = "";
-      return new Uint8Array(buf.buffer, buf.byteOffset, bytesRead);
-    } catch (e) {
-      entry.lastError = e instanceof Error ? e.message : String(e);
-      entry.eof = true;
-      return new Uint8Array(0);
-    }
-  }
-
-  fwriteBytes(fid: number, data: Uint8Array): number {
-    const entry = this.getEntry(fid);
-    if (!entry) throw new Error(`Invalid file identifier: ${fid}`);
-    try {
-      const written = writeSync(entry.fd, data, 0, data.length, entry.pos);
-      entry.pos += written;
-      entry.lastError = "";
-      return written;
-    } catch (e) {
-      entry.lastError = e instanceof Error ? e.message : String(e);
-      throw e;
-    }
-  }
-
-  fseek(fid: number, offset: number, origin: number): number {
-    const entry = this.getEntry(fid);
-    if (!entry) return -1;
-    entry.buffer = "";
-    entry.eof = false;
-    try {
-      if (origin === -1) {
-        // SEEK_SET (bof)
-        entry.pos = offset;
-      } else if (origin === 0) {
-        // SEEK_CUR (cof)
-        entry.pos += offset;
-      } else {
-        // SEEK_END (eof)
-        const size = fstatSync(entry.fd).size;
-        entry.pos = size + offset;
-      }
-      return 0;
-    } catch {
-      return -1;
-    }
-  }
-
-  ftell(fid: number): number {
-    const entry = this.getEntry(fid);
-    if (!entry) return -1;
-    return entry.pos;
   }
 
   scanDirectory(dirPath: string) {
@@ -398,12 +235,17 @@ export class NodeFileIOAdapter implements FileIOAdapter {
         }
       }
 
-      // If destination exists and force is set, ensure it is writable.
-      if (dstType === "file" && force) {
-        try {
-          chmodSync(dst, 0o666);
-        } catch {
-          // ignore
+      // A read-only destination file is only replaced with force (rename
+      // itself would ignore the file's permissions).
+      if (dstType === "file") {
+        if (force) {
+          try {
+            chmodSync(dst, 0o666);
+          } catch {
+            // ignore
+          }
+        } else if (!isWritable(dst)) {
+          return false;
         }
       }
 
@@ -863,70 +705,5 @@ export class NodeFileIOAdapter implements FileIOAdapter {
 
     walkDir(absBase, "");
     return results;
-  }
-
-  private getEntry(fid: number): OpenFile | undefined {
-    return this.openFiles.get(fid);
-  }
-
-  /**
-   * Read one line from the file's buffer, refilling from the fd as needed.
-   *
-   * All reads are positional so `entry.pos` stays the single source of truth
-   * for the logical file position: the buffer always holds the bytes starting
-   * at `entry.pos`, and consuming a line advances `entry.pos` by its byte
-   * length. This keeps text I/O (fgetl/fgets) coherent with binary I/O and
-   * fscanf (freadBytes/fseek/ftell).
-   * @param keepNewline - if true, keep the trailing newline (fgets); if false, strip it (fgetl)
-   */
-  private readLine(entry: OpenFile, keepNewline: boolean): string | number {
-    // Fill buffer until we find a newline or hit EOF
-    while (!entry.eof) {
-      const nlIdx = entry.buffer.indexOf("\n");
-      if (nlIdx !== -1) break; // we have a complete line
-
-      const buf = Buffer.alloc(READ_CHUNK_SIZE);
-      let bytesRead: number;
-      try {
-        bytesRead = readSync(
-          entry.fd,
-          buf,
-          0,
-          READ_CHUNK_SIZE,
-          entry.pos + Buffer.byteLength(entry.buffer, "utf-8")
-        );
-        entry.lastError = "";
-      } catch (e) {
-        entry.lastError = e instanceof Error ? e.message : String(e);
-        entry.eof = true;
-        break;
-      }
-      if (bytesRead === 0) {
-        entry.eof = true;
-        break;
-      }
-      entry.buffer += buf.toString("utf-8", 0, bytesRead);
-    }
-
-    // No data available at all
-    if (entry.buffer.length === 0) {
-      return -1;
-    }
-
-    const nlIdx = entry.buffer.indexOf("\n");
-    if (nlIdx !== -1) {
-      // Found a newline
-      const consumed = entry.buffer.slice(0, nlIdx + 1);
-      const line = keepNewline ? consumed : entry.buffer.slice(0, nlIdx);
-      entry.buffer = entry.buffer.slice(nlIdx + 1);
-      entry.pos += Buffer.byteLength(consumed, "utf-8");
-      return line;
-    }
-
-    // No newline found but we have data (EOF mid-line)
-    const line = entry.buffer;
-    entry.buffer = "";
-    entry.pos += Buffer.byteLength(line, "utf-8");
-    return line;
   }
 }

@@ -27,41 +27,57 @@ export interface FileAttribInfo {
   UserExecute: boolean;
 }
 
+/**
+ * Host filesystem access. numbl-core owns all stream semantics (fids,
+ * modes, positions, EOF, encodings, buffering; see `FileTable`) and only
+ * needs whole-file byte primitives from the host: `readFile`, `writeFile`,
+ * `existsPath` and `resolvePath`. The remaining methods back individual
+ * builtins (dir, mkdir, copyfile, zip, websave, ...).
+ */
 export interface FileIOAdapter {
-  /** Open a file, returns an integer file identifier (fid). */
-  fopen(filename: string, permission: string): number;
+  /** Read a whole file. Throws if it cannot be read. */
+  readFile?(path: string): Uint8Array;
 
-  /** Close a file (or 'all'). Returns 0 on success, -1 on error. */
-  fclose(fid: number | "all"): number;
+  /** Create or replace a file with `data`. Throws on failure; an error
+   *  with a Node-style `code` ('ENOENT', 'EACCES', ...) gives fopen its
+   *  message. */
+  writeFile?(path: string, data: Uint8Array): void;
 
-  /** Read one line, stripping the newline. Returns -1 at EOF. */
-  fgetl(fid: number): string | number;
+  /** Set the user write/execute permission of a file or folder (the
+   *  `fileattrib(name, '+w')` form). Returns true on success. Optional. */
+  setFileMode?(
+    path: string,
+    mode: { write?: boolean; execute?: boolean }
+  ): boolean;
 
-  /** Read one line, keeping the newline. Returns -1 at EOF. */
-  fgets(fid: number): string | number;
+  // ── Legacy stream API ───────────────────────────────────────────────
+  // Hosts written before the core FileTable implemented these instead of
+  // readFile/writeFile. numbl-core no longer calls them except to emulate
+  // readFile/writeFile for such hosts.
 
-  /** Read an entire file as a string. */
-  fileread(filename: string): string;
-
-  /** Returns 1 if at EOF, 0 otherwise. */
-  feof(fid: number): number;
-
-  /** Returns the error message string for the last operation on fid. */
-  ferror(fid: number): string;
-
-  /** Write a string to a file descriptor (used by fprintf). */
-  fwrite(fid: number, text: string): void;
-
-  /** Read raw bytes from a file. Returns the bytes actually read (may be fewer than count at EOF). Optional. */
+  /** @deprecated implement readFile/writeFile instead. */
+  fopen?(filename: string, permission: string): number;
+  /** @deprecated */
+  fclose?(fid: number | "all"): number;
+  /** @deprecated */
+  fgetl?(fid: number): string | number;
+  /** @deprecated */
+  fgets?(fid: number): string | number;
+  /** @deprecated implement readFile instead. */
+  fileread?(filename: string): string;
+  /** @deprecated */
+  feof?(fid: number): number;
+  /** @deprecated */
+  ferror?(fid: number): string;
+  /** @deprecated */
+  fwrite?(fid: number, text: string): void;
+  /** @deprecated */
   freadBytes?(fid: number, count: number): Uint8Array;
-
-  /** Write raw bytes to a file. Returns number of bytes written. Optional. */
+  /** @deprecated */
   fwriteBytes?(fid: number, data: Uint8Array): number;
-
-  /** Seek to a position in a file. origin: -1=bof, 0=cof, 1=eof. Returns 0 on success, -1 on error. Optional. */
+  /** @deprecated */
   fseek?(fid: number, offset: number, origin: number): number;
-
-  /** Return current file position. Optional. */
+  /** @deprecated */
   ftell?(fid: number): number;
 
   /** Scan a directory for workspace files (.m, .js, .wasm). Optional. */

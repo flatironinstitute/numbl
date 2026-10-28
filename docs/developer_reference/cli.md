@@ -30,7 +30,7 @@ The `numbl` command-line entry point is a small orchestration layer over `execut
 
 The CLI provides:
 
-- a file-I/O adapter backed by Node's `fs`;
+- a file-I/O adapter backed by Node's `fs` (byte-level primitives; fids and stream semantics are in the core `FileTable`, see [architecture.md](architecture.md#file-io));
 - a system adapter providing env vars, cwd, and platform info;
 - an output router that writes to stdout/stderr (or NDJSON stream mode);
 - an optional plot callback that forwards figures to an embedded HTTP server for a browser viewer.

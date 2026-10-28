@@ -7,6 +7,9 @@
 export interface VFSFile {
   content: Uint8Array;
   mtimeMs: number;
+  /** Set by fileattrib(name, '-w'). Writing the file replaces the entry,
+   *  which clears it. */
+  readOnly?: boolean;
 }
 
 export interface VfsChanges {
@@ -110,13 +113,24 @@ export class VirtualFileSystem {
   exists(path: string): "file" | "dir" | null {
     const norm = this.normalizePath(path);
     if (this.files.has(norm)) return "file";
-    if (this.directories.has(norm)) return "dir";
+    if (norm === "/" || this.directories.has(norm)) return "dir";
     // Check if any file has this as a prefix (implicit directory)
     const prefix = norm + "/";
     for (const key of this.files.keys()) {
       if (key.startsWith(prefix)) return "dir";
     }
     return null;
+  }
+
+  /** Whether a path is writable (only files can be marked read-only). */
+  isWritable(path: string): boolean {
+    return !this.files.get(this.normalizePath(path))?.readOnly;
+  }
+
+  /** Mark a file writable or read-only. No effect on directories. */
+  setWritable(path: string, writable: boolean): void {
+    const file = this.files.get(this.normalizePath(path));
+    if (file) file.readOnly = !writable;
   }
 
   fileSize(path: string): number {
@@ -248,7 +262,7 @@ export class VirtualFileSystem {
       Name: norm,
       directory: t === "dir",
       UserRead: true,
-      UserWrite: true,
+      UserWrite: this.isWritable(norm),
       UserExecute: t === "dir",
     };
   }
