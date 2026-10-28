@@ -19,12 +19,12 @@ console.log(result.output); // ["5\n"]
 
 ## API
 
-### `executeCode(source, options?, workspaceFiles?, mainFileName?)`
+### `executeCode(source, options?, workspaceFiles?, mainFileName?, searchPaths?, nativeBridge?)`
 
 Parses and executes `.m` source code. Returns an `ExecResult`:
 
 - `output` -- array of printed lines
-- `returnValue` -- the final `ans` value
+- `returnValue` -- the final `ans` value (`0` when no `ans` was set)
 - `variableValues` -- all workspace variables after execution
 - `plotInstructions` -- graphics commands (for rendering plots)
 
@@ -50,6 +50,33 @@ const result = executeCode("y = myfunc(3);", {}, [
 ]);
 console.log(result.variableValues.y); // 9
 ```
+
+### Node Adapters (`numbl/node`)
+
+In Node.js, real filesystem access, environment variables and directory scanning are provided by adapters. The implementations the numbl CLI uses are exported from the `numbl/node` entry point so hosts do not have to write their own:
+
+```js
+import { executeCode } from "numbl";
+import { NodeFileIOAdapter, NodeSystemAdapter, scanMFiles } from "numbl/node";
+
+// Run code that can see the .m files (including +packages and @classes)
+// under some directory, as if it were on the MATLAB path:
+const searchPaths = ["/path/to/matlab/code"];
+const workspaceFiles = searchPaths.flatMap(p => scanMFiles(p));
+
+const result = executeCode(
+  "disp(myfunc(3))",
+  {
+    fileIO: new NodeFileIOAdapter(), // fopen/fileread/websave/unzip/...
+    system: new NodeSystemAdapter(), // getenv/cd/computer/...
+  },
+  workspaceFiles,
+  "eval.m",
+  searchPaths
+);
+```
+
+To back file I/O with some other store, implement the `FileIOAdapter` type exported from `numbl`. The core handles file identifiers itself (`fopen`, `fgetl`, `fread`, `fseek`, `fprintf` to a file, ...), so `readFile(path)`, `writeFile(path, bytes)`, `existsPath(path)` and `resolvePath(path)` are all it needs for those. Without random access, an open file is held in memory; providing `handles` (`openHandle`, `readAt`, `writeAt`, `size`, `close`, as `NodeFileIOAdapter` does) lets numbl read and write it in place; the other methods enable individual builtins such as `dir`, `copyfile` or `zip`. Files left open stay open across calls that pass the same adapter object. Adapters written against older releases, which implemented `fopen`/`fclose`/`freadBytes`/`fwriteBytes` themselves, still work; numbl now only uses those methods to read and write whole files.
 
 ### Native Addon and C-JIT (`initNodePlatform`)
 
@@ -97,3 +124,4 @@ try {
 
 - [numbl-example-node](https://github.com/magland/numbl-example-node) -- Node.js usage
 - [numbl-example-browser](https://github.com/magland/numbl-example-browser) -- Browser usage with Vite
+- [numbl-image-filter](https://github.com/magland/numbl-image-filter) ([live demo](https://magland.github.io/numbl-image-filter/)) -- React app that filters images with a numbl script, passing image data in and out as tensors via a Web Worker

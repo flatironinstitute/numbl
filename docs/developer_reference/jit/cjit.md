@@ -4,17 +4,17 @@ Orientation for `--opt 2` (Node only).
 
 ## What C-JIT is
 
-C-JIT shares the **same compiler** as JS-JIT — same AST → lowering → IR pipeline (`src/numbl-core/jit`) — but emits C instead of JavaScript via `compileSpecC` (vs `compileSpec`). The C source is compiled to a shared object with `cc` and called through koffi. It handles the same three shapes as JS-JIT:
+C-JIT shares the **same compiler** as JS-JIT (the same AST → lowering → IR pipeline in `src/numbl-core/jit`) but emits C instead of JavaScript via `compileSpecC` (vs `compileSpec`). The C source is compiled to a shared object with `cc` and called through koffi. It handles the same three shapes as JS-JIT:
 
-- **`cjit-top-level`** — whole (suppressed) script body.
-- **`cjit-loop`** — outermost `for` / `while` body.
-- **`cjit-call`** — user-function call.
+- **`cjit-top-level`**: whole (suppressed) script body.
+- **`cjit-loop`**: outermost `for` / `while` body.
+- **`cjit-call`**: user-function call.
 
 At `--opt 2` both the C-JIT and JS-JIT executors are registered, C-JIT first. C-JIT proposes only where it can marshal the argument types across the koffi ABI and is then always preferred; everything else falls through to JS-JIT, then the interpreter. The two share the shape executors and differ only in their `JitBackend` (`executors/jit/cBackend.ts` vs `jsBackend.ts`).
 
 ## Type marshaling boundary
 
-What C-JIT can accept is gated by the input types (`typeOfValue` in executor classification, runtime value → compiler `Type`), `typeAdapterC.ts` (compiler `Type` → C decl, via `compilerTypeToCDecl`), and `valueAdapterC.ts` (`RuntimeValue` ↔ C ABI via koffi). Scalars (real double, logical) pass as `double`; tensors pass as the `jit_tensor_t` struct (real/imag pointers + dims). Types the adapter can't marshal cause the executor to decline — the spec still lowers, but the call routes to JS-JIT/interpreter instead. The callee owns its tensor params, so input data is copied into buffers from the `.so`'s exported `jit_malloc`; returned tensors are copied out and released with `jit_free`.
+What C-JIT can accept is gated by the input types (`typeOfValue` in executor classification, runtime value → compiler `Type`), `typeAdapterC.ts` (compiler `Type` → C decl, via `compilerTypeToCDecl`), and `valueAdapterC.ts` (`RuntimeValue` ↔ C ABI via koffi). Scalars (real double, logical) pass as `double`; tensors pass as the `jit_tensor_t` struct (real/imag pointers + dims). Types the adapter can't marshal cause the executor to decline: the spec still lowers, but the call routes to JS-JIT/interpreter instead. The callee owns its tensor params, so input data is copied into buffers from the `.so`'s exported `jit_malloc`; returned tensors are copied out and released with `jit_free`.
 
 A loop or top-level wrapper may leave an output unassigned (the loop variable and body locals of a zero-trip `for`). C has no unassigned state, so `compileSpecC` adds a flag output for each output that is not definitely assigned (`lowering/assignedFlags.ts`), and the host skips writing back an output whose flag is still 0.
 
@@ -29,7 +29,7 @@ Every runtime error or bail in compiled C goes through `jit_raise(kind, identifi
 
 - **Cancel.** `jit__cancel` points at the host's cancel flag, a `SharedArrayBuffer` word the IDE's main thread sets on Stop (or at a constant zero). Emitted code polls it with `JIT_POLL_CANCEL()` at the top of every loop iteration (every 1024 iterations in a strip-mined constant-time loop) and at the entry of functions that call specs: a relaxed atomic load and a never-taken branch to `jit_raise_cancel`, which raises `JIT_RAISE_CANCEL` through the guard like any other raise, so nothing leaks. The host installs the flag with the exported `jit_set_cancel` (`bindCancel` in `valueAdapterC.ts`) before a call whenever it changed; koffi passes a pointer to the buffer's backing store, which never moves, and the host keeps the view alive. See [executors.md](../executors.md#cancellation).
 
-Since errors no longer end the process, C-JIT also runs inside `try`.
+Because errors do not end the process, C-JIT also runs inside `try`.
 
 Program output reaches the host through a koffi callback while the call runs, so it streams (see [executors.md](../executors.md#output-streaming)). That callback may run user code (`onOutput`); a `.so`'s file-scope raise and allocator state makes it non-reentrant, so the backend bails a call into a `.so` that is already running.
 
@@ -39,4 +39,4 @@ The `cc`-invoke + koffi `dlopen` step lives in `executors/jit/compileC.node.ts` 
 
 ## When it helps
 
-C-JIT beats JS-JIT for code where dispatch is statically eliminated, leaving raw arithmetic on contiguous memory — scalar numeric loops and dense element-wise tensor work. Outside that regime, V8's inline caches and escape analysis make JS-JIT competitive. Note that the registry does not weigh this: whenever C-JIT accepts a unit it is used, so a tiny function called many times from interpreted code pays the koffi marshaling cost on every call. The compile + `dlopen` cost is paid once per `(function, arg-type signature, nargout)` and amortized across calls.
+C-JIT beats JS-JIT for code where dispatch is statically eliminated, leaving raw arithmetic on contiguous memory: scalar numeric loops and dense element-wise tensor work. Outside that regime, V8's inline caches and escape analysis make JS-JIT competitive. Note that the registry does not weigh this: whenever C-JIT accepts a unit it is used, so a tiny function called many times from interpreted code pays the koffi marshaling cost on every call. The compile + `dlopen` cost is paid once per `(function, arg-type signature, nargout)` and amortized across calls.

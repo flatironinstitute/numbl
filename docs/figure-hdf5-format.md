@@ -1,34 +1,18 @@
 # numbl figure HDF5 layout (v1)
 
-numbl figures can be downloaded as a self-describing **HDF5** file (`.h5`)
-containing everything needed to recreate the figure: all numeric data plus the
-styling/layout metadata. The intent is portability — the file can be opened by
-any standard HDF5 tool ([h5py](https://www.h5py.org/),
-[h5web](https://github.com/silx-kit/h5web), Panoply, MATLAB `h5read`, R, Julia)
-and uploaded to third-party services that understand HDF5.
+numbl figures can be downloaded as a self-describing **HDF5** file (`.h5`) containing everything needed to recreate the figure: all numeric data plus the styling/layout metadata. The intent is portability: the file can be opened by any standard HDF5 tool ([h5py](https://www.h5py.org/), [h5web](https://github.com/silx-kit/h5web), Panoply, MATLAB `h5read`, R, Julia) and uploaded to third-party services that understand HDF5.
 
-The writer lives in [src/graphics/exportFigureHdf5.ts](../src/graphics/exportFigureHdf5.ts);
-the schema version constant is in
-[src/graphics/figureHdf5Schema.ts](../src/graphics/figureHdf5Schema.ts).
+The writer is [src/graphics/exportFigureHdf5.ts](../src/graphics/exportFigureHdf5.ts) and the reader [src/graphics/importFigureHdf5.ts](../src/graphics/importFigureHdf5.ts); the version constant and the shared field tables are in [src/graphics/figureHdf5Schema.ts](../src/graphics/figureHdf5Schema.ts).
 
 ## Conventions
 
-- **Datasets vs. attributes.** Numeric _data_ arrays (line `x`/`y`, surface
-  grids, vertices, …) are stored as **datasets**, gzip-compressed. Styling and
-  scalar metadata (colors, line widths, labels, limits, plot kind, …) are stored
-  as **attributes** on the enclosing group.
-- **Grids are row-major.** numbl stores matrices column-major (Fortran order).
-  2-D grid fields (`surf`/`mesh`/`pcolor`/`contour`/`imagesc`/`heatmap`/`bar3`)
-  are transposed to **row-major `[rows, cols]`** datasets so generic viewers
-  render them correctly without knowing numbl's storage order.
-- **NaN / Inf are native.** Non-finite values are stored as IEEE-754 floats
-  (no sentinels), so missing/!finite samples round-trip exactly.
+- **Datasets vs. attributes.** Numeric _data_ arrays (line `x`/`y`, surface grids, vertices, …) are stored as **datasets**, gzip-compressed. Styling and scalar metadata (colors, line widths, labels, limits, plot kind, …) are stored as **attributes** on the enclosing group.
+- **Grids are row-major.** numbl stores matrices column-major (Fortran order). 2-D grid fields (`surf`/`mesh`/`pcolor`/`contour`/`imagesc`/`heatmap`/`bar3`) are transposed to **row-major `[rows, cols]`** datasets so generic viewers render them correctly without knowing numbl's storage order.
+- **NaN / Inf are native.** Non-finite values are stored as IEEE-754 floats (no sentinels), so missing/!finite samples round-trip exactly.
 - **Compression.** All datasets use the gzip (DEFLATE) filter, level 4.
 - **RGB colors** are length-3 `float64` attributes in `[0, 1]`.
-- **Auto axis limits.** A `null` (auto) limit bound is encoded as `NaN` inside
-  the `xlim`/`ylim`/`zlim` attribute pair.
-- **Ragged face lists** (`patch` faces) are padded to a rectangular `int32`
-  matrix with `-1` fill.
+- **Auto axis limits.** A `null` (auto) limit bound is encoded as `NaN` inside the `xlim`/`ylim`/`zlim` attribute pair.
+- **Ragged face lists** (`patch` faces) are padded to a rectangular `int32` matrix with `-1` fill.
 
 ## Structure
 
@@ -54,8 +38,8 @@ the schema version constant is in
   @area_base_value                : float
   colormap_data                   : dataset [N,3]  (custom colormap, optional)
 
-/axes/<i>/traces/<k>/             (one group per trace, in draw order)
-  @kind  : str   — see "Trace kinds" below
+/axes/<i>/traces/<k>/             (one group per trace; <k> is 0-based)
+  @kind  : str   (see "Trace kinds" below)
   <styling attributes…>          (color, lineStyle, marker, lineWidth, …)
   <data datasets…>               (x, y, z, …)
 ```
@@ -68,12 +52,11 @@ For a `uihtml` figure (MATLAB `uihtml`) there are no axes; instead:
 
 ## Trace kinds
 
-The `@kind` attribute on each trace group identifies the plot type. Data fields
-are datasets; everything else is an attribute.
+The `@kind` attribute on each trace group identifies the plot type. Data fields are datasets; everything else is an attribute. The kind names come from `TRACE_FIELDS` in `src/numbl-core/plotting/axesTraces.ts`: a surface is written as `surf`, and `mesh` and `surface` are also accepted on import.
 
 | `kind`                    | data datasets                                                       | notable attributes                                        |
 | ------------------------- | ------------------------------------------------------------------- | --------------------------------------------------------- |
-| `plot`, `line`, `area`    | `x`, `y`                                                            | `color`, `lineStyle`, `marker`, `lineWidth`, `markerSize` |
+| `plot`, `area`            | `x`, `y`                                                            | `color`, `lineStyle`, `marker`, `lineWidth`, `markerSize` |
 | `plot3`                   | `x`, `y`, `z`                                                       | as above                                                  |
 | `surf`, `mesh`, `surface` | `x`, `y`, `z`, `c` `[rows,cols]`                                    | `faceColor`, `edgeColor`, `faceAlpha`, `rows`, `cols`     |
 | `pcolor`                  | `x`, `y`, `c` `[rows,cols]`                                         | `edgeColor`, `faceAlpha`                                  |
@@ -88,8 +71,7 @@ are datasets; everything else is an attribute.
 | `quiver`, `quiver3`       | `x`, `y`, `z`, `u`, `v`, `w`                                        | `color`, `showArrowHead`                                  |
 | `patch`                   | `vertices` `[N,D]`, `faces` `[N,M]` int (−1 pad), `faceVertexCData` | `faceColor`, `edgeColor`, `faceAlpha`                     |
 
-(Field availability follows the trace interfaces in
-[src/numbl-core/plotting/types.ts](../src/numbl-core/plotting/types.ts).)
+(Field availability follows the trace interfaces in [src/numbl-core/plotting/types.ts](../src/numbl-core/plotting/types.ts).)
 
 ## Reading example (h5py)
 
@@ -109,5 +91,4 @@ with h5py.File("figure_1.h5") as f:
 
 ## Versioning
 
-The root `numbl_figure_version` attribute is bumped on incompatible schema
-changes. Readers should check it before interpreting the layout.
+The root `numbl_figure_version` attribute is bumped on incompatible schema changes. Readers should check it before interpreting the layout.

@@ -2,17 +2,17 @@
 
 The runtime tracks reference counts on every container kind. The count drives both lifecycle (`decref` → `_destroy` chain) and copy-on-write decisions on indexed stores. Strict ownership is enforced by an API on the container classes; the surrounding interpreter, JIT, and store paths thread the runtime through so every binding mutation goes through the API.
 
-There is no buffer-pool reclamation — V8 GC reclaims wrappers and their backing `Float64Array` buffers automatically once they're unreachable.
+There is no buffer-pool reclamation: V8 GC reclaims wrappers and their backing `Float64Array` buffers automatically once they're unreachable.
 
 ## `Refcounted`
 
 Defined in [`runtime/refcount.ts`](../../../src/numbl-core/runtime/refcount.ts). Every container class (`RuntimeTensor`, `RuntimeStruct`, `RuntimeCell`, …) extends `Refcounted`:
 
-- `_rc: number` — total ref count. Starts at 0. Newly-constructed wrapper is owned by no slot.
-- `_scopeHolds: number` — subset of `_rc` contributed by active per-statement scopes. The COW check subtracts this so transient scope holds don't force unnecessary copies.
-- `incref()` — bumps `_rc`.
-- `decref(rt)` — decrements; if the count hits 0, runs `_destroy(rt)`.
-- `_destroy(rt)` — kind-specific. Containers with child refs decref each child. Tensors and sparse matrices have no children; their default `_destroy` is a no-op (V8 GC reclaims the buffer).
+- `_rc: number`: total ref count. Starts at 0. Newly-constructed wrapper is owned by no slot.
+- `_scopeHolds: number`: subset of `_rc` contributed by active per-statement scopes. The COW check subtracts this so transient scope holds don't force unnecessary copies.
+- `incref()`: bumps `_rc`.
+- `decref(rt)`: decrements; if the count hits 0, runs `_destroy(rt)`.
+- `_destroy(rt)`: kind-specific. Containers with child refs decref each child. Tensors and sparse matrices have no children; their default `_destroy` is a no-op (V8 GC reclaims the buffer).
 
 The free helpers `incref(v)` and `decref(rt, v)` are noops on primitives (`number | boolean | string`).
 
@@ -22,14 +22,14 @@ A constructor finalizer auto-adopts the new wrapper into the active runtime's `c
 
 ## Slot ownership
 
-Every "slot" — env binding, struct field, cell element, function capture, dictionary entry, persistent / global — increfs the value when it takes ownership and decrefs the previous occupant when it's overwritten.
+Every "slot" (env binding, struct field, cell element, function capture, dictionary entry, persistent / global) increfs the value when it takes ownership and decrefs the previous occupant when it's overwritten.
 
-- **`Environment.set` / `setLocal` / `clearLocals` / `delete`** ([`interpreter/types.ts`](../../../src/numbl-core/interpreter/types.ts)) — incref new before decref old, so self-rebind is safe.
-- **`Environment.snapshot()`** — increfs every value copied into the new flat env so anonymous-function closures survive the source frame's exit.
-- **`Runtime.setPersistent`** ([`runtime/runtime.ts`](../../../src/numbl-core/runtime/runtime.ts)) — same pattern for persistent variables.
-- **Container constructors** ([`runtime/types.ts`](../../../src/numbl-core/runtime/types.ts)) — `RuntimeStruct`, `RuntimeCell`, `RuntimeClassInstance`, `RuntimeFunction`, etc. incref every child value they accept at construction.
-- **`bindField` / `bindElement`** — class methods on `RuntimeStruct`, `RuntimeClassInstance`, `RuntimeCell` for in-place mutation. Used by `setRTValueField` (handle-class branch and value-class non-shared branch) and `storeIntoCell*` (every direct write to `cell.data[i]` and every auto-grow append routes through `setCellElement` / `appendEmptyCellSlot`).
-- **`callSuperConstructor`** ([`runtime/runtimeDispatch.ts`](../../../src/numbl-core/runtime/runtimeDispatch.ts)) — class-to-class inheritance threads `bindField`; the built-in-superclass case decrefs the old `_builtinData` and increfs the new one.
+- **`Environment.set` / `setLocal` / `clearLocals` / `delete`** ([`interpreter/types.ts`](../../../src/numbl-core/interpreter/types.ts)): incref new before decref old, so self-rebind is safe.
+- **`Environment.snapshot()`**: increfs every value copied into the new flat env so anonymous-function closures survive the source frame's exit.
+- **`Runtime.setPersistent`** ([`runtime/runtime.ts`](../../../src/numbl-core/runtime/runtime.ts)): same pattern for persistent variables.
+- **Container constructors** ([`runtime/types.ts`](../../../src/numbl-core/runtime/types.ts)): `RuntimeStruct`, `RuntimeCell`, `RuntimeClassInstance`, `RuntimeFunction`, etc. incref every child value they accept at construction.
+- **`bindField` / `bindElement`**: methods for in-place mutation, `bindField` on `RuntimeStruct` and `RuntimeClassInstance`, `bindElement` on `RuntimeCell`, `RuntimeStructArray` and `RuntimeClassInstanceArray`. Used by `setRTValueField` (handle-class branch and value-class non-shared branch) and the cell and struct-array stores in `runtime/indexing.ts` (every write of a cell element goes through `setCellElement`).
+- **`callSuperConstructor`** ([`runtime/runtimeDispatch.ts`](../../../src/numbl-core/runtime/runtimeDispatch.ts)): class-to-class inheritance threads `bindField`; the built-in-superclass case decrefs the old `_builtinData` and increfs the new one.
 
 ## Transients
 
@@ -38,9 +38,9 @@ A `RefScope` ([`runtime/refcount.ts`](../../../src/numbl-core/runtime/refcount.t
 - Values bound to a slot during the statement got an extra incref from the slot, so they survive drain at slot count.
 - Unbound transients drop to `rc = 0` and self-destruct (decreffing children).
 
-`execStmt` ([`interpreter/execStatements.ts`](../../../src/numbl-core/interpreter/execStatements.ts)) wraps the statement body in `withScope`. The JIT executors ([`executors/jit/`](../../../src/numbl-core/executors/jit)) cross the boundary through a value adapter ([`valueAdapter.ts`](../../../src/numbl-core/executors/jit/valueAdapter.ts)): owned inputs are cloned on the way in (MATLAB pass-by-value), and the spec returns a freshly-owned buffer that numbl takes ownership of on the way out — so a JIT'd call neither leaks into nor double-frees the caller's slots.
+`execStmt` ([`interpreter/execStatements.ts`](../../../src/numbl-core/interpreter/execStatements.ts)) wraps the statement body in `withScope`. The JIT executors ([`executors/jit/`](../../../src/numbl-core/executors/jit)) cross the boundary through a value adapter ([`valueAdapter.ts`](../../../src/numbl-core/executors/jit/valueAdapter.ts)): owned inputs are cloned on the way in (MATLAB pass-by-value), and the spec returns a freshly-owned buffer that numbl takes ownership of on the way out: so a JIT'd call neither leaks into nor double-frees the caller's slots.
 
-`runFunctionBody` ([`interpreter/callConvention.ts`](../../../src/numbl-core/interpreter/callConvention.ts)) adopts every output value into the **caller's** scope before running `fnEnv.clearLocals()` — outputs are otherwise held only by the callee's slot binding which is about to be decref'd to 0. The same adoption happens in `evalAnonFunc`'s synthetic-fn body ([`interpreter/handles.ts`](../../../src/numbl-core/interpreter/handles.ts)) so closure invocations don't drop their results.
+`runFunctionBody` ([`interpreter/callConvention.ts`](../../../src/numbl-core/interpreter/callConvention.ts)) adopts every output value into the **caller's** scope before running `fnEnv.clearLocals()`: outputs are otherwise held only by the callee's slot binding which is about to be decref'd to 0. The same adoption happens in `evalAnonFunc`'s synthetic-fn body ([`interpreter/handles.ts`](../../../src/numbl-core/interpreter/handles.ts)) so closure invocations don't drop their results.
 
 ## Copy-on-write on indexed stores
 
@@ -51,7 +51,7 @@ The leaf-level mutation then runs an `isShared` check of its own:
 - `storeIntoTensor` / `storeIntoCell` ([`runtime/indexing.ts`](../../../src/numbl-core/runtime/indexing.ts)) clone the tensor / cell wrapper if `isShared`, then mutate.
 - `setRTValueField` ([`runtime/struct-access.ts`](../../../src/numbl-core/runtime/struct-access.ts)) mutates the struct/value-class instance in place via `bindField` when not shared, otherwise builds a new instance with copied fields.
 
-Handle-class instances bypass COW unconditionally — they have reference semantics by design.
+Handle-class instances bypass COW unconditionally: they have reference semantics by design.
 
 ## Walk-throughs
 
@@ -59,7 +59,7 @@ Handle-class instances bypass COW unconditionally — they have reference semant
 c = [1 2] + [3 4];
 ```
 
-(A scalar expression like `2 + 2` returns a primitive JS `number`, which is **not** refcounted — `incref`/`decref` are no-ops on primitives. The walk-through below needs a tensor-producing RHS.)
+(A scalar expression like `2 + 2` returns a primitive JS `number`, which is **not** refcounted: `incref`/`decref` are no-ops on primitives. The walk-through below needs a tensor-producing RHS.)
 
 1. Fresh tensor `T` from `[1 2] + [3 4]`. Refcounted ctor adopts: `T.rc=1`, `T.scopeHolds=1`.
 2. `env.set("c", T)`: incref → `T.rc=2`, `T.scopeHolds=1`; old `c` undefined, no decref.
@@ -91,8 +91,8 @@ s = t; s.a.b(1) = 99;        % s and t share a struct
 
 ## Runtime flags
 
-- **`rt.strictRefcount`** (default true) — when on, `decref` on a zero-count throws. Refcount-driven COW relies on accurate counts to make correct mutate-vs-copy decisions; an underflow indicates a missed incref or a double decref somewhere in the bookkeeping, so we want it loud rather than silently masked. Set to false only as a temporary debug aid while migrating new mutation paths.
+- **`rt.strictRefcount`** (default true): when on, `decref` on a zero-count throws. Refcount-driven COW relies on accurate counts to make correct mutate-vs-copy decisions; an underflow indicates a missed incref or a double decref somewhere in the bookkeeping, so we want it loud rather than silently masked. Set to false only as a temporary debug aid while migrating new mutation paths.
 
 ## Buffer-sharing constraint
 
-A `Float64Array` buffer can have **only one wrapper owner**. Operations that previously returned a wrapper aliasing the source's buffer (zero-copy `reshape`, `squeeze`) now copy the data. The refcount-driven COW relies on the wrapper-level rc faithfully reflecting buffer sharing; two wrappers pointing at one buffer would let a "rc=1, mutate in place" decision corrupt the other wrapper's view.
+A `Float64Array` buffer can have only one wrapper owner, so `reshape` and `squeeze` copy the data rather than aliasing the source's buffer. The refcount-driven COW relies on the wrapper-level rc reflecting buffer sharing; two wrappers pointing at one buffer would let a "rc=1, mutate in place" decision corrupt the other wrapper's view.

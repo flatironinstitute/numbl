@@ -4,21 +4,24 @@ numbl supports a wide range of 2-D and 3-D plot types. In the browser, plots ren
 
 ## Plot Types
 
-| Category    | Functions                                                                         |
-| ----------- | --------------------------------------------------------------------------------- |
-| Line        | plot, plot3, fplot, fplot3                                                        |
-| Scatter     | scatter, scatter3                                                                 |
-| Bar         | bar, barh, bar3, bar3h                                                            |
-| Surface     | surf, mesh                                                                        |
-| Contour     | contour                                                                           |
-| Image       | imagesc                                                                           |
-| Histogram   | histogram, histogram2                                                             |
-| Statistical | boxchart, swarmchart, swarmchart3                                                 |
-| Other       | stairs, errorbar, area, semilogx, semilogy, loglog, piechart, donutchart, heatmap |
+| Category    | Functions                                                |
+| ----------- | -------------------------------------------------------- |
+| Line        | plot, plot3, line, fplot, fplot3, stairs, errorbar, area |
+| Log axes    | semilogx, semilogy, loglog                               |
+| Scatter     | scatter, scatter3, swarmchart, swarmchart3               |
+| Bar         | bar, barh, bar3, bar3h                                   |
+| Surface     | surf, surface, mesh, waterfall, pcolor, trimesh, trisurf |
+| Patch       | patch, fill                                              |
+| Contour     | contour, contourf                                        |
+| Image       | imagesc, heatmap                                         |
+| Vector      | quiver, quiver3, streamline                              |
+| Statistical | histogram, histogram2, boxchart, piechart, donutchart    |
 
 ## Figure Management
 
-figure, subplot, title, xlabel, ylabel, zlabel, sgtitle, legend, hold, grid, axis, view, colormap, colorbar, shading, close, clf, drawnow, pause
+figure, subplot, tiledlayout, nexttile, title, xlabel, ylabel, zlabel, sgtitle, legend, hold, grid, box, axis, xlim, ylim, caxis, clim, view, colormap, colorbar, shading, gca, gcf, set, get, close, clf, cla, drawnow, pause
+
+For figures that render custom HTML (`uihtml`), see the repository guide [docs/uihtml-figures.md](https://github.com/flatironinstitute/numbl/blob/main/docs/uihtml-figures.md).
 
 ## Examples
 

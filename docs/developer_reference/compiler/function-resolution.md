@@ -40,7 +40,7 @@ Options select the view a consumer needs. `args` supplies the call's arguments (
 
 ## Consumers
 
-- **Interpreter calls**: `callFunction` (call expressions and bare names) and `callByName` (string-named calls, without nested functions) resolve and then `callResolved`.
+- **Interpreter calls**: `callFunction` (`interpreter/calls.ts`; call expressions and bare names) resolves and then `callResolved`.
 - **Dotted names**: `evalMember`, the `MethodCall` path and `makeFuncHandle` use `resolveQualified`.
 - **Runtime dispatch by name**: `rt.dispatch` (a handle without a closure, `cellfun` with a function name, operator overloads, `onCleanup`) asks the interpreter's `rt.resolveNamedCall` hook, which resolves from the running code's scope.
 - **Introspection**: `which`, `exist` and `nargin('name')` resolve in the caller's scope.

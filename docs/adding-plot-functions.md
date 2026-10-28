@@ -52,7 +52,7 @@ The entry in step 5 is the only place the new field is declared. The empty axes,
 
 ## Step-by-step
 
-### 1. Define the trace type — `src/numbl-core/plotting/types.ts`
+### 1. Define the trace type: `src/numbl-core/plotting/types.ts`
 
 This file is the single source of truth for all trace interfaces and the `PlotInstruction` union. Add your trace interface before the `PlotInstruction` definition, following the existing pattern (each trace type has its own section with a comment header).
 
@@ -73,7 +73,7 @@ export interface BarTrace {
 }
 ```
 
-Design your interface to contain only the data needed for rendering — no runtime types, no optional parse state. Keep it minimal; you can always add fields later.
+Design your interface to contain only the data needed for rendering: no runtime types, no optional parse state. Keep it minimal; you can always add fields later.
 
 **Add a variant to the `PlotInstruction` union** (among the other trace-producing instructions):
 
@@ -93,7 +93,7 @@ export type PlotInstruction =
 
 Note: some instructions use `trace` (singular) and some use `traces` (array). Use `traces` if the function could produce multiple series in a single call (like `plot(x1,y1,x2,y2)`). Use `trace` if a single call always produces one trace (like `surf`).
 
-### 2. Argument parser — `src/numbl-core/plotting/parseArgs*.ts`
+### 2. Argument parser: `src/numbl-core/plotting/parseArgs*.ts`
 
 Parsers are grouped by plot family:
 
@@ -196,15 +196,15 @@ export function parseBarArgs(args: RuntimeValue[]): BarTrace[] {
 | `getStringValue(v: RuntimeValue): string`                                      | Extract the JS string from a string/char runtime value                             |
 | `resolveColor(v: RuntimeValue \| string): [number,number,number] \| undefined` | Parse a color spec (short name like `'r'`, color name like `'red'`, or RGB tensor) |
 | `oneBasedIndices(n: number): number[]`                                         | Generate `[1, 2, ..., n]` for implicit x-axis                                      |
-| `isRuntimeNumber(v)`, `isRuntimeTensor(v)`, etc.                               | Type guards for runtime values                                                     |
-| `toNumber(v: RuntimeValue): number`                                            | Extract a scalar number                                                            |
 | `expandColumns(v: RuntimeValue): number[][]`                                   | Split a matrix into column arrays (for multi-series plots)                         |
 | `getMatrixInfo(v: RuntimeValue): { data, rows, cols }`                         | Get flat data + dimensions from a matrix                                           |
 | `expandXY(xVal, yVal, rows, cols): { x, y }`                                   | Meshgrid-expand X/Y vectors to match a grid                                        |
 | `parseLineSpec(s: string): ParsedLineSpec \| null`                             | Parse a LineSpec string like `'r--o'` into color/lineStyle/marker                  |
 | `isNameValueKey(v: RuntimeValue): string \| null`                              | Check if a value is a known Name-Value key like `'Color'`                          |
 
-### 3. Call function — `src/numbl-core/plotting/instructions.ts`
+Runtime type guards (`isRuntimeNumber`, `isRuntimeTensor`, ...) come from `../runtime/types.js` and `toNumber` from `../runtime/convert.js`, as in the existing parsers.
+
+### 3. Call function: `src/numbl-core/plotting/instructions.ts`
 
 This file bridges the argument parsers and the `PlotInstruction` array. Each plot function has a corresponding exported function here.
 
@@ -233,9 +233,9 @@ export function barCall(
 }
 ```
 
-This pattern is the same for every plot function — parse args, push instruction. The first parameter is always the `plotInstructions` array (accumulated during script execution), and the second is the raw runtime arguments.
+This pattern is the same for every plot function: parse args, push instruction. The first parameter is always the `plotInstructions` array (accumulated during script execution), and the second is the raw runtime arguments.
 
-### 4. Dispatch — `src/numbl-core/plotting/dispatch.ts`
+### 4. Dispatch: `src/numbl-core/plotting/dispatch.ts`
 
 `dispatchPlotBuiltin` is the single source of truth for the `(name, args) → PlotInstruction[]` mapping. Every data-bearing plot builtin is a `case` in its `switch (name)` that calls the matching `*Call` function and returns `true`.
 
@@ -271,7 +271,7 @@ export const PLOT_DISPATCH_NAMES: ReadonlyArray<string> = [
 
 Adding the name to `PLOT_DISPATCH_NAMES` is enough to register it: `src/numbl-core/plotting/builtins.ts` registers every name in that list as a builtin that calls `dispatchPlotBuiltin`, which is what makes `bar(...)` resolve from interpreted `.m` code. Only functions that need a custom return value or `nargout` handle (e.g. `pcolor`, `fplot`) get an explicit registration in that file instead.
 
-### 5. Declare the trace field — `src/numbl-core/plotting/axesTraces.ts`
+### 5. Declare the trace field: `src/numbl-core/plotting/axesTraces.ts`
 
 `AxesState` (in `figuresReducer.ts`) is `AxesTraces` plus labels and appearance settings. Add the field that holds your traces to `AxesTraces`, importing the trace type from `./types.js`:
 
@@ -312,7 +312,7 @@ barTraces: {
 
 `include`/`includeAll` ignore non-finite values. If the field is drawn only in 3-D, also add it to the `TraceField3D` union. If its traces have flat column-major grid fields (`rows × cols`), list them under the kind in `GRID_FIELDS` in `src/graphics/figureHdf5Schema.ts` so they are stored as 2-D datasets, and document the kind in `docs/figure-hdf5-format.md`.
 
-### 6. Figures reducer — `src/numbl-core/plotting/figuresReducer.ts`
+### 6. Figures reducer: `src/numbl-core/plotting/figuresReducer.ts`
 
 The reducer turns each `PlotInstruction` into a new immutable `FiguresState`. It lives in the core because the runtime also uses it (to answer `lim = axis`); the renderer imports it from there. Add a case for the new instruction. `addTraces` applies the hold logic: with hold off, every trace field it is not given is cleared.
 
@@ -327,7 +327,7 @@ case "bar": {
 }
 ```
 
-### 7. Canvas renderer — `src/graphics/renderers/`
+### 7. Canvas renderer: `src/graphics/renderers/`
 
 Write the drawing code in a new file (or next to a related kind, as `bar.ts` holds both `bar` and `barh`). A renderer receives the field's non-empty value; `drawPlot` has already computed the limits, drawn the axes, and clipped the canvas to the plot area:
 
@@ -355,7 +355,7 @@ Register it in `CANVAS_RENDERERS` in `renderers/index.ts`. The table's order is 
 
 After implementation:
 
-1. **Type check**: `npm run typecheck` (runs `tsc -b`) — must have zero errors
+1. **Type check**: `npm run typecheck` (runs `tsc -b`); must have zero errors
 2. **Unit + integration tests**: `npm test` and `npm run test:scripts`; prefer integration scripts in `numbl_test_scripts/` that exercise the command end-to-end
 3. **Rebuild the viewer**: `npm run build:plot-viewer` (the renderer bundle also includes the core modules it imports)
 4. **Visual test**: create an example script in `examples/plots/` and run with:

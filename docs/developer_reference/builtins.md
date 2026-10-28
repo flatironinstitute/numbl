@@ -10,13 +10,13 @@ The interpreter calls a builtin on runtime values. The JIT compiler (`src/numbl-
 
 Builtins are defined with `builtin(spec)` (`interpreter/builtins/builtin.ts`):
 
-- `name` — the function name as seen by user code.
-- `help` — signatures and a description, surfaced by `help`. Required for user-facing builtins.
-- `nargin` — accepted input count: a number (exactly that many) or `[min, max]` (`max` may be `Infinity`). Default: any.
-- `nargout` — accepted output count: a number `n` (up to `n`, i.e. `[0, n]`) or `[min, max]`. Default 1. `nargout: 0` marks a void builtin: its result is discarded, `ans` is not set, and requesting an output errors.
-- `mfile` — set when MATLAB implements the function as an M-file; this only changes the "too many" error identifiers (below).
-- `scope` — set to `true` when the builtin needs the calling scope (below).
-- `apply(args, nargout, ctx)` — the implementation, on runtime values. It returns one value, or an array when `nargout > 1`. `ctx.name` is the builtin's name and `ctx.rt` the active `Runtime` (output, file I/O, figures, search path).
+- `name`: the function name as seen by user code.
+- `help`: signatures and a description, surfaced by `help`. Required for user-facing builtins.
+- `nargin`: accepted input count: a number (exactly that many) or `[min, max]` (`max` may be `Infinity`). Default: any.
+- `nargout`: accepted output count: a number `n` (up to `n`, i.e. `[0, n]`) or `[min, max]`. Default 1. `nargout: 0` marks a void builtin: its result is discarded, `ans` is not set, and requesting an output errors.
+- `mfile`: set when MATLAB implements the function as an M-file; this only changes the "too many" error identifiers (below).
+- `scope`: set to `true` when the builtin needs the calling scope (below).
+- `apply(args, nargout, ctx)`: the implementation, on runtime values. It returns one value, or an array when `nargout > 1`. `ctx.name` is the builtin's name and `ctx.rt` the active `Runtime` (output, file I/O, figures, search path).
 
 There are no argument-type rules. `apply` sees whatever values the caller passed and must reject what it cannot handle; `args.ts` provides coercion helpers that raise MATLAB's errors instead of silently dropping data (`numericArg`, `realNumericArg`, `realScalarArg`, `boolToNumber`, `builtinError`). For unary element-wise math, `types.ts` provides ready-made applies: `unaryElemwise`, `unaryRealResult`, and `unaryPredicate`.
 

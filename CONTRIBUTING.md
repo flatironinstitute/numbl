@@ -4,7 +4,7 @@
 
 ### Prerequisites
 
-- Node.js >= 18
+- Node.js >= 18.7
 - npm
 
 ### Install
@@ -30,7 +30,7 @@ The published library entry points are built separately: `npm run build:lib` (`n
 
 ### numbl-core (`src/numbl-core/`)
 
-The compiler and runtime engine. Contains the lexer, parser, lowering/IR, code generator, executor, runtime library, and built-in functions. This is shared between the CLI and the web app.
+The language core: lexer, parser, interpreter, JIT compiler, runtime and builtins. It is shared by the CLI, the web app and the library entry points. See [docs/developer_reference/overview.md](docs/developer_reference/overview.md) for how the pieces fit together.
 
 ### Web App (`src/`)
 
@@ -46,29 +46,22 @@ An optional Node.js HTTP service that executes numbl scripts on behalf of the we
 
 ### Native Addon (`native/`)
 
-C++ bindings to LAPACK/OpenBLAS and FFTW for fast linear algebra and FFT. Optional — numbl falls back to JavaScript implementations when the addon is not built.
+C++ bindings to LAPACK (OpenBLAS on Linux, Accelerate on macOS) and FFTW for fast linear algebra and FFT. It is optional: numbl falls back to JavaScript implementations when the addon is not built.
 
 ## The stdlib Bundle
 
-The standard library consists of `.m` files in [`src/stdlib/`](src/stdlib/). These implement functions that are part of MATLAB's built-in surface area but are expressed in numbl itself (e.g., `inputParser` helpers, `readmatrix`, `decomposition`). There is also a `shims/` subdirectory for compatibility wrappers that need to be resolved via a search path (e.g., `+matlab/+internal/...` namespace packages).
+The standard library is a set of `.m` files in [`src/stdlib/`](src/stdlib/) (with namespace and compatibility shims in `src/stdlib/shims/`) that implement parts of MATLAB's function surface in numbl itself, e.g. `inputParser` and `readmatrix`. Because the browser cannot read them from disk, they are compiled into the generated, committed file `src/numbl-core/stdlib-bundle.ts`. Run `npm run bundle:stdlib` after adding, removing or changing a file in `src/stdlib/` and commit the result; see [Generated files](#generated-files) below and [docs/developer_reference/stdlib.md](docs/developer_reference/stdlib.md) for details.
 
-Because the web app and CLI both need these files at runtime but cannot read the filesystem arbitrarily (especially in the browser), they are compiled into a single generated TypeScript file:
+## Generated files
 
-```
-src/numbl-core/stdlib-bundle.ts   ← auto-generated, do not edit
-```
+These files are generated. Do not edit them by hand. The first four are committed so a fresh clone works without a build step, and CI fails if a committed copy is out of date (each generator has a `:check` variant).
 
-This file exports two arrays of `WorkspaceFile` objects — one for the flat stdlib files and one for the shims — which the executor loads automatically before running any user code.
-
-The generated file is committed, so a fresh clone works without a build step. **Regenerate it** and commit the result any time you add, remove, or modify a file in `src/stdlib/`:
-
-```bash
-npm run bundle:stdlib
-```
-
-The script is a no-op if nothing has changed. `npm test`, `npm run test:scripts`, `npm run test:scripts:c`, `npm run jit-parity` and the `build:*` scripts regenerate it automatically; when running `npx tsx src/cli.ts` directly after a stdlib edit, run it yourself first. CI fails if the committed file is out of date (`npm run bundle:stdlib:check`).
-
-> Do not edit `stdlib-bundle.ts` directly — it will be overwritten the next time the script runs.
+| File                                                                                                                    | Produced by                                                                                                            | Regenerate when                                                                                                                                                                                                                     |
+| ----------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/numbl-core/stdlib-bundle.ts`                                                                                       | `npm run bundle:stdlib` (`scripts/bundle-stdlib.ts`)                                                                   | A file under `src/stdlib/` changes. `npm test`, `npm run test:scripts`, `npm run test:scripts:c`, `npm run jit-parity`, `npm run dev` and most `build:*` scripts run it automatically; run it yourself before `npx tsx src/cli.ts`. |
+| `src/numbl-core/jit/builtins/runtime/snippets.gen.ts`, `snippets.c.gen.ts`                                              | `npm run build:snippets` (`scripts/build_runtime_snippets.ts`)                                                         | A `.h` or `.js` file under `src/numbl-core/jit/builtins/runtime/` changes. `npm run dev` and most `build:*` scripts run it; tests and `npx tsx` do not.                                                                             |
+| `src/builtinNames.gen.ts`                                                                                               | `npm run gen:builtin-names` (`scripts/gen_builtin_names.ts`)                                                           | A builtin or constant is added, removed or renamed. Nothing runs it automatically; a unit test also checks it.                                                                                                                      |
+| `dist`, `dist-cli`, `dist-lib`, `dist-browser`, `dist-graphics`, `dist-plot-viewer`, `dist-site-viewer` (not committed) | `npm run build`, `build:cli`, `build:lib`, `build:browser`, `build:graphics`, `build:plot-viewer`, `build:site-viewer` | Before using that bundle. In particular, `numbl --plot` serves `dist-plot-viewer/`, so rebuild it after changing plot rendering code (see [docs/agents.md](docs/agents.md#building)).                                               |
 
 ## Running the CLI from Source
 
@@ -85,21 +78,16 @@ This is the fastest way to test changes during development.
 
 ## Before Committing
 
-Make sure the following all pass before pushing:
+CI checks formatting, lint, types, the generated files above, the unit tests and the `.m` test scripts. Before pushing, run at least:
 
 ```bash
-npm run build:cli       # confirm the CLI builds without errors
-npm run format:check    # confirm code is formatted (Prettier)
-npm test                # run the unit test suite (Vitest)
+npm run lint            # ESLint
+npm run typecheck       # tsc -b
+npm test                # unit tests (Vitest)
+npm run test:scripts    # .m integration scripts at --opt 0 and --opt 1
 ```
 
-To auto-fix formatting:
-
-```bash
-npm run format
-```
-
-The pre-commit hook (Husky) runs `lint-staged` (Prettier on staged files) and ESLint automatically on `git commit`.
+The pre-commit hook (Husky + lint-staged) runs Prettier on staged files, and ESLint on staged `.ts`/`.tsx` files. To format the whole tree by hand, run `npm run format`.
 
 ## Tests
 
@@ -108,7 +96,7 @@ There are two test suites. Both count toward coverage, so use whichever is more 
 ### Unit Tests (`src/__tests__/`)
 
 ```bash
-npm test                # run tests with float64 precision
+npm test
 ```
 
 Unit tests use [Vitest](https://vitest.dev/) and are best for testing individual functions, edge cases, and internal logic.
@@ -117,17 +105,15 @@ Unit tests use [Vitest](https://vitest.dev/) and are best for testing individual
 
 The integration test suite lives in [`numbl_test_scripts/`](numbl_test_scripts/). Each test is a `.m` script that prints `SUCCESS` as its last line of output if all assertions pass. These are best for testing end-to-end behavior and MATLAB compatibility.
 
-Run all integration tests:
-
-```bash
-npm run test:scripts
-```
-
-Or run a single test directly from source:
+`npm run test:scripts` runs them at `--opt 0` and `--opt 1`; `npm run test:scripts:c` runs them at `--opt 2` (needs a C compiler). To run a single test from source:
 
 ```bash
 npx tsx src/cli.ts run numbl_test_scripts/arithmetic/basic_ops.m
 ```
+
+### JIT parity (`jit_parity/`)
+
+`npm run jit-parity` runs the scripts in `jit_parity/` at `--opt 0`, `1` and `2` and fails on any difference in output. See [jit_parity/README.md](jit_parity/README.md).
 
 ### Coverage
 
@@ -136,8 +122,6 @@ Both test suites run under vitest (integration scripts are wrapped by `src/__tes
 ```bash
 npm run test:coverage:all
 ```
-
-When working to increase test coverage, either add unit tests in `src/__tests__/` or integration scripts in `numbl_test_scripts/` — whichever makes more sense for the code being tested.
 
 ## Filing an Issue and Adding a Test
 
@@ -160,7 +144,7 @@ When you find a behavior that differs from MATLAB, the workflow is:
    disp('SUCCESS')
    ```
 
-3. **Verify the test fails in numbl but passes in MATLAB** (or at least describes correct MATLAB behavior). The CI will track it as a known failure until the underlying issue is fixed in `numbl-core`.
+3. **Verify the test fails in numbl but passes in MATLAB** (or at least describes correct MATLAB behavior). There is no known-failure list, so a failing script fails CI: commit the test together with its fix.
 
 4. **Fix the issue** in `numbl-core` (lexer, parser, runtime, builtins, etc.), then confirm the test now passes:
 

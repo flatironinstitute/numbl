@@ -4,19 +4,13 @@ See [CONTRIBUTING.md](../CONTRIBUTING.md) for the development guide.
 
 ## Developer reference
 
-For a conceptual orientation to how the system fits together — the compiler pipeline, interpreter, JIT, runtime, builtins, platform surfaces — read [developer_reference/overview.md](developer_reference/overview.md). It is the fastest way to get the mental model needed to make non-trivial changes.
+For a conceptual orientation to how the system fits together (the compiler pipeline, interpreter, JIT, runtime, builtins, platform surfaces), read [developer_reference/overview.md](developer_reference/overview.md). It is the fastest way to get the mental model needed to make non-trivial changes.
 
 **Keep the reference in sync with the code.** When a change restructures a subsystem, changes how components relate, renames or removes a core concept, or introduces a new subsystem, update the relevant file(s) under `developer_reference/` in the same change. Small technical fixes and narrow adjustments (bug fixes, localized refactors, new builtins that fit an existing pattern, test additions) do not need a reference update.
 
 ## Architecture
 
-The execution pipeline is: Parse → AST-walk via the `Interpreter` class (`src/numbl-core/interpreter/`). The `Workspace` (`src/numbl-core/workspace/`) tracks the visible files and owns a `CodeIndex` (parsed ASTs, function and class names, the `ClassTable`) from which it builds the `FunctionIndex` that `resolveFunction` uses to resolve calls. New builtins and features go in `src/numbl-core/interpreter/builtins/`.
-
-### Interpreter builtins (IBuiltins)
-
-The interpreter has its own builtin system in `src/numbl-core/interpreter/builtins/`. Every builtin is defined with `builtin({ name, nargin, nargout, help, apply })` (`builtin.ts`): an `apply` on runtime values plus explicit arity, registered in `runtime/builtinRegistry.ts`. See "Adding builtins" below.
-
-(The JIT compiler does **not** emit through `IBuiltin` and never reads interpreter builtin types; it has its own builtin registry with `emitJs`/`emitC` hooks under `src/numbl-core/jit/builtins/`.)
+The execution pipeline is: Parse → AST-walk via the `Interpreter` class (`src/numbl-core/interpreter/`). The `Workspace` (`src/numbl-core/workspace/`) tracks the visible files and owns a `CodeIndex` (parsed ASTs, function and class names, the `ClassTable`) from which it builds the `FunctionIndex` that `resolveFunction` (`src/numbl-core/resolution/`) uses to resolve calls. Builtins go in `src/numbl-core/interpreter/builtins/` (see "Adding builtins" below).
 
 The JIT sits on top of the interpreter as a registry of named executors (`src/numbl-core/executors/`). Each executor handles one shape (top-level / loop / call) with one backend (JS-JIT under `--opt 1`; C-JIT, then JS-JIT, under `--opt 2`, Node only). The executors call numbl's in-tree JIT compiler, a self-contained subsystem under `src/numbl-core/jit/` (lowering → IR → JS/C codegen, builtins, runtime snippets) with no external dependency. The registry lowers each unit once via the shared lowering pipeline (`executors/lowering.ts`) and tries the executors for its shape in registration order. See [developer_reference/executors.md](developer_reference/executors.md) for the registry design and [developer_reference/jit/overview.md](developer_reference/jit/overview.md) for JIT trigger points and `--opt` levels.
 
@@ -48,9 +42,7 @@ npm test              # unit tests (Vitest)
 npm run test:scripts    # integration tests (.m scripts)
 ```
 
-### Increasing coverage
-
-Run `npm run test:coverage:all` to see the unified coverage report. Both test suites run under vitest (integration scripts are wrapped by `src/__tests__/test-scripts.test.ts`), so coverage is collected in a single pass. To increase coverage, either add unit tests in `src/__tests__/` or add integration scripts in `numbl_test_scripts/` — whichever makes more sense for the code under test.
+`npm run test:scripts` covers `--opt 0` and `--opt 1`. For JIT changes also run `npm run test:scripts:c` (`--opt 2`) and `npm run jit-parity`. See [CONTRIBUTING.md](../CONTRIBUTING.md#tests) for coverage and the other suites.
 
 ### Integration test scripts
 
@@ -68,7 +60,7 @@ Run the same test in MATLAB:
 matlab -batch "run('numbl_test_scripts/<category>/<test>.m')"
 ```
 
-MATLAB may segfault on exit — this is a known MATLAB issue and not related to the test. Check for `SUCCESS` in the output before the crash.
+MATLAB may segfault on exit; this is a known MATLAB issue unrelated to the test. Check for `SUCCESS` in the output before the crash.
 
 ## Formatting
 
@@ -88,14 +80,7 @@ builtin({
 });
 ```
 
-A builtin that needs the calling scope (its variables, caller, input names; e.g. `eval`, `exist`, `nargin`) adds `scope: true` and reads `ctx.scope` (a `CallerScope`, `interpreter/callerScope.ts`). See `scope.ts` for examples.
-
-- Arity is checked before `apply` runs, with MATLAB's messages and identifiers (`MATLAB:minrhs`, `MATLAB:maxrhs`, `MATLAB:maxlhs`; set `mfile: true` when MATLAB implements the function as an M-file, which switches to `MATLAB:TooManyInputs` / `MATLAB:TooManyOutputs`). `nargin(@name)` reports the max input count, or -1 when unbounded.
-- `apply` receives runtime values and must reject what it cannot handle. Use the helpers in `args.ts` (`numericArg`, `realNumericArg`, `realScalarArg`, `boolToNumber`, `builtinError`) rather than silently coercing; they raise MATLAB's errors (e.g. "Argument must be real." `MATLAB:math:mustBeReal`).
-- For unary element-wise math use `apply: unaryElemwise({ realFn, complexFn, maybeComplex }, name)`, `unaryRealResult(realFn, complexFn, name)` (always-real result, e.g. abs), or `unaryPredicate(realTest, complexTest)` (isnan-style), all in `types.ts`.
-- Return one value, or an array of values when `nargout > 1`. A void builtin's return value is discarded.
-
-See `predicates.ts`, `logical.ts`, `complex.ts`, and `hash.ts` for examples.
+A builtin that needs the calling scope (its variables, caller, input names; e.g. `eval`, `exist`, `nargin`) adds `scope: true` and reads `ctx.scope` (a `CallerScope`). `apply` must reject inputs it cannot handle rather than silently coercing them: use the helpers in `args.ts` (`numericArg`, `realScalarArg`, `builtinError`, ...), and for unary element-wise math the ready-made applies in `types.ts` (`unaryElemwise`, `unaryRealResult`, `unaryPredicate`). See [developer_reference/builtins.md](developer_reference/builtins.md) for the spec fields, arity errors and identifiers, and scope builtins, and `predicates.ts`, `logical.ts`, `complex.ts` and `hash.ts` for examples.
 
 New builtins should include inline `help`. See [adding-builtin-help.md](adding-builtin-help.md) for guidelines.
 
@@ -103,15 +88,11 @@ To make a builtin JIT-compilable, add a matching definition to the JIT compiler'
 
 Runtime value helpers: `RTV.num()`, `RTV.tensor(data, shape)`, `RTV.complex()`, `RTV.logical()`. Use `toNumber(arg)` to extract a scalar. Check types with `isRuntimeNumber()`, `isRuntimeTensor()`, `isRuntimeChar()`, etc.
 
-Tensors use column-major (Fortran) storage order — element `(i, j)` of an `[m, n]` matrix is at index `j * m + i`.
+Tensors use column-major (Fortran) storage order: element `(i, j)` of an `[m, n]` matrix is at index `j * m + i`.
 
 ## Interactive HTML figures (`uihtml`)
 
-To build figures that render custom HTML and call back into the interpreter
-(buttons, widgets, third-party JS visualizations) — and that run unchanged in
-both numbl and real MATLAB — see [uihtml-figures.md](uihtml-figures.md) for
-authoring and [developer_reference/uihtml.md](developer_reference/uihtml.md) for
-the internals (data bridge, reverse-channel session, lifetime).
+To build figures that render custom HTML and call back into the interpreter (buttons, widgets, third-party JS visualizations), and that run unchanged in both numbl and MATLAB, see [uihtml-figures.md](uihtml-figures.md) for authoring and [developer_reference/uihtml.md](developer_reference/uihtml.md) for the internals (data bridge, reverse-channel session, lifetime).
 
 ## CLI usage for numbl
 
