@@ -6,7 +6,7 @@
  *
  * MATLAB requires scalar operands for `||` and `&&`; numbl is more
  * permissive (routes both operands through `toBool` to accept
- * tensors — see `interpreter/interpreterExec.ts` lines 650–661,
+ * tensors — see `evalBinary` in `interpreter/evalExpressions.ts`,
  * `runtime/convert.ts:44`). The JIT takes the MATLAB-strict path so
  * the result type stays a scalar logical and the codegen stays
  * trivial (`(a) || (b)` / `(a) && (b)` in C, which short-circuits

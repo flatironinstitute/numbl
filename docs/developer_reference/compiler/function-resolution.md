@@ -4,7 +4,7 @@ A name in MATLAB code can mean many things depending on where it appears: a vari
 
 ## Scope
 
-A `Scope` (`scope.ts`) is where a name is looked up from: the `CodeIndex`, the running file, the class and method whose code is running (if any), and the `Environment` holding the variables and nested functions in scope. Its `imports` are the file's `import` statements (numbl tracks imports per file, while MATLAB scopes them per function). The interpreter builds its current scope with `currentScope()`; a function handle keeps the scope it was created in.
+A `Scope` (`scope.ts`) is where a name is looked up from: the `CodeIndex`, the running file, the class and method whose code is running (if any), and the `Environment` holding the variables and nested functions in scope. Its `imports` are the file's `import` statements (numbl tracks imports per file, while MATLAB scopes them per function). The interpreter's running `CallFrame` is a `Scope` (see [interpreter.md](interpreter.md)); a function handle keeps the scope it was created in.
 
 ## Bare names: `resolveName`
 

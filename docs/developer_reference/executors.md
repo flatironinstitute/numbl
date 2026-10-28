@@ -65,7 +65,7 @@ runFirst(executors, lowered, owner):
 
 - `tryRunWholeScope(siblings, interp)`: called once at script start with the script body. On null, the interpreter runs the body statement by statement.
 - `dispatch(siblings, i, interp)`: per statement. A `for`/`while` stmt is lowered and offered to the loop executors; any other stmt (and a loop no executor took) runs on the interpreter.
-- `dispatchCall(fn, args, nargout, interp)`: from `callUserFunction`. On null the interpreter's call path runs.
+- `dispatchCall(fn, args, nargout, interp)`: from `callBody` (`interpreter/callConvention.ts`). On null the interpreter's call path runs.
 
 There is no cost model: the order is fixed by registration (`executors/plugins.ts`), C-JIT before JS-JIT. A C executor declines what it cannot marshal across the koffi ABI, so JS-JIT picks that up, and the interpreter takes whatever both decline.
 
