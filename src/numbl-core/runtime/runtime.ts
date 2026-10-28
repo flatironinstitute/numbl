@@ -86,8 +86,6 @@ import {
   indexCellStore as _indexCellStore,
   multiOutputCellAssign as _multiOutputCellAssign,
 } from "./runtimeIndexing.js";
-import "./specialBuiltins.js";
-import "../plotting/builtins.js";
 import { setWarningSink } from "../helpers/warn.js";
 import {
   getMember as _getMember,

@@ -15,10 +15,6 @@ import { allocFloat64Array } from "../../runtime/alloc.js";
 
 let ticTime = 0;
 
-export function getTicTime(): number {
-  return ticTime;
-}
-
 builtin({
   name: "tic",
   nargin: 0,
@@ -31,8 +27,28 @@ builtin({
   },
 });
 
-// toc is registered as a special builtin in specialBuiltins.ts
-// because it needs rt.output access to print elapsed time.
+builtin({
+  name: "toc",
+  nargin: [0, 1],
+  apply: (args, nargout, ctx) => {
+    let startSeconds: number;
+    if (args.length === 0) {
+      startSeconds = ticTime / 1000;
+    } else {
+      const h = args[0];
+      if (typeof h !== "number")
+        throw new RuntimeError("toc: argument must be a tic handle");
+      startSeconds = h;
+    }
+    const elapsed = performance.now() / 1000 - startSeconds;
+    if (nargout === 0) {
+      // Bare `toc;` prints and produces nothing: MATLAB does not set `ans`.
+      ctx.rt.output(`Elapsed time is ${elapsed.toFixed(6)} seconds.\n`);
+      return undefined;
+    }
+    return RTV.num(elapsed);
+  },
+});
 
 // ── clock ───────────────────────────────────────────────────────────────
 

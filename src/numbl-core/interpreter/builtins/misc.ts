@@ -567,10 +567,7 @@ builtin({ name: "isnumbl", nargin: 0, apply: () => true });
 // filesep — platform file separator
 builtin({ name: "filesep", nargin: 0, apply: () => RTV.char("/") });
 
-// pwd / cd — implemented as special builtins in specialBuiltins.ts
-// (they need the SystemAdapter from Runtime).
-
-// mfilename — handled as a special builtin (needs runtime access to current file)
+// pwd / cd / mfilename are in path-env.ts (they need the Runtime).
 
 // xlim/ylim — return empty array
 for (const name of ["xlim", "ylim"])

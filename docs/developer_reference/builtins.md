@@ -29,7 +29,7 @@ Builtins not yet converted implement `resolve(argTypes, nargout)`, usually throu
 
 ## Builtins that need the runtime or the caller's scope
 
-Builtins that need runtime state (output, file I/O, plot instructions, figures, the search path) are ordinary `IBuiltin`s registered with `registerSpecial` / `registerSpecialVoid` (`runtime/registerSpecial.ts`); each call receives the active `Runtime` from the current-runtime stack. They live in `runtime/specialBuiltins.ts` and, for plotting and graphics ops, `plotting/builtins.ts`. Every caller (interpreter, JIT dispatch, `builtin(...)`, method dispatch) invokes builtins through `invokeBuiltin` in `runtime/runtimeDispatch.ts`.
+Builtins that need runtime state (output, file I/O, plot instructions, figures, the search path) are ordinary `builtin()` definitions that use `ctx.rt`, the active `Runtime` from the current-runtime stack. They are grouped by domain in `interpreter/builtins/`: `output.ts` (help, disp, warning, fprintf), `higher-order.ts` (arrayfun, cellfun, feval, builtin, quadgk, ...), `file-io.ts` (fopen, fread, fscanf, ... on the runtime's `FileTable`), `filesystem.ts` and `web.ts` (on its `FileIOAdapter`), `path-env.ts` (addpath, cd, getenv, ...), and `ode.ts`, `gmres.ts`, `eigs.ts`. Plotting and graphics ops are registered in `plotting/builtins.ts`. Every caller (interpreter, JIT dispatch, `builtin(...)`, method dispatch) invokes builtins through `invokeBuiltin` in `runtime/runtimeDispatch.ts`.
 
 A few names need the calling scope's variables (`eval`, `evalin`, `assignin`, `input`, `clear`, `exist`, `nargin`, ...). These are interpreter specials in `interpreter/interpreterSpecialBuiltins.ts`, which the interpreter checks before normal function resolution.
 
