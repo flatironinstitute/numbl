@@ -1,4 +1,4 @@
-/* mtoc2 runtime helper: `repmat(A, reps)` — tile a tensor by
+/* JIT runtime helper: `repmat(A, reps)` — tile a tensor by
  * replicating it along each axis.
  *
  * Numbl's reference is the `repmat` builtin in
@@ -6,7 +6,7 @@
  *
  * Contract:
  *   - `in` is the source tensor (real, owned-value invariant unchanged).
- *   - `nreps` is the number of replication factors supplied (1..MTOC2_MAX_NDIM).
+ *   - `nreps` is the number of replication factors supplied (1..JIT_MAX_NDIM).
  *   - `reps_in[i]` is the per-axis replication factor; negative values
  *     clamp to 0 (yielding an empty axis), matching numbl/MATLAB.
  *
@@ -27,34 +27,34 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-static mtoc2_tensor_t mtoc2_tensor_repmat(mtoc2_tensor_t in, int nreps,
+static jit_tensor_t jit_tensor_repmat(jit_tensor_t in, int nreps,
                                           const long *reps_in) {
-  if (nreps < 1 || nreps > MTOC2_MAX_NDIM) {
+  if (nreps < 1 || nreps > JIT_MAX_NDIM) {
     fprintf(stderr,
-      "C-JIT: repmat nreps %d out of range [1, %d]\n", nreps, MTOC2_MAX_NDIM);
+      "C-JIT: repmat nreps %d out of range [1, %d]\n", nreps, JIT_MAX_NDIM);
     abort();
   }
-  long reps[MTOC2_MAX_NDIM];
+  long reps[JIT_MAX_NDIM];
   for (int i = 0; i < nreps; i++) reps[i] = reps_in[i] < 0 ? 0 : reps_in[i];
 
   int in_ndim = in.ndim;
   int out_ndim = nreps > in_ndim ? nreps : in_ndim;
-  if (out_ndim > MTOC2_MAX_NDIM) {
+  if (out_ndim > JIT_MAX_NDIM) {
     fprintf(stderr,
-      "C-JIT: repmat output ndim %d exceeds %d\n", out_ndim, MTOC2_MAX_NDIM);
+      "C-JIT: repmat output ndim %d exceeds %d\n", out_ndim, JIT_MAX_NDIM);
     abort();
   }
 
-  long padShape[MTOC2_MAX_NDIM];
-  long padReps[MTOC2_MAX_NDIM];
-  long outDims[MTOC2_MAX_NDIM];
+  long padShape[JIT_MAX_NDIM];
+  long padReps[JIT_MAX_NDIM];
+  long outDims[JIT_MAX_NDIM];
   for (int i = 0; i < out_ndim; i++) {
     padShape[i] = i < in_ndim ? in.dims[i] : 1;
     padReps[i] = i < nreps ? reps[i] : 1;
     outDims[i] = padShape[i] * padReps[i];
   }
 
-  mtoc2_tensor_t out = mtoc2_tensor_alloc_nd(out_ndim, outDims);
+  jit_tensor_t out = jit_tensor_alloc_nd(out_ndim, outDims);
 
   size_t outTotal = 1;
   for (int i = 0; i < out_ndim; i++) outTotal *= (size_t)outDims[i];
@@ -69,7 +69,7 @@ static mtoc2_tensor_t mtoc2_tensor_repmat(mtoc2_tensor_t in, int nreps,
    * 1s don't change flat indexing). */
   memcpy(out.real, in.real, inTotal * sizeof(double));
 
-  long curShape[MTOC2_MAX_NDIM];
+  long curShape[JIT_MAX_NDIM];
   for (int i = 0; i < out_ndim; i++) curShape[i] = padShape[i];
   size_t curTotal = inTotal;
 
@@ -118,37 +118,37 @@ static mtoc2_tensor_t mtoc2_tensor_repmat(mtoc2_tensor_t in, int nreps,
 /* Complex-input sibling: tiles both lanes. Tolerates `in.imag == NULL`
  * (a real tensor that flowed in via a complex-typed route) by zero-
  * filling the output imag lane. */
-static mtoc2_tensor_t mtoc2_tensor_repmat_complex(mtoc2_tensor_t in,
+static jit_tensor_t jit_tensor_repmat_complex(jit_tensor_t in,
                                                   int nreps,
                                                   const long *reps_in) {
-  if (nreps < 1 || nreps > MTOC2_MAX_NDIM) {
+  if (nreps < 1 || nreps > JIT_MAX_NDIM) {
     fprintf(stderr,
       "C-JIT: repmat_complex nreps %d out of range [1, %d]\n",
-      nreps, MTOC2_MAX_NDIM);
+      nreps, JIT_MAX_NDIM);
     abort();
   }
-  long reps[MTOC2_MAX_NDIM];
+  long reps[JIT_MAX_NDIM];
   for (int i = 0; i < nreps; i++) reps[i] = reps_in[i] < 0 ? 0 : reps_in[i];
 
   int in_ndim = in.ndim;
   int out_ndim = nreps > in_ndim ? nreps : in_ndim;
-  if (out_ndim > MTOC2_MAX_NDIM) {
+  if (out_ndim > JIT_MAX_NDIM) {
     fprintf(stderr,
       "C-JIT: repmat_complex output ndim %d exceeds %d\n",
-      out_ndim, MTOC2_MAX_NDIM);
+      out_ndim, JIT_MAX_NDIM);
     abort();
   }
 
-  long padShape[MTOC2_MAX_NDIM];
-  long padReps[MTOC2_MAX_NDIM];
-  long outDims[MTOC2_MAX_NDIM];
+  long padShape[JIT_MAX_NDIM];
+  long padReps[JIT_MAX_NDIM];
+  long outDims[JIT_MAX_NDIM];
   for (int i = 0; i < out_ndim; i++) {
     padShape[i] = i < in_ndim ? in.dims[i] : 1;
     padReps[i] = i < nreps ? reps[i] : 1;
     outDims[i] = padShape[i] * padReps[i];
   }
 
-  mtoc2_tensor_t out = mtoc2_tensor_alloc_nd_complex(out_ndim, outDims);
+  jit_tensor_t out = jit_tensor_alloc_nd_complex(out_ndim, outDims);
 
   size_t outTotal = 1;
   for (int i = 0; i < out_ndim; i++) outTotal *= (size_t)outDims[i];
@@ -170,7 +170,7 @@ static mtoc2_tensor_t mtoc2_tensor_repmat_complex(mtoc2_tensor_t in,
     memset(out.imag, 0, inTotal * sizeof(double));
   }
 
-  long curShape[MTOC2_MAX_NDIM];
+  long curShape[JIT_MAX_NDIM];
   for (int i = 0; i < out_ndim; i++) curShape[i] = padShape[i];
   size_t curTotal = inTotal;
 

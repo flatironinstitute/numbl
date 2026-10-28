@@ -2,9 +2,9 @@
 // running-list scan, preserving first-occurrence order and the
 // transitive-chaining behaviour that follows from it.
 
-import { mtoc2_tensor_alloc_nd } from "../tensor/tensor_alloc_nd.js";
+import { jit_tensor_alloc_nd } from "../tensor/tensor_alloc_nd.js";
 
-export function mtoc2_uniquetol_real(a, tol, rowOut) {
+export function jit_uniquetol_real(a, tol, rowOut) {
   const n = a.data.length;
   const uniques = [];
   for (let i = 0; i < n; i++) {
@@ -21,7 +21,7 @@ export function mtoc2_uniquetol_real(a, tol, rowOut) {
     if (!found) uniques.push(x);
   }
   const shape = rowOut ? [1, uniques.length] : [uniques.length, 1];
-  const r = mtoc2_tensor_alloc_nd(2, shape);
+  const r = jit_tensor_alloc_nd(2, shape);
   for (let i = 0; i < uniques.length; i++) r.data[i] = uniques[i];
   return r;
 }

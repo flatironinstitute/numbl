@@ -3,56 +3,56 @@
 // signatures so emitJs renders calls structurally identical to the
 // C path (just with JS objects instead of `double _Complex`).
 //
-// Division (`mtoc2_cdiv`) lives in `cdiv.js` because it needs
+// Division (`jit_cdiv`) lives in `cdiv.js` because it needs
 // Smith's algorithm with signed-zero detection to match numbl
 // byte-for-byte.
 
-export function mtoc2_cmake(re, im) {
+export function jit_cmake(re, im) {
   return { re, im };
 }
-export function mtoc2_creal(z) {
+export function jit_creal(z) {
   return z.re;
 }
-export function mtoc2_cimag(z) {
+export function jit_cimag(z) {
   return z.im;
 }
-export function mtoc2_cadd(a, b) {
+export function jit_cadd(a, b) {
   return { re: a.re + b.re, im: a.im + b.im };
 }
-export function mtoc2_csub(a, b) {
+export function jit_csub(a, b) {
   return { re: a.re - b.re, im: a.im - b.im };
 }
-export function mtoc2_cmul(a, b) {
+export function jit_cmul(a, b) {
   return { re: a.re * b.re - a.im * b.im, im: a.re * b.im + a.im * b.re };
 }
 // Scalar `*` with MATLAB's mixed real/complex rule (see `cscalar.h`): an
 // operand whose imag part is 0 acts as real and scales each part of the
 // other without promotion (a part stays 0 where the complex one's is 0).
-export function mtoc2_cmul_mixed(a, b) {
+export function jit_cmul_mixed(a, b) {
   if (a.im === 0 && b.im === 0) return { re: a.re * b.re, im: 0 };
   if (b.im === 0) return { re: a.re === 0 ? 0 : a.re * b.re, im: a.im * b.re };
   if (a.im === 0) return { re: b.re === 0 ? 0 : b.re * a.re, im: b.im * a.re };
-  return mtoc2_cmul(a, b);
+  return jit_cmul(a, b);
 }
-export function mtoc2_cneg(z) {
+export function jit_cneg(z) {
   return { re: -z.re, im: -z.im };
 }
-export function mtoc2_cconj(z) {
+export function jit_cconj(z) {
   return { re: z.re, im: -z.im };
 }
-export function mtoc2_cabs(z) {
+export function jit_cabs(z) {
   return Math.hypot(z.re, z.im);
 }
-export function mtoc2_cangle(z) {
+export function jit_cangle(z) {
   return Math.atan2(z.im, z.re);
 }
-export function mtoc2_cnonzero(z) {
+export function jit_cnonzero(z) {
   return z.re !== 0 || z.im !== 0;
 }
-export function mtoc2_ceq(a, b) {
+export function jit_ceq(a, b) {
   return a.re === b.re && a.im === b.im;
 }
-export function mtoc2_cne(a, b) {
+export function jit_cne(a, b) {
   return a.re !== b.re || a.im !== b.im;
 }
 
@@ -78,7 +78,7 @@ function cexp(z) {
   if (z.im === 0) return { re: m, im: 0 };
   return { re: m * Math.cos(z.im), im: m * Math.sin(z.im) };
 }
-export function mtoc2_cpow(a, b) {
+export function jit_cpow(a, b) {
   // Zero base: match the interpreter's complexPow (helpers/arithmetic.ts)
   // — 0^0 = 1, a positive real part of the exponent gives 0 (regardless
   // of the imaginary part), and anything else gives Inf+0i. The old
@@ -89,7 +89,7 @@ export function mtoc2_cpow(a, b) {
     if (b.re > 0) return { re: 0, im: 0 };
     return { re: Infinity, im: 0 };
   }
-  return cexp(mtoc2_cmul(b, clog(a)));
+  return cexp(jit_cmul(b, clog(a)));
 }
 
 /** True when `z` is a NaN sitting on the real axis.
@@ -105,7 +105,7 @@ function nanOnRealAxis(z) {
 }
 
 // Unary math.
-export function mtoc2_csqrt(z) {
+export function jit_csqrt(z) {
   // Pure-real input: compute directly. Smith's formula below suffers
   // catastrophic cancellation/overflow when z.im === 0 — e.g.
   // sqrt(-Inf) → sqrt((Inf + -Inf)/2) = sqrt(NaN) = NaN, and
@@ -124,26 +124,26 @@ export function mtoc2_csqrt(z) {
   const im = (z.im >= 0 ? 1 : -1) * Math.sqrt((r - z.re) / 2);
   return { re, im };
 }
-export function mtoc2_cexp(z) {
+export function jit_cexp(z) {
   return cexp(z);
 }
-export function mtoc2_clog(z) {
+export function jit_clog(z) {
   if (nanOnRealAxis(z)) return { re: z.re, im: 0 };
   return clog(z);
 }
-export function mtoc2_clog2(z) {
+export function jit_clog2(z) {
   if (nanOnRealAxis(z)) return { re: z.re, im: 0 };
   const l = clog(z);
   const lg2 = Math.log(2);
   return { re: l.re / lg2, im: l.im / lg2 };
 }
-export function mtoc2_clog10(z) {
+export function jit_clog10(z) {
   if (nanOnRealAxis(z)) return { re: z.re, im: 0 };
   const l = clog(z);
   const lg10 = Math.log(10);
   return { re: l.re / lg10, im: l.im / lg10 };
 }
-export function mtoc2_csin(z) {
+export function jit_csin(z) {
   // Guard 0*Inf=NaN on the imaginary axis: for a pure-imaginary input
   // (sin(z.re)===0), the real lane is 0 and the imaginary lane is
   // ±sinh(im); cosh/sinh overflow to Inf for large |im|, and 0*Inf would
@@ -155,7 +155,7 @@ export function mtoc2_csin(z) {
     im: cr === 0 ? 0 : cr * Math.sinh(z.im),
   };
 }
-export function mtoc2_ccos(z) {
+export function jit_ccos(z) {
   const cr = Math.cos(z.re);
   const sr = Math.sin(z.re);
   return {
@@ -163,7 +163,7 @@ export function mtoc2_ccos(z) {
     im: sr === 0 ? 0 : -sr * Math.sinh(z.im),
   };
 }
-export function mtoc2_ctan(z) {
+export function jit_ctan(z) {
   // Double-angle form, matching the interpreter (interpreter/builtins/
   // math.ts) and C99 ctan. Computing sin(z)/cos(z) with a |cos|^2
   // denominator loses the (tiny but nonzero) real part and overflows
@@ -171,7 +171,7 @@ export function mtoc2_ctan(z) {
   const denom = Math.cos(2 * z.re) + Math.cosh(2 * z.im);
   return { re: Math.sin(2 * z.re) / denom, im: Math.sinh(2 * z.im) / denom };
 }
-export function mtoc2_catan(z) {
+export function jit_catan(z) {
   // Real-valued input (im === 0): atan is a clean real function. The
   // complex formula leaves a spurious ±1e-17i residue (and NaN+NaNi once
   // 1±iz overflows, e.g. atan(1e300)). Take the real path.
@@ -194,37 +194,37 @@ export function mtoc2_catan(z) {
 // complex formulas (interpreter/builtins/math.ts). Real-valued input
 // (im === 0) falls out cleanly: cos(0)=1, sin(0)=0, so the imaginary
 // lane is exactly 0.
-export function mtoc2_csinh(z) {
+export function jit_csinh(z) {
   return {
     re: Math.sinh(z.re) * Math.cos(z.im),
     im: Math.cosh(z.re) * Math.sin(z.im),
   };
 }
-export function mtoc2_ccosh(z) {
+export function jit_ccosh(z) {
   return {
     re: Math.cosh(z.re) * Math.cos(z.im),
     im: Math.sinh(z.re) * Math.sin(z.im),
   };
 }
-export function mtoc2_ctanh(z) {
+export function jit_ctanh(z) {
   const denom = Math.cosh(2 * z.re) + Math.cos(2 * z.im);
   return { re: Math.sinh(2 * z.re) / denom, im: Math.sin(2 * z.im) / denom };
 }
-export function mtoc2_cfloor(z) {
+export function jit_cfloor(z) {
   return { re: Math.floor(z.re), im: Math.floor(z.im) };
 }
-export function mtoc2_cceil(z) {
+export function jit_cceil(z) {
   return { re: Math.ceil(z.re), im: Math.ceil(z.im) };
 }
-export function mtoc2_cround(z) {
+export function jit_cround(z) {
   // MATLAB rounds each component half-away-from-zero.
   const half = x => Math.sign(x) * Math.round(Math.abs(x));
   return { re: half(z.re), im: half(z.im) };
 }
-export function mtoc2_cfix(z) {
+export function jit_cfix(z) {
   return { re: Math.trunc(z.re), im: Math.trunc(z.im) };
 }
-export function mtoc2_csign(z) {
+export function jit_csign(z) {
   if (z.re === 0 && z.im === 0) return { re: 0, im: 0 };
   const m = Math.hypot(z.re, z.im);
   return { re: z.re / m, im: z.im / m };

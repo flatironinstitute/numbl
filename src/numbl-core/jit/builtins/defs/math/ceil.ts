@@ -9,5 +9,5 @@ export const ceil = defineUnaryRealMath({
   cFnReal: "ceil",
   jsFn: Math.ceil,
   signRule: roundingSignRule(false, true),
-  complex: { cFnComplex: "mtoc2_cceil", jsFnComplex: cCeil },
+  complex: { cFnComplex: "jit_cceil", jsFnComplex: cCeil },
 });

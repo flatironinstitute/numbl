@@ -107,34 +107,34 @@ export const eye: Builtin = {
     return [t];
   },
   emitC({ argsC, argTypes, useRuntime }) {
-    useRuntime("mtoc2_tensor_eye");
+    useRuntime("jit_tensor_eye");
     const axes = resolveArgs(argTypes);
     const rows = axes[0].exact;
     const cols = axes[1].exact;
     if (rows === 1 && cols === 1) return "1.0";
     // A non-integer dynamic dim is an error (interpreter validateDim +
-    // MATLAB), not a silent truncation — validate via mtoc2_check_dim.
+    // MATLAB), not a silent truncation — validate via jit_check_dim.
     if (rows === undefined || cols === undefined) useRuntime(CHECK_DIM_SNIPPET);
     const rowsC =
       rows !== undefined
         ? `${rows}L`
-        : `mtoc2_check_dim(${argsC[axes[0].argIndex]})`;
+        : `jit_check_dim(${argsC[axes[0].argIndex]})`;
     const colsC =
       cols !== undefined
         ? `${cols}L`
-        : `mtoc2_check_dim(${argsC[axes[1].argIndex]})`;
+        : `jit_check_dim(${argsC[axes[1].argIndex]})`;
     if (
       argTypes.length === 1 &&
       rows === undefined &&
       cols === undefined &&
       axes[0].argIndex === axes[1].argIndex
     ) {
-      return `mtoc2_eye_square(mtoc2_check_dim(${argsC[axes[0].argIndex]}))`;
+      return `jit_eye_square(jit_check_dim(${argsC[axes[0].argIndex]}))`;
     }
-    return `mtoc2_eye_rect(${rowsC}, ${colsC})`;
+    return `jit_eye_rect(${rowsC}, ${colsC})`;
   },
   emitJs({ argsJs, argTypes, useRuntime }) {
-    useRuntime("mtoc2_tensor_eye");
+    useRuntime("jit_tensor_eye");
     const axes = resolveArgs(argTypes);
     const rows = axes[0].exact;
     const cols = axes[1].exact;
@@ -143,19 +143,19 @@ export const eye: Builtin = {
     const rowsJs =
       rows !== undefined
         ? String(rows)
-        : `mtoc2_check_dim(${argsJs[axes[0].argIndex]})`;
+        : `jit_check_dim(${argsJs[axes[0].argIndex]})`;
     const colsJs =
       cols !== undefined
         ? String(cols)
-        : `mtoc2_check_dim(${argsJs[axes[1].argIndex]})`;
+        : `jit_check_dim(${argsJs[axes[1].argIndex]})`;
     if (
       argTypes.length === 1 &&
       rows === undefined &&
       cols === undefined &&
       axes[0].argIndex === axes[1].argIndex
     ) {
-      return `mtoc2_eye_square(mtoc2_check_dim(${argsJs[axes[0].argIndex]}))`;
+      return `jit_eye_square(jit_check_dim(${argsJs[axes[0].argIndex]}))`;
     }
-    return `mtoc2_eye_rect(${rowsJs}, ${colsJs})`;
+    return `jit_eye_rect(${rowsJs}, ${colsJs})`;
   },
 };

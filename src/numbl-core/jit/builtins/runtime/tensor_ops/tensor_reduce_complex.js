@@ -2,8 +2,8 @@
 // Mirrors the real reducer shape (sum/prod/mean → complex; min/max
 // → complex via magnitude+atan2 tiebreak; any/all → real).
 
-import { mtoc2_tensor_alloc_nd } from "../tensor/tensor_alloc_nd.js";
-import { mtoc2_tensor_alloc_nd_complex } from "../tensor/tensor_alloc_nd_complex.js";
+import { jit_tensor_alloc_nd } from "../tensor/tensor_alloc_nd.js";
+import { jit_tensor_alloc_nd_complex } from "../tensor/tensor_alloc_nd_complex.js";
 
 function cSqueezeTrailing(dims) {
   while (dims.length > 2 && dims[dims.length - 1] === 1) dims.pop();
@@ -38,7 +38,7 @@ function complexAccumDim(t, dim, init, accum, finalize) {
   if (dim < 1) throw new Error(`reducer _dim: dim must be >= 1 (got ${dim})`);
   if (dim > t.shape.length) {
     // No-op axis: return a fresh complex copy.
-    const out = mtoc2_tensor_alloc_nd_complex(t.shape.length, t.shape.slice());
+    const out = jit_tensor_alloc_nd_complex(t.shape.length, t.shape.slice());
     out.data.set(t.data);
     if (t.imag !== undefined) out.imag.set(t.imag);
     return out;
@@ -52,7 +52,7 @@ function complexAccumDim(t, dim, init, accum, finalize) {
   const outDims = t.shape.slice();
   outDims[dimIdx] = 1;
   cSqueezeTrailing(outDims);
-  const out = mtoc2_tensor_alloc_nd_complex(outDims.length, outDims);
+  const out = jit_tensor_alloc_nd_complex(outDims.length, outDims);
   for (let aft = 0; aft < after; aft++) {
     for (let bef = 0; bef < before; bef++) {
       const base = aft * before * axis + bef;
@@ -81,17 +81,17 @@ const cIdFinalize = a => a;
 const cMeanFinalize = (a, n) =>
   n === 0 ? { re: NaN, im: NaN } : { re: a.re / n, im: a.im / n };
 
-export const mtoc2_sum_complex_all = t =>
+export const jit_sum_complex_all = t =>
   complexAccumAll(t, cSumInit, cSumAccum, cIdFinalize);
-export const mtoc2_sum_complex_dim = (t, d) =>
+export const jit_sum_complex_dim = (t, d) =>
   complexAccumDim(t, d, cSumInit, cSumAccum, cIdFinalize);
-export const mtoc2_prod_complex_all = t =>
+export const jit_prod_complex_all = t =>
   complexAccumAll(t, cProdInit, cProdAccum, cIdFinalize);
-export const mtoc2_prod_complex_dim = (t, d) =>
+export const jit_prod_complex_dim = (t, d) =>
   complexAccumDim(t, d, cProdInit, cProdAccum, cIdFinalize);
-export const mtoc2_mean_complex_all = t =>
+export const jit_mean_complex_all = t =>
   complexAccumAll(t, cSumInit, cSumAccum, cMeanFinalize);
-export const mtoc2_mean_complex_dim = (t, d) =>
+export const jit_mean_complex_dim = (t, d) =>
   complexAccumDim(t, d, cSumInit, cSumAccum, cMeanFinalize);
 
 // Min / max — magnitude compare with atan2 tiebreak (numbl's
@@ -131,7 +131,7 @@ function complexBetter(aRe, aIm, bRe, bIm, cmp) {
 function complexMinmaxDim(t, dim, cmp) {
   if (dim < 1) throw new Error(`reducer _dim: dim must be >= 1 (got ${dim})`);
   if (dim > t.shape.length) {
-    const out = mtoc2_tensor_alloc_nd_complex(t.shape.length, t.shape.slice());
+    const out = jit_tensor_alloc_nd_complex(t.shape.length, t.shape.slice());
     out.data.set(t.data);
     if (t.imag !== undefined) out.imag.set(t.imag);
     return out;
@@ -146,7 +146,7 @@ function complexMinmaxDim(t, dim, cmp) {
   const outDims = t.shape.slice();
   outDims[dimIdx] = 1;
   cSqueezeTrailing(outDims);
-  const out = mtoc2_tensor_alloc_nd_complex(outDims.length, outDims);
+  const out = jit_tensor_alloc_nd_complex(outDims.length, outDims);
   for (let aft = 0; aft < after; aft++) {
     for (let bef = 0; bef < before; bef++) {
       const base = aft * before * axis + bef;
@@ -177,10 +177,10 @@ function complexMinmaxDim(t, dim, cmp) {
   return out;
 }
 
-export const mtoc2_min_complex_all = t => complexMinmaxAll(t, "<");
-export const mtoc2_min_complex_dim = (t, d) => complexMinmaxDim(t, d, "<");
-export const mtoc2_max_complex_all = t => complexMinmaxAll(t, ">");
-export const mtoc2_max_complex_dim = (t, d) => complexMinmaxDim(t, d, ">");
+export const jit_min_complex_all = t => complexMinmaxAll(t, "<");
+export const jit_min_complex_dim = (t, d) => complexMinmaxDim(t, d, "<");
+export const jit_max_complex_all = t => complexMinmaxAll(t, ">");
+export const jit_max_complex_dim = (t, d) => complexMinmaxDim(t, d, ">");
 
 // any / all — real result; toBool per element (either lane nonzero).
 function complexLogicalAll(t, emptyResult, shortPredicate) {
@@ -197,7 +197,7 @@ function complexLogicalAll(t, emptyResult, shortPredicate) {
 function complexLogicalDim(t, dim, emptyResult, shortPredicate) {
   if (dim < 1) throw new Error(`reducer _dim: dim must be >= 1 (got ${dim})`);
   if (dim > t.shape.length) {
-    const out = mtoc2_tensor_alloc_nd(t.shape.length, t.shape.slice());
+    const out = jit_tensor_alloc_nd(t.shape.length, t.shape.slice());
     for (let i = 0; i < t.data.length; i++) {
       const xr = t.data[i];
       const xi = cReduceLaneIm(t, i);
@@ -214,7 +214,7 @@ function complexLogicalDim(t, dim, emptyResult, shortPredicate) {
   const outDims = t.shape.slice();
   outDims[dimIdx] = 1;
   cSqueezeTrailing(outDims);
-  const out = mtoc2_tensor_alloc_nd(outDims.length, outDims);
+  const out = jit_tensor_alloc_nd(outDims.length, outDims);
   for (let aft = 0; aft < after; aft++) {
     for (let bef = 0; bef < before; bef++) {
       const base = aft * before * axis + bef;
@@ -235,9 +235,9 @@ function complexLogicalDim(t, dim, emptyResult, shortPredicate) {
 
 const cAnyShort = x => x;
 const cAllShort = x => !x;
-export const mtoc2_any_complex_all = t => complexLogicalAll(t, 0, cAnyShort);
-export const mtoc2_any_complex_dim = (t, d) =>
+export const jit_any_complex_all = t => complexLogicalAll(t, 0, cAnyShort);
+export const jit_any_complex_dim = (t, d) =>
   complexLogicalDim(t, d, 0, cAnyShort);
-export const mtoc2_all_complex_all = t => complexLogicalAll(t, 1, cAllShort);
-export const mtoc2_all_complex_dim = (t, d) =>
+export const jit_all_complex_all = t => complexLogicalAll(t, 1, cAllShort);
+export const jit_all_complex_dim = (t, d) =>
   complexLogicalDim(t, d, 1, cAllShort);

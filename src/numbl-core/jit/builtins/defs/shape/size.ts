@@ -1,7 +1,7 @@
 /**
  * `size` builtin.
  *
- * Three forms supported in mtoc2 v1:
+ * Three forms supported in the JIT:
  *
  *   - `size(A)`         → 1×ndim row tensor of dim sizes.
  *   - `size(A, k)`      → scalar (k-th dim, 1-based).
@@ -14,7 +14,7 @@
  * Multi-output combined with the `dim` arg is rejected — numbl
  * silently drops the extra outputs in that combo (leaves them
  * unset), and matching that behavior would leak undefined values
- * into mtoc2's typed env.
+ * into the JIT's typed env.
  */
 
 import { TypeError, UnsupportedConstruct } from "../../../lowering/errors.js";
@@ -123,9 +123,9 @@ export const size: Builtin = {
         return `((void)(${writes.join(", ")}))`;
       }
       if (argTypes.length === 2) return `1.0`;
-      useRuntime("mtoc2_tensor_size_row");
-      useRuntime("mtoc2_tensor_from_row");
-      return `mtoc2_tensor_from_row((double[]){1.0, 1.0}, 2)`;
+      useRuntime("jit_tensor_size_row");
+      useRuntime("jit_tensor_from_row");
+      return `jit_tensor_from_row((double[]){1.0, 1.0}, 2)`;
     }
     // Multi-output: emit a comma-expression that writes each requested
     // dim through its out-pointer. Each slot i is `(double)A.dims[i]`
@@ -141,8 +141,8 @@ export const size: Builtin = {
       }
       return `((void)(${writes.join(", ")}))`;
     }
-    useRuntime("mtoc2_tensor_size_row");
-    useRuntime("mtoc2_tensor_from_row");
+    useRuntime("jit_tensor_size_row");
+    useRuntime("jit_tensor_from_row");
     if (argTypes.length === 2) {
       const kv = exactDouble(argTypes[1] as NumericType);
       if (kv !== undefined) {
@@ -153,15 +153,15 @@ export const size: Builtin = {
         return `1.0`;
       }
       return (
-        `({ long _mtoc2_k = (long)(${argsC[1]}); ` +
-        `(double)(_mtoc2_k >= 1 && _mtoc2_k <= ${argsC[0]}.ndim ? ${argsC[0]}.dims[_mtoc2_k - 1] : 1); })`
+        `({ long _jit_k = (long)(${argsC[1]}); ` +
+        `(double)(_jit_k >= 1 && _jit_k <= ${argsC[0]}.ndim ? ${argsC[0]}.dims[_jit_k - 1] : 1); })`
       );
     }
 
     if (!isMultiElement(a)) {
-      return `mtoc2_tensor_from_row((double[]){1.0, 1.0}, 2)`;
+      return `jit_tensor_from_row((double[]){1.0, 1.0}, 2)`;
     }
-    return `mtoc2_tensor_size_row(${argsC[0]})`;
+    return `jit_tensor_size_row(${argsC[0]})`;
   },
   emitJs({ argsJs, argTypes, nargout, useRuntime }) {
     const a = argTypes[0] as NumericType;
@@ -173,9 +173,9 @@ export const size: Builtin = {
         return `[${Array(nargout).fill("1").join(", ")}]`;
       }
       if (argTypes.length === 2) return `1`;
-      useRuntime("mtoc2_tensor_size_row");
-      useRuntime("mtoc2_tensor_from_row");
-      return `mtoc2_tensor_from_row([1, 1], 2)`;
+      useRuntime("jit_tensor_size_row");
+      useRuntime("jit_tensor_from_row");
+      return `jit_tensor_from_row([1, 1], 2)`;
     }
     // Multi-output: return a JS array literal `[d1, d2, ...]` the
     // framework destructures into the out-targets. Each slot i is
@@ -188,8 +188,8 @@ export const size: Builtin = {
       }
       return `[${dims.join(", ")}]`;
     }
-    useRuntime("mtoc2_tensor_size_row");
-    useRuntime("mtoc2_tensor_from_row");
+    useRuntime("jit_tensor_size_row");
+    useRuntime("jit_tensor_from_row");
     if (argTypes.length === 2) {
       const kv = exactDouble(argTypes[1] as NumericType);
       if (kv !== undefined) {
@@ -203,8 +203,8 @@ export const size: Builtin = {
       );
     }
     if (!isMultiElement(a)) {
-      return `mtoc2_tensor_from_row([1, 1], 2)`;
+      return `jit_tensor_from_row([1, 1], 2)`;
     }
-    return `mtoc2_tensor_size_row(${argsJs[0]})`;
+    return `jit_tensor_size_row(${argsJs[0]})`;
   },
 };

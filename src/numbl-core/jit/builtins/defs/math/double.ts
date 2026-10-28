@@ -12,8 +12,8 @@
  *     tensor; 1 char → scalar double; N chars → 1×N row.
  *
  * Scope notes:
- *   - The mtoc2 C representation already stores logical and double
- *     scalars as `double`, and logical tensors as `mtoc2_tensor_t`
+ *   - The JIT C representation already stores logical and double
+ *     scalars as `double`, and logical tensors as `jit_tensor_t`
  *     with a `double *` buffer. So a numeric → double conversion is
  *     either identity (scalar) or a fresh struct copy (tensor); no
  *     per-element rewrite is needed.
@@ -125,21 +125,21 @@ export const doubleBuiltin: Builtin = {
     const t = argTypes[0];
     if (isNumeric(t)) {
       if (t.isComplex && isScalar(t)) {
-        useRuntime("mtoc2_cscalar");
-        return `mtoc2_creal(${argsC[0]})`;
+        useRuntime("jit_cscalar");
+        return `jit_creal(${argsC[0]})`;
       }
       if (isMultiElement(t)) {
         // Fresh tensor copy. Stripping the logical flag isn't
-        // represented at the C level — `mtoc2_tensor_t` doesn't carry
+        // represented at the C level — `jit_tensor_t` doesn't carry
         // one — so a structural copy is sufficient.
         if (t.isComplex) {
-          useRuntime("mtoc2_tensor_copy_complex");
-          return `mtoc2_tensor_copy_complex(${argsC[0]})`;
+          useRuntime("jit_tensor_copy_complex");
+          return `jit_tensor_copy_complex(${argsC[0]})`;
         }
-        useRuntime("mtoc2_tensor_copy");
-        return `mtoc2_tensor_copy(${argsC[0]})`;
+        useRuntime("jit_tensor_copy");
+        return `jit_tensor_copy(${argsC[0]})`;
       }
-      // Scalar real (double / logical) — identity. mtoc2 stores both
+      // Scalar real (double / logical) — identity. The JIT stores both
       // as `double` in C, so no coercion is needed.
       return argsC[0];
     }
@@ -147,14 +147,14 @@ export const doubleBuiltin: Builtin = {
       // transfer rejected non-exact char input, so `t.exact` is set.
       const s = t.exact!;
       if (s.length === 0) {
-        useRuntime("mtoc2_tensor_alloc");
-        return `mtoc2_tensor_alloc(0, 0)`;
+        useRuntime("jit_tensor_alloc");
+        return `jit_tensor_alloc(0, 0)`;
       }
       if (s.length === 1) {
         return formatCNumber(s.charCodeAt(0));
       }
-      useRuntime("mtoc2_tensor_from_row");
-      return `mtoc2_tensor_from_row((double[]){${compoundLiteralFromChar(s)}}, ${s.length})`;
+      useRuntime("jit_tensor_from_row");
+      return `jit_tensor_from_row((double[]){${compoundLiteralFromChar(s)}}, ${s.length})`;
     }
     throw new TypeError(`internal: 'double' emitC reached on type ${t.kind}`);
   },
@@ -170,9 +170,9 @@ export const doubleBuiltin: Builtin = {
         // inline object literal — argsJs[0] is a Var read so the
         // dup-evaluation is harmless.
         if (t.isComplex) {
-          return `({mtoc2Tag:"tensor", shape:${argsJs[0]}.shape.slice(), data:new Float64Array(${argsJs[0]}.data), imag:new Float64Array(${argsJs[0]}.imag)})`;
+          return `({jitTag:"tensor", shape:${argsJs[0]}.shape.slice(), data:new Float64Array(${argsJs[0]}.data), imag:new Float64Array(${argsJs[0]}.imag)})`;
         }
-        return `({mtoc2Tag:"tensor", shape:${argsJs[0]}.shape.slice(), data:new Float64Array(${argsJs[0]}.data)})`;
+        return `({jitTag:"tensor", shape:${argsJs[0]}.shape.slice(), data:new Float64Array(${argsJs[0]}.data)})`;
       }
       // Scalar real. A scalar JS boolean must coerce to 0/1 — unary
       // `+` does this; for numbers it's a no-op.
@@ -184,14 +184,14 @@ export const doubleBuiltin: Builtin = {
     if (t.kind === "Char") {
       const s = t.exact!;
       if (s.length === 0) {
-        useRuntime("mtoc2_tensor_alloc");
-        return `mtoc2_tensor_alloc(0, 0)`;
+        useRuntime("jit_tensor_alloc");
+        return `jit_tensor_alloc(0, 0)`;
       }
       if (s.length === 1) {
         return String(s.charCodeAt(0));
       }
-      useRuntime("mtoc2_tensor_from_row");
-      return `mtoc2_tensor_from_row([${jsArrayFromChar(s)}], ${s.length})`;
+      useRuntime("jit_tensor_from_row");
+      return `jit_tensor_from_row([${jsArrayFromChar(s)}], ${s.length})`;
     }
     throw new TypeError(`internal: 'double' emitJs reached on type ${t.kind}`);
   },

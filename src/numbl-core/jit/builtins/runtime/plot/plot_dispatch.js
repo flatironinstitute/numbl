@@ -2,7 +2,7 @@
 //
 // 1. Host hook mode (numbl JIT bridge): when the host binds a
 //    `$plotDispatch(name, args)` callback into the emit's `$h`
-//    helpers, the helper forwards the raw mtoc2-shaped args to the
+//    helpers, the helper forwards the raw JIT-shaped args to the
 //    host. The host is expected to translate the args into its own
 //    runtime value shape and route them into its plot pipeline
 //    (numbl: `dispatchPlotBuiltin` into `rt.plotInstructions`).
@@ -27,10 +27,10 @@
 //            flatten; non-finite as null)
 
 function isTensor(v) {
-  return typeof v === "object" && v !== null && v.mtoc2Tag === "tensor";
+  return typeof v === "object" && v !== null && v.jitTag === "tensor";
 }
 function isChar(v) {
-  return typeof v === "object" && v !== null && v.mtoc2Tag === "char";
+  return typeof v === "object" && v !== null && v.jitTag === "char";
 }
 
 function encodeArg(v) {
@@ -53,7 +53,7 @@ function encodeArg(v) {
   return String(v);
 }
 
-export function mtoc2_plot_dispatch(name, ...args) {
+export function jit_plot_dispatch(name, ...args) {
   if (typeof $plotDispatch === "function") {
     $plotDispatch(name, args);
     return;

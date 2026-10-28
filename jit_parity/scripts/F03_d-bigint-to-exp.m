@@ -5,7 +5,7 @@
 %           (C emit_int requires fabs(raw) < 1e18 to treat as int; at/above
 %            1e18 it falls back to the %e branch)
 % DIVERGING MODES: opt2 vs opt0/opt1.
-% CAUSE: C mtoc2__emit_int caps the integer fast-path at fabs<1e18, so big
+% CAUSE: C jit__emit_int caps the integer fast-path at fabs<1e18, so big
 %        integers print as %e; the JS engine prints the full decimal string.
 % JIT ENGAGEMENT: confirmed (--dump-c non-empty).
 fprintf('%d|%d|%d\n', 1e18, 1e19, 1e20);

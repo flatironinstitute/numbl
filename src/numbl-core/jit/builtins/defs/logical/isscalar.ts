@@ -91,8 +91,8 @@ export const isscalar: Builtin = {
     const v = staticAnswer(t);
     if (v !== undefined) return v ? `1.0` : `0.0`;
     // Numeric with unknown shape — emit a runtime numel check.
-    useRuntime("mtoc2_numel");
-    return `(mtoc2_numel(${argsC[0]}) == 1)`;
+    useRuntime("jit_numel");
+    return `(jit_numel(${argsC[0]}) == 1)`;
   },
   emitJs({ argsJs, argTypes }) {
     const t = argTypes[0];

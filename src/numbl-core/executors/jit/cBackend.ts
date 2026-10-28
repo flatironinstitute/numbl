@@ -98,7 +98,7 @@ export const cBackend: JitBackend<CArtifact> = {
     const { ctx, growBail, signature: sig } = art;
     const inputs = marshalInputs(ctx, art.paramTypes, args);
     if (inputs === null) return null;
-    // Multi-output specs take one `T *_mtoc2_o<i>` out-pointer per
+    // Multi-output specs take one `T *_jit_o<i>` out-pointer per
     // output after the params.
     const outAllocs: unknown[] = [];
     try {
@@ -175,14 +175,14 @@ function readOutputs(
     if (isTensorType(oTy)) {
       return unmarshalTensorOutput(
         ctxC,
-        koffi.decode(buf, "mtoc2_tensor_t"),
+        koffi.decode(buf, "jit_tensor_t"),
         oTy
       );
     }
-    // Complex scalars ride the `mtoc2_cscalar_t` struct slot; real and
+    // Complex scalars ride the `jit_cscalar_t` struct slot; real and
     // logical scalars ride the `double` slot (see typeAdapterC.ts).
     if (oTy.isComplex) {
-      return unmarshalScalarOutput(koffi.decode(buf, "mtoc2_cscalar_t"), oTy);
+      return unmarshalScalarOutput(koffi.decode(buf, "jit_cscalar_t"), oTy);
     }
     return unmarshalScalarOutput(koffi.decode(buf, "double", 1)[0], oTy);
   });

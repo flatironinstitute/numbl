@@ -184,10 +184,10 @@ export const mtimes: Builtin = {
     const b = argTypes[1] as NumericType;
     const isComplex = a.isComplex || b.isComplex;
     if (isComplex) {
-      useRuntime("mtoc2_tensor_mtimes_complex");
-      useRuntime("mtoc2_cscalar");
+      useRuntime("jit_tensor_mtimes_complex");
+      useRuntime("jit_cscalar");
     } else {
-      useRuntime("mtoc2_tensor_mtimes_real");
+      useRuntime("jit_tensor_mtimes_real");
     }
     // 1×k * k×1 → 1×1 scalar. Transfer returns a scalar type for this
     // shape; consumers expect a `double` (or `double _Complex`) C
@@ -195,12 +195,12 @@ export const mtimes: Builtin = {
     // allocating a tensor.
     if (a.shape?.[0] === 1 && b.shape?.[1] === 1) {
       return isComplex
-        ? `mtoc2_tensor_mtimes_complex_scalar(${argsC[0]}, ${argsC[1]})`
-        : `mtoc2_tensor_mtimes_real_scalar(${argsC[0]}, ${argsC[1]})`;
+        ? `jit_tensor_mtimes_complex_scalar(${argsC[0]}, ${argsC[1]})`
+        : `jit_tensor_mtimes_real_scalar(${argsC[0]}, ${argsC[1]})`;
     }
     return isComplex
-      ? `mtoc2_tensor_mtimes_complex(${argsC[0]}, ${argsC[1]})`
-      : `mtoc2_tensor_mtimes_real(${argsC[0]}, ${argsC[1]})`;
+      ? `jit_tensor_mtimes_complex(${argsC[0]}, ${argsC[1]})`
+      : `jit_tensor_mtimes_real(${argsC[0]}, ${argsC[1]})`;
   },
   emitJs(args) {
     const { argsJs, argTypes, useRuntime } = args;
@@ -211,19 +211,19 @@ export const mtimes: Builtin = {
     const b = argTypes[1] as NumericType;
     const isComplex = a.isComplex || b.isComplex;
     if (isComplex) {
-      useRuntime("mtoc2_tensor_mtimes_complex");
-      useRuntime("mtoc2_cscalar");
+      useRuntime("jit_tensor_mtimes_complex");
+      useRuntime("jit_cscalar");
     } else {
-      useRuntime("mtoc2_tensor_mtimes_real");
+      useRuntime("jit_tensor_mtimes_real");
     }
     if (a.shape?.[0] === 1 && b.shape?.[1] === 1) {
       return isComplex
-        ? `mtoc2_tensor_mtimes_complex_scalar(${argsJs[0]}, ${argsJs[1]})`
-        : `mtoc2_tensor_mtimes_real_scalar(${argsJs[0]}, ${argsJs[1]})`;
+        ? `jit_tensor_mtimes_complex_scalar(${argsJs[0]}, ${argsJs[1]})`
+        : `jit_tensor_mtimes_real_scalar(${argsJs[0]}, ${argsJs[1]})`;
     }
     return isComplex
-      ? `mtoc2_tensor_mtimes_complex(${argsJs[0]}, ${argsJs[1]})`
-      : `mtoc2_tensor_mtimes_real(${argsJs[0]}, ${argsJs[1]})`;
+      ? `jit_tensor_mtimes_complex(${argsJs[0]}, ${argsJs[1]})`
+      : `jit_tensor_mtimes_real(${argsJs[0]}, ${argsJs[1]})`;
   },
   // Elementwise per-slot template — only valid when at least one
   // operand is scalar (tensor * tensor is matrix product). The

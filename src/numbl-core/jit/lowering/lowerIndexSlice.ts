@@ -45,7 +45,7 @@ import { rangeCountFromExactEnds } from "./rangeCount.js";
  *  every endpoint must have an exact numeric value (the step is always
  *  a NumLit by lowerSliceArg's check); the count uses the shared
  *  `rangeCountFromExactEnds` formula (same as `MakeRange` /
- *  `mtoc2_loop_count`). */
+ *  `jit_loop_count`). */
 function exactRangeCount(slot: IndexSliceArg): number | undefined {
   if (slot.kind !== "Range") return undefined;
   const sExact =

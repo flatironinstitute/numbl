@@ -4,9 +4,9 @@
  * names: `double`, `logical`, `char`, `string`, `struct`,
  * `function_handle`, `cell`, `numeric`).
  *
- * Always static: mtoc2 knows every value's type at lowering time and
+ * Always static: the JIT knows every value's type at lowering time and
  * folds to a scalar logical literal. Matches numbl's
- * `runtimeDispatch.ts:isa` minus the inheritance-chain walk (mtoc2
+ * `runtimeDispatch.ts:isa` minus the inheritance-chain walk (the JIT
  * has no inheritance in v1).
  */
 

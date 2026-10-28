@@ -29,25 +29,21 @@ export const sprintfBuiltin: Builtin = {
     return [fmt.kind === "String" ? { kind: "String" } : { kind: "Char" }];
   },
   emitC({ argsC, argTypes, useRuntime }) {
-    useRuntime("mtoc2_sprintf_str");
-    useRuntime("mtoc2_sprintf_char");
+    useRuntime("jit_sprintf_str");
+    useRuntime("jit_sprintf_char");
     const fmt = argTypes[0];
     const fmtView = emitTextView(argsC[0], fmt);
     const slots: string[] = [];
     for (let i = 1; i < argTypes.length; i++) {
       slots.push(emitFormatSlot("sprintf", argsC[i], argTypes[i], i));
     }
-    const fn =
-      fmt.kind === "String" ? "mtoc2_sprintf_str" : "mtoc2_sprintf_char";
+    const fn = fmt.kind === "String" ? "jit_sprintf_str" : "jit_sprintf_char";
     return `${fn}(${fmtView}, ${slots.length}, ${emitFormatSlotArray(slots)})`;
   },
   emitJs({ argsJs, argTypes, useRuntime }) {
     const fmt = argTypes[0];
-    useRuntime(
-      fmt.kind === "String" ? "mtoc2_sprintf_str" : "mtoc2_sprintf_char"
-    );
-    const fn =
-      fmt.kind === "String" ? "mtoc2_sprintf_str" : "mtoc2_sprintf_char";
+    useRuntime(fmt.kind === "String" ? "jit_sprintf_str" : "jit_sprintf_char");
+    const fn = fmt.kind === "String" ? "jit_sprintf_str" : "jit_sprintf_char";
     return `${fn}(${argsJs.join(", ")})`;
   },
 };

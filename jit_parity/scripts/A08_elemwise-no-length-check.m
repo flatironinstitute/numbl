@@ -1,5 +1,5 @@
 % DIAGNOSIS: When the JIT cannot statically prove two 1xN tensor operands have
-% equal length, it emits the same-shape kernel (mtoc2_tensor_plus_tt / tt_kernel)
+% equal length, it emits the same-shape kernel (jit_tensor_plus_tt / tt_kernel)
 % which allocates the result with a.shape and reads b.data[i] with NO runtime
 % length check. Mismatched lengths read out-of-bounds (undefined -> NaN) instead
 % of raising the "Matrix dimensions must agree" error the interpreter raises.

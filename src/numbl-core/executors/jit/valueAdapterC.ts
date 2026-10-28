@@ -1,17 +1,17 @@
 /**
- * Value adapter for the mtoc2 C-JIT path.
+ * Value adapter for the C-JIT path.
  *
  * Mirrors `valueAdapter.ts` (JS path) but converts numbl
- * `RuntimeValue` to / from the C ABI mtoc2 expects across the koffi
+ * `RuntimeValue` to / from the C ABI the JIT expects across the koffi
  * FFI boundary.
  *
  * **Copy budget**:
  *   - Scalars: zero copies; passed by value in koffi's args array.
  *   - Tensors: one copy in, one copy out. The callee owns (and frees at
  *     scope exit) its tensor params, so input data is copied into
- *     buffers from the `.so`'s own `mtoc2_jit_malloc`. Output tensors
+ *     buffers from the `.so`'s own `jit_malloc`. Output tensors
  *     arrive with callee-allocated `real`/`imag`; they are copied into
- *     fresh `Float64Array`s and released with `mtoc2_jit_free`. Both
+ *     fresh `Float64Array`s and released with `jit_free`. Both
  *     copies are bulk `koffi.encode` / `koffi.decode` calls.
  */
 
@@ -37,7 +37,7 @@ interface Koffi {
   decode(ptr: unknown, type: string, len: number): Float64Array;
 }
 
-/** A function that frees the `mtoc2_alloc`'d buffer at the given
+/** A function that frees the `jit_alloc`'d buffer at the given
  *  pointer. Resolved via koffi against libc's `free`. The .so we
  *  dlopen pulls in libc anyway, so binding through the same lib is
  *  zero-cost. */
@@ -61,9 +61,7 @@ function hostWriteCallbackType(koffi: KoffiAny): unknown {
     // mis-handles our non-NUL-terminated byte slices. A raw pointer lets
     // us decode exactly `len` bytes. ABI-identical to the C side's
     // `const char *`.
-    const proto = koffi.proto(
-      "void mtoc2_host_write_cb(void *bytes, long len)"
-    );
+    const proto = koffi.proto("void jit_host_write_cb(void *bytes, long len)");
     hostWriteCbType = koffi.pointer(proto);
   }
   return hostWriteCbType;
@@ -95,7 +93,7 @@ export interface HostWriteBinding {
  *  (disp / fprintf / …) routes through the host instead of libc stdout
  *  (see `runtime/io/host_output.h`). Done once per loaded `.so`.
  *
- *  When the spec emitted no output, `mtoc2_set_host_write` is absent
+ *  When the spec emitted no output, `jit_set_host_write` is absent
  *  from the `.so`; binding then no-ops (the C code never writes). */
 export function bindHostWrite(
   koffi: KoffiAny,
@@ -103,7 +101,7 @@ export function bindHostWrite(
 ): HostWriteBinding {
   let setHostWrite: (cb: unknown) => void;
   try {
-    setHostWrite = lib.func("void mtoc2_set_host_write(void *)") as (
+    setHostWrite = lib.func("void jit_set_host_write(void *)") as (
       cb: unknown
     ) => void;
   } catch {
@@ -131,7 +129,7 @@ export function bindHostWrite(
  *  `bailed()` is true it discards the outputs and bails to the
  *  interpreter (which has full MATLAB grow semantics).
  *
- *  When the spec emitted no scalar indexed store, `mtoc2_grow_bail_*`
+ *  When the spec emitted no scalar indexed store, `jit_grow_bail_*`
  *  are absent from the `.so`; binding then no-ops (`bailed()` is always
  *  false — the code can't grow). */
 export function bindGrowBail(lib: KoffiLib): {
@@ -141,21 +139,21 @@ export function bindGrowBail(lib: KoffiLib): {
   let reset: () => void;
   let check: () => number;
   try {
-    reset = lib.func("void mtoc2_grow_bail_reset(void)") as () => void;
-    check = lib.func("int mtoc2_grow_bail_check(void)") as () => number;
+    reset = lib.func("void jit_grow_bail_reset(void)") as () => void;
+    check = lib.func("int jit_grow_bail_check(void)") as () => number;
   } catch {
     return { reset() {}, bailed: () => false };
   }
   return { reset, bailed: () => check() !== 0 };
 }
 
-/** Build a marshaling context from a koffi lib handle. `mtoc2_jit_malloc`
- *  / `mtoc2_jit_free` are exported by every JIT `.so` (see
+/** Build a marshaling context from a koffi lib handle. `jit_malloc`
+ *  / `jit_free` are exported by every JIT `.so` (see
  *  `jit/codegen/emit.ts`), so host-side buffers use the same allocator
  *  the emitted code frees with. */
 export function makeCMarshalCtx(koffi: Koffi, lib: KoffiLib): MarshalCtx {
-  const malloc = lib.func("void *mtoc2_jit_malloc(long)") as MallocFn;
-  const free = lib.func("void mtoc2_jit_free(void *)") as FreeFn;
+  const malloc = lib.func("void *jit_malloc(long)") as MallocFn;
+  const free = lib.func("void jit_free(void *)") as FreeFn;
   return { koffi, malloc, free };
 }
 
@@ -225,7 +223,7 @@ function marshalOneInput(
       }
       return undefined;
     }
-    // Scalar — mtoc2's C ABI passes every single-element real numeric
+    // Scalar — the JIT's C ABI passes every single-element real numeric
     // (real, logical) as `double` (see typeAdapterC.ts's
     // numericToCDecl). Coerce booleans to 0/1 so koffi marshals a
     // proper double.
@@ -238,7 +236,7 @@ function marshalOneInput(
   return undefined;
 }
 
-/** Copy `src` into a fresh `mtoc2_jit_malloc` buffer (or zero-fill
+/** Copy `src` into a fresh `jit_malloc` buffer (or zero-fill
  *  `n` doubles when `src` is undefined). */
 function copyIn(
   ctx: MarshalCtx,
@@ -247,7 +245,7 @@ function copyIn(
   owned: unknown[]
 ): unknown {
   const ptr = ctx.malloc(Math.max(n, 1) * 8);
-  if (ptr === null) throw new Error("mtoc2_jit_malloc: out of memory");
+  if (ptr === null) throw new Error("jit_malloc: out of memory");
   owned.push(ptr);
   if (n > 0) {
     ctx.koffi.encode(ptr, "double", src ?? new Float64Array(n), n);
@@ -255,7 +253,7 @@ function copyIn(
   return ptr;
 }
 
-/** Build an `mtoc2_tensor_t` whose `real`/`imag` point to fresh buffers
+/** Build an `jit_tensor_t` whose `real`/`imag` point to fresh buffers
  *  holding a copy of the numbl tensor's data. A complex-typed param
  *  always gets an `imag` lane (zeros for a real value), since the
  *  emitted code reads it unconditionally. */
@@ -315,7 +313,7 @@ export function unmarshalTensorOutput(
  *
  *  Real / logical scalars ride the `double` ABI, so koffi hands us a
  *  JS number (logical coerces to `Boolean`). Complex scalars ride the
- *  `mtoc2_cscalar_t` struct, so koffi hands us a `{re, im}` object,
+ *  `jit_cscalar_t` struct, so koffi hands us a `{re, im}` object,
  *  which becomes a `RuntimeComplexNumber`. */
 export function unmarshalScalarOutput(
   v: unknown,

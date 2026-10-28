@@ -12,12 +12,12 @@
 % HYPOTHESIZED CAUSE: src/numbl-core/jit/builtins/defs/shape/eye.ts emits
 % raw `Math.trunc(arg)` / `(long)(arg)` for dynamic dims, with NO runtime
 % validation. zeros/ones were fixed to route dynamic dims through
-% `mtoc2_check_dim` (errors on non-integer, _construct.ts CHECK_DIM_SNIPPET);
+% `jit_check_dim` (errors on non-integer, _construct.ts CHECK_DIM_SNIPPET);
 % eye was not given the same guard, so it diverges from the interpreter's
 % validateDim (array-construction.ts).
 %
 % JIT ENGAGEMENT: CONFIRMED. opt2 --dump-c call site is
-%   mtoc2_eye_rect((long)(n), 3L)  (no mtoc2_check_dim wrapper).
+%   jit_eye_rect((long)(n), 3L)  (no jit_check_dim wrapper).
 function s = f(vals, k)
   n = vals(k);
   m = eye(n, 3);

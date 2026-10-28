@@ -1,5 +1,5 @@
 import type { Builtin } from "../../registry.js";
-import { mtoc2_cdiv_mixed } from "../../runtime/snippets.gen.js";
+import { jit_cdiv_mixed } from "../../runtime/snippets.gen.js";
 import { defineElemwiseRealBinary, signQuot } from "./_elemwise.js";
 
 export const rdivide: Builtin = defineElemwiseRealBinary({
@@ -12,7 +12,7 @@ export const rdivide: Builtin = defineElemwiseRealBinary({
   // Complex scalar `/` routes through the runtime helper (Smith's
   // algorithm, numbl's signed-Inf edges, MATLAB's mixed real/complex
   // rule). The real-typed scalar path keeps the bare `/`.
-  complexFold: mtoc2_cdiv_mixed,
-  complexScalarExpr: (a, b) => `mtoc2_cdiv_mixed(${a}, ${b})`,
-  complexRuntimeDeps: ["mtoc2_cdiv"],
+  complexFold: jit_cdiv_mixed,
+  complexScalarExpr: (a, b) => `jit_cdiv_mixed(${a}, ${b})`,
+  complexRuntimeDeps: ["jit_cdiv"],
 });

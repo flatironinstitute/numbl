@@ -2,7 +2,7 @@
 // in JS. Used by `emitJs` for the `disp` scalar path and (later) by
 // the interpreter via the re-export in `snippets.gen.ts`.
 
-export function mtoc2_format_double(x) {
+export function jit_format_double(x) {
   if (Number.isNaN(x)) return "NaN";
   // MATLAB spells these Inf / -Inf (matches the interpreter's formatNumber).
   if (x === Infinity) return "Inf";

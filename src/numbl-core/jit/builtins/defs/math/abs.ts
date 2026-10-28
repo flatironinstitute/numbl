@@ -82,12 +82,12 @@ export const abs: Builtin = {
     const { argsC, argTypes, useRuntime } = args;
     const a = argTypes[0] as NumericType;
     if (a.isComplex) {
-      useRuntime("mtoc2_cscalar");
+      useRuntime("jit_cscalar");
       if (isMultiElement(a)) {
-        useRuntime("mtoc2_tensor_unary_complex_math");
-        return `mtoc2_tensor_abs_complex(${argsC[0]})`;
+        useRuntime("jit_tensor_unary_complex_math");
+        return `jit_tensor_abs_complex(${argsC[0]})`;
       }
-      return `mtoc2_cabs(${argsC[0]})`;
+      return `jit_cabs(${argsC[0]})`;
     }
     return requireEmitC(absReal)(args);
   },
@@ -96,12 +96,12 @@ export const abs: Builtin = {
     const a = argTypes[0] as NumericType;
     if (a.isComplex) {
       if (isMultiElement(a)) {
-        useRuntime("mtoc2_tensor_unary_complex_math");
-        useRuntime("mtoc2_cscalar");
-        return `mtoc2_tensor_abs_complex(${argsJs[0]})`;
+        useRuntime("jit_tensor_unary_complex_math");
+        useRuntime("jit_cscalar");
+        return `jit_tensor_abs_complex(${argsJs[0]})`;
       }
-      useRuntime("mtoc2_cscalar");
-      return `mtoc2_cabs(${argsJs[0]})`;
+      useRuntime("jit_cscalar");
+      return `jit_cabs(${argsJs[0]})`;
     }
     return requireEmitJs(absReal)(args);
   },

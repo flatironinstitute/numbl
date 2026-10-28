@@ -12,7 +12,7 @@
  * builds the base `Var` IR node.
  *
  * Adapted from mtoc's `src/lowering/indexResolve.ts`, with the
- * char-tensor / complex / scalar-base branches dropped — mtoc2 v1
+ * char-tensor / complex / scalar-base branches dropped — the JIT
  * only indexes real-double multi-element tensors.
  */
 

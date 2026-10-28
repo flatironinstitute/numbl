@@ -1,4 +1,4 @@
-/* mtoc2 runtime helper: `cat(dim, A, B, ...)` — concatenate N tensors
+/* JIT runtime helper: `cat(dim, A, B, ...)` — concatenate N tensors
  * along axis `dim` (1-based, like MATLAB / numbl). dim==1 means
  * vertical (rows), dim==2 means horizontal (cols), dim>=3 grows a new
  * outer axis.
@@ -11,7 +11,7 @@
  *
  * Args travel through a small tagged-arg struct so a single helper can
  * accept a mix of scalars and tensors. Codegen builds the array of
- * `mtoc2_cat_arg_t` values as a C99 compound literal at the call site.
+ * `jit_cat_arg_t` values as a C99 compound literal at the call site.
  *
  * Result is freshly owned. The `*_complex` sibling carries both
  * lanes (scalars split into `(re, im)`; tensors with `imag == NULL`
@@ -28,11 +28,11 @@ typedef struct {
   /* Valid when kind == 1. */
   double scalar;
   /* Valid when kind == 0. */
-  mtoc2_tensor_t tensor;
-} mtoc2_cat_arg_t;
+  jit_tensor_t tensor;
+} jit_cat_arg_t;
 
-static mtoc2_tensor_t mtoc2_tensor_cat(long dim, int nin,
-                                       const mtoc2_cat_arg_t *xs) {
+static jit_tensor_t jit_tensor_cat(long dim, int nin,
+                                       const jit_cat_arg_t *xs) {
   if (dim < 1) {
     fprintf(stderr, "C-JIT: cat dim %ld must be >= 1\n", dim);
     abort();
@@ -54,13 +54,13 @@ static mtoc2_tensor_t mtoc2_tensor_cat(long dim, int nin,
     }
   }
   int ndim = maxIn;
-  if (ndim > MTOC2_MAX_NDIM) {
+  if (ndim > JIT_MAX_NDIM) {
     fprintf(stderr,
-      "C-JIT: cat output ndim %d exceeds %d\n", ndim, MTOC2_MAX_NDIM);
+      "C-JIT: cat output ndim %d exceeds %d\n", ndim, JIT_MAX_NDIM);
     abort();
   }
 
-  long padDims[256][MTOC2_MAX_NDIM];
+  long padDims[256][JIT_MAX_NDIM];
   long padTotal[256];
   const double *padReal[256];
   int keep[256];
@@ -70,7 +70,7 @@ static mtoc2_tensor_t mtoc2_tensor_cat(long dim, int nin,
       padReal[i] = &xs[i].scalar;
       padTotal[i] = 1;
     } else {
-      const mtoc2_tensor_t *t = &xs[i].tensor;
+      const jit_tensor_t *t = &xs[i].tensor;
       long tot = 1;
       for (int d = 0; d < ndim; d++) {
         long s = d < t->ndim ? t->dims[d] : 1;
@@ -96,7 +96,7 @@ static mtoc2_tensor_t mtoc2_tensor_cat(long dim, int nin,
     /* All inputs are empty (or there are no inputs at all). Return the
      * canonical empty `[0, 0]` tensor. */
     long zeros[2] = {0, 0};
-    return mtoc2_tensor_alloc_nd(2, zeros);
+    return jit_tensor_alloc_nd(2, zeros);
   }
 
   /* Step 3 — decide which empty inputs to keep (those whose non-cat
@@ -124,7 +124,7 @@ static mtoc2_tensor_t mtoc2_tensor_cat(long dim, int nin,
   }
 
   /* Step 4 — compute result shape. */
-  long resultDims[MTOC2_MAX_NDIM];
+  long resultDims[JIT_MAX_NDIM];
   for (int d = 0; d < ndim; d++) resultDims[d] = padDims[refIdx][d];
   long catSum = 0;
   for (int i = 0; i < nin; i++) {
@@ -132,7 +132,7 @@ static mtoc2_tensor_t mtoc2_tensor_cat(long dim, int nin,
   }
   resultDims[dimIdx] = catSum;
 
-  mtoc2_tensor_t out = mtoc2_tensor_alloc_nd(ndim, resultDims);
+  jit_tensor_t out = jit_tensor_alloc_nd(ndim, resultDims);
   long resultTotal = 1;
   for (int d = 0; d < ndim; d++) resultTotal *= resultDims[d];
   if (resultTotal == 0) return out;
@@ -166,16 +166,16 @@ typedef struct {
   /* 0 = tensor, 1 = scalar. */
   int kind;
   /* Valid when kind == 1: a single complex scalar split into two
-   * doubles to match the rest of mtoc2's complex-arg encoding (real
+   * doubles to match the rest of the JIT's complex-arg encoding (real
    * args at the source level get `im = 0` at the codegen-emit site). */
   double scalar_re;
   double scalar_im;
   /* Valid when kind == 0. */
-  mtoc2_tensor_t tensor;
-} mtoc2_cat_complex_arg_t;
+  jit_tensor_t tensor;
+} jit_cat_complex_arg_t;
 
-static mtoc2_tensor_t mtoc2_tensor_cat_complex(
-    long dim, int nin, const mtoc2_cat_complex_arg_t *xs) {
+static jit_tensor_t jit_tensor_cat_complex(
+    long dim, int nin, const jit_cat_complex_arg_t *xs) {
   if (dim < 1) {
     fprintf(stderr, "C-JIT: cat_complex dim %ld must be >= 1\n", dim);
     abort();
@@ -194,13 +194,13 @@ static mtoc2_tensor_t mtoc2_tensor_cat_complex(
     }
   }
   int ndim = maxIn;
-  if (ndim > MTOC2_MAX_NDIM) {
+  if (ndim > JIT_MAX_NDIM) {
     fprintf(stderr,
-      "C-JIT: cat_complex output ndim %d exceeds %d\n", ndim, MTOC2_MAX_NDIM);
+      "C-JIT: cat_complex output ndim %d exceeds %d\n", ndim, JIT_MAX_NDIM);
     abort();
   }
 
-  long padDims[256][MTOC2_MAX_NDIM];
+  long padDims[256][JIT_MAX_NDIM];
   long padTotal[256];
   const double *padReal[256];
   const double *padImag[256];
@@ -212,7 +212,7 @@ static mtoc2_tensor_t mtoc2_tensor_cat_complex(
       padImag[i] = &xs[i].scalar_im;
       padTotal[i] = 1;
     } else {
-      const mtoc2_tensor_t *t = &xs[i].tensor;
+      const jit_tensor_t *t = &xs[i].tensor;
       long tot = 1;
       for (int d = 0; d < ndim; d++) {
         long s = d < t->ndim ? t->dims[d] : 1;
@@ -233,7 +233,7 @@ static mtoc2_tensor_t mtoc2_tensor_cat_complex(
 
   if (refIdx == -1) {
     long zeros[2] = {0, 0};
-    return mtoc2_tensor_alloc_nd_complex(2, zeros);
+    return jit_tensor_alloc_nd_complex(2, zeros);
   }
 
   for (int i = 0; i < nin; i++) {
@@ -257,7 +257,7 @@ static mtoc2_tensor_t mtoc2_tensor_cat_complex(
     }
   }
 
-  long resultDims[MTOC2_MAX_NDIM];
+  long resultDims[JIT_MAX_NDIM];
   for (int d = 0; d < ndim; d++) resultDims[d] = padDims[refIdx][d];
   long catSum = 0;
   for (int i = 0; i < nin; i++) {
@@ -265,7 +265,7 @@ static mtoc2_tensor_t mtoc2_tensor_cat_complex(
   }
   resultDims[dimIdx] = catSum;
 
-  mtoc2_tensor_t out = mtoc2_tensor_alloc_nd_complex(ndim, resultDims);
+  jit_tensor_t out = jit_tensor_alloc_nd_complex(ndim, resultDims);
   long resultTotal = 1;
   for (int d = 0; d < ndim; d++) resultTotal *= resultDims[d];
   if (resultTotal == 0) return out;

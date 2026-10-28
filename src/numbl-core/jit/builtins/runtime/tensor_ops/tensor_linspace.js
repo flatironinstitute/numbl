@@ -1,11 +1,11 @@
 // JS sibling of `tensor_linspace.h`. Build a 1×n row tensor of n
 // linearly-spaced values from `a` to `b`.
 
-import { mtoc2_tensor_alloc } from "../tensor/tensor_alloc.js";
+import { jit_tensor_alloc } from "../tensor/tensor_alloc.js";
 
-export function mtoc2_tensor_linspace(a, b, n) {
+export function jit_tensor_linspace(a, b, n) {
   if (n < 0) n = 0;
-  const out = mtoc2_tensor_alloc(1, n);
+  const out = jit_tensor_alloc(1, n);
   if (n === 0) return out;
   if (n === 1) {
     out.data[0] = b;

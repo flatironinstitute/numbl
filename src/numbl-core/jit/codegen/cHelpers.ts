@@ -20,23 +20,23 @@ import {
   type Type,
 } from "../lowering/types.js";
 
-/** C type for any mtoc2 IR-typed value: tensor / string / char →
+/** C type for any JIT IR-typed value: tensor / string / char →
  *  per-kind runtime struct; struct / class / handle → per-shape
  *  generated typedef; everything else (scalar real numeric) → `double`. */
 export function cTypeFor(t: Type): string {
-  if (isMultiElement(t)) return "mtoc2_tensor_t";
+  if (isMultiElement(t)) return "jit_tensor_t";
   if (isHandle(t)) return handleTypedefName(t);
   if (t.kind === "Struct") return structTypedefName(t);
   if (t.kind === "Class") return classTypedefName(t);
   if (t.kind === "Cell") return cellTypedefName(t);
-  if (t.kind === "String") return "mtoc2_string_t";
-  if (t.kind === "Char") return "mtoc2_char_tensor_t";
+  if (t.kind === "String") return "jit_string_t";
+  if (t.kind === "Char") return "jit_char_tensor_t";
   if (t.kind === "Numeric" && t.isComplex) return "double _Complex";
   return "double";
 }
 
 /** Per-owned-kind helper-name family. Tensors / strings / chars use
- *  the global `mtoc2_*` runtime snippet names; structs, classes, and
+ *  the global `jit_*` runtime snippet names; structs, classes, and
  *  handles use their program-emitted `<typedef>_*` family. */
 export interface OwnedHelpers {
   empty: string;
@@ -60,28 +60,28 @@ export function ownedHelpersFor(t: Type): OwnedHelpers | null {
     // to know how many lanes to memcpy.
     const isComplex = t.kind === "Numeric" && t.isComplex;
     return {
-      empty: "mtoc2_tensor_empty",
-      assign: "mtoc2_tensor_assign",
-      copy: isComplex ? "mtoc2_tensor_copy_complex" : "mtoc2_tensor_copy",
-      free: "mtoc2_tensor_free",
+      empty: "jit_tensor_empty",
+      assign: "jit_tensor_assign",
+      copy: isComplex ? "jit_tensor_copy_complex" : "jit_tensor_copy",
+      free: "jit_tensor_free",
       isRuntime: true,
     };
   }
   if (t.kind === "String") {
     return {
-      empty: "mtoc2_string_empty",
-      assign: "mtoc2_string_assign",
-      copy: "mtoc2_string_copy",
-      free: "mtoc2_string_free",
+      empty: "jit_string_empty",
+      assign: "jit_string_assign",
+      copy: "jit_string_copy",
+      free: "jit_string_free",
       isRuntime: true,
     };
   }
   if (t.kind === "Char") {
     return {
-      empty: "mtoc2_char_tensor_empty",
-      assign: "mtoc2_char_tensor_assign",
-      copy: "mtoc2_char_tensor_copy",
-      free: "mtoc2_char_tensor_free",
+      empty: "jit_char_tensor_empty",
+      assign: "jit_char_tensor_assign",
+      copy: "jit_char_tensor_copy",
+      free: "jit_char_tensor_free",
       isRuntime: true,
     };
   }
@@ -161,35 +161,35 @@ export function emitDispCallC(
     // trailing newline; pair it with an explicit newline via a comma
     // expression so the value form has the same statement shape as the
     // other helpers (one expression, prints + newline). The newline goes
-    // through mtoc2_stdout — NOT raw printf — so it shares the host-write
+    // through jit_stdout — NOT raw printf — so it shares the host-write
     // channel with the cell content (a raw printf would flush separately
     // and float to the front of captured --opt 2 output).
-    useRuntime("mtoc2_host_output");
-    return `(${cellTypedefName(t)}_disp(${valueC}), mtoc2_stdout_s("\\n"))`;
+    useRuntime("jit_host_output");
+    return `(${cellTypedefName(t)}_disp(${valueC}), jit_stdout_s("\\n"))`;
   }
   if (t.kind === "String") {
-    useRuntime("mtoc2_disp_text");
-    return `mtoc2_disp_text(mtoc2_text_from_string(${valueC}))`;
+    useRuntime("jit_disp_text");
+    return `jit_disp_text(jit_text_from_string(${valueC}))`;
   }
   if (t.kind === "Char") {
-    useRuntime("mtoc2_disp_text");
-    return `mtoc2_disp_text(mtoc2_text_from_char_tensor(${valueC}))`;
+    useRuntime("jit_disp_text");
+    return `jit_disp_text(jit_text_from_char_tensor(${valueC}))`;
   }
   if (isNumeric(t) && t.isComplex && isScalar(t)) {
-    useRuntime("mtoc2_disp_complex");
-    return `mtoc2_disp_complex(${valueC})`;
+    useRuntime("jit_disp_complex");
+    return `jit_disp_complex(${valueC})`;
   }
   if (isNumeric(t) && t.isComplex && !isScalar(t)) {
-    useRuntime("mtoc2_disp_tensor_complex");
-    return `mtoc2_disp_tensor_complex(${valueC})`;
+    useRuntime("jit_disp_tensor_complex");
+    return `jit_disp_tensor_complex(${valueC})`;
   }
   if (isNumeric(t) && !isScalarRealNumeric(t)) {
-    useRuntime("mtoc2_disp_tensor");
-    return `mtoc2_disp_tensor(${valueC})`;
+    useRuntime("jit_disp_tensor");
+    return `jit_disp_tensor(${valueC})`;
   }
   if (isScalarRealNumeric(t)) {
-    useRuntime("mtoc2_disp_double");
-    return `mtoc2_disp_double(${valueC})`;
+    useRuntime("jit_disp_double");
+    return `jit_disp_double(${valueC})`;
   }
   return null;
 }

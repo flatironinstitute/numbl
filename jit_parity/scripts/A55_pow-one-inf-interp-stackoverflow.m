@@ -2,7 +2,7 @@
 % opt0 (interp, before fix): RuntimeError "Maximum call stack size exceeded"
 %   <-- DIVERGED (infinite recursion in binop)
 % opt1 (JS-JIT): NaN
-% opt2 (C-JIT): NaN (mtoc2_pow_real matches Math.pow)
+% opt2 (C-JIT): NaN (jit_pow_real matches Math.pow)
 % DIVERGING MODE: opt0 only (crash).
 %
 % Cause: binop's numeric fast path computed Math.pow(1, Inf) = NaN and broke

@@ -1,6 +1,6 @@
 // JS sibling of `tensor_meshgrid.h`. MATLAB-style coordinate grid.
 
-import { mtoc2_tensor_alloc } from "../tensor/tensor_alloc.js";
+import { jit_tensor_alloc } from "../tensor/tensor_alloc.js";
 
 function numel(t) {
   let n = 1;
@@ -8,10 +8,10 @@ function numel(t) {
   return n;
 }
 
-export function mtoc2_meshgrid_x(x, y) {
+export function jit_meshgrid_x(x, y) {
   const M = numel(x);
   const N = numel(y);
-  const X = mtoc2_tensor_alloc(N, M);
+  const X = jit_tensor_alloc(N, M);
   for (let j = 0; j < M; j++) {
     const xj = x.data[j];
     for (let i = 0; i < N; i++) X.data[i + j * N] = xj;
@@ -19,11 +19,11 @@ export function mtoc2_meshgrid_x(x, y) {
   return X;
 }
 
-export function mtoc2_meshgrid(x, y) {
+export function jit_meshgrid(x, y) {
   const M = numel(x);
   const N = numel(y);
-  const X = mtoc2_tensor_alloc(N, M);
-  const Y = mtoc2_tensor_alloc(N, M);
+  const X = jit_tensor_alloc(N, M);
+  const Y = jit_tensor_alloc(N, M);
   for (let j = 0; j < M; j++) {
     const xj = x.data[j];
     for (let i = 0; i < N; i++) {
@@ -34,6 +34,6 @@ export function mtoc2_meshgrid(x, y) {
   return { X, Y };
 }
 
-export function mtoc2_meshgrid_1arg(x) {
-  return mtoc2_meshgrid(x, x);
+export function jit_meshgrid_1arg(x) {
+  return jit_meshgrid(x, x);
 }

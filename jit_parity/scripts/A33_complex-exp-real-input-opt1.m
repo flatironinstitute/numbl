@@ -6,7 +6,7 @@
 % Also reproduces with a COMPUTED complex value:  z = 720+1i; z = z - 1i; exp(z)
 %
 % DIVERGING MODE: opt1 (JS-JIT) vs opt0/opt2.
-% CAUSE: mtoc2_cexp = exp(re)*cos(im) + i*exp(re)*sin(im). exp(720)=Inf, and the
+% CAUSE: jit_cexp = exp(re)*cos(im) + i*exp(re)*sin(im). exp(720)=Inf, and the
 %   imag lane is Inf*sin(0)=Inf*0=NaN. The interpreter special-cases the real
 %   axis and C99 cexp handles im=0 per Annex G, both giving clean Infinity.
 % JIT ENGAGEMENT: confirmed (cexp in --dump-c, c_bytes ~10.5k).

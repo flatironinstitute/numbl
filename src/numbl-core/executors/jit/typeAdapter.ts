@@ -1,15 +1,15 @@
 /**
- * Adapter: numbl `JitType` → mtoc2 `Type`.
+ * Adapter: numbl `JitType` → JIT `Type`.
  *
- * Called by the mtoc2 JIT executor at `propose()` time. Numbl observes
+ * Called by the JIT executor at `propose()` time. Numbl observes
  * each argument's `JitType` from the live runtime value (via
- * `inferJitType`); the adapter translates it into the matching mtoc2
+ * `inferJitType`); the adapter translates it into the matching the JIT
  * Type so `compileSpec` can specialize on the same shape information.
  *
  * Two design rules:
  *
  * 1. **Always strip exact.** Runtime-observed scalars must NOT shard
- *    mtoc2's spec cache by value. We never propagate `exact` through
+ *    the JIT's spec cache by value. We never propagate `exact` through
  *    the adapter — `compileSpec` calls `withoutExact` again
  *    defensively, but doing it here makes the spec key wider one step
  *    earlier.
@@ -35,8 +35,8 @@ import {
   type DimInfo,
 } from "../../jit/index.js";
 
-/** Translate a numbl `JitType` to the matching mtoc2 `Type`.
- *  Returns `null` for kinds the mtoc2 JIT path doesn't accept (yet). */
+/** Translate a numbl `JitType` to the matching JIT `Type`.
+ *  Returns `null` for kinds the JIT path doesn't accept (yet). */
 export function jitTypeToCompilerType(jt: JitType): Type | null {
   switch (jt.kind) {
     case "number":

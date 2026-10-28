@@ -4,12 +4,12 @@
 // `transpose(conj(z))` upstream, so this helper isn't responsible
 // for negating the imag lane.
 
-import { mtoc2_tensor_alloc_complex } from "../tensor/tensor_alloc_complex.js";
+import { jit_tensor_alloc_complex } from "../tensor/tensor_alloc_complex.js";
 
-export function mtoc2_tensor_transpose_complex(a) {
+export function jit_tensor_transpose_complex(a) {
   const m = a.shape[0];
   const n = a.shape[1];
-  const r = mtoc2_tensor_alloc_complex(n, m);
+  const r = jit_tensor_alloc_complex(n, m);
   const aim = a.imag;
   for (let sc = 0; sc < n; sc++) {
     for (let sr = 0; sr < m; sr++) {

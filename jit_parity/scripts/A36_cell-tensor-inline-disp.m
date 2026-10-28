@@ -6,11 +6,11 @@
 % opt2 (C-JIT):   {   3.1416   3.6416}
 % DIVERGING MODE: opt1 only (opt0==opt2).
 %
-% Cause: cell.js mtoc2__format_tensor() formats each element via
-% mtoc2__format_scalar() which returns String(v) for non-integers
+% Cause: cell.js jit__format_tensor() formats each element via
+% jit__format_scalar() which returns String(v) for non-integers
 % (full JS precision) instead of the toPrecision(5) formatNumber rule.
 % The C path's emitSlotInlineDisp tensor branch uses
-% mtoc2_disp_tensor_inline (correct), so C matches the interpreter here.
+% jit_disp_tensor_inline (correct), so C matches the interpreter here.
 % JIT engagement: CONFIRMED (assert_jit c passes; jsgen=1, cgen=1).
 function out = f(n)
   %!numbl:assert_jit c

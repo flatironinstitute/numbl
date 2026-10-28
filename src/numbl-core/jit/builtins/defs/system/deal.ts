@@ -7,13 +7,13 @@
  *
  * Numbl's rule (the dialect oracle): single-input broadcasts to any
  * `nargout >= 1`; otherwise `args.length` must equal `nargout` or
- * it's a runtime error. mtoc2 lifts the equality check into
+ * it's a runtime error. The JIT lifts the equality check into
  * `transfer` so the mismatch is a type-time error.
  *
  * The result types are the input types as-is. The C backend still
  * has to emit `_copy(...)` for owned types to satisfy the
  * "freshly-owned at every consume site" invariant; the JS backend
- * uses `mtoc2_deep_clone` for the same reason.
+ * uses `jit_deep_clone` for the same reason.
  */
 
 import { TypeError, UnsupportedConstruct } from "../../../lowering/errors.js";
@@ -45,25 +45,25 @@ function ownedHelpers(
     // Multi-element tensor.
     const isComplex = t.isComplex;
     return {
-      copy: isComplex ? "mtoc2_tensor_copy_complex" : "mtoc2_tensor_copy",
-      assign: "mtoc2_tensor_assign",
-      cType: "mtoc2_tensor_t",
+      copy: isComplex ? "jit_tensor_copy_complex" : "jit_tensor_copy",
+      assign: "jit_tensor_assign",
+      cType: "jit_tensor_t",
       isRuntime: true,
     };
   }
   if (t.kind === "String") {
     return {
-      copy: "mtoc2_string_copy",
-      assign: "mtoc2_string_assign",
-      cType: "mtoc2_string_t",
+      copy: "jit_string_copy",
+      assign: "jit_string_assign",
+      cType: "jit_string_t",
       isRuntime: true,
     };
   }
   if (t.kind === "Char") {
     return {
-      copy: "mtoc2_char_tensor_copy",
-      assign: "mtoc2_char_tensor_assign",
-      cType: "mtoc2_char_tensor_t",
+      copy: "jit_char_tensor_copy",
+      assign: "jit_char_tensor_assign",
+      cType: "jit_char_tensor_t",
       isRuntime: true,
     };
   }
@@ -178,7 +178,7 @@ export const deal: Builtin = {
           const srcTy = argTypes[slotIdx[i]];
           const argC = argsC[slotIdx[i]];
           const h = ownedHelpers(srcTy);
-          const tmp = `_mtoc2_deal_t${i}`;
+          const tmp = `_jit_deal_t${i}`;
           if (h !== null) {
             if (h.isRuntime) {
               useRuntime(h.copy);
@@ -212,7 +212,7 @@ export const deal: Builtin = {
 
     // Value position (`a = deal(x)` / `disp(deal(x))`): return an
     // expression. Owned types wrap in `_copy` so the result is a
-    // freshly-owned tensor per mtoc2's invariant; scalars pass
+    // freshly-owned tensor per the JIT's invariant; scalars pass
     // through bare.
     const srcTy = argTypes[slotIdx[0]];
     const h = ownedHelpers(srcTy);
@@ -228,8 +228,8 @@ export const deal: Builtin = {
     const cloneIfOwned = (i: number): string => {
       const srcTy = argTypes[slotIdx[i]];
       if (isOwned(srcTy)) {
-        useRuntime("mtoc2_deep_clone");
-        return `mtoc2_deep_clone(${argsJs[slotIdx[i]]})`;
+        useRuntime("jit_deep_clone");
+        return `jit_deep_clone(${argsJs[slotIdx[i]]})`;
       }
       return argsJs[slotIdx[i]];
     };

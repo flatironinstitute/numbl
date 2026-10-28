@@ -1,11 +1,11 @@
-/* mtoc2 runtime helpers: vector norms.
+/* JIT runtime helpers: vector norms.
  *
- * `mtoc2_norm2_real(a)` / `mtoc2_norm2_complex(a)` — the 2-norm.
+ * `jit_norm2_real(a)` / `jit_norm2_complex(a)` — the 2-norm.
  * Kept as a separate, simpler path because it's by far the most
  * common case (and the codegen path doesn't need the per-element
  * `pow` of the general helper).
  *
- * `mtoc2_norm_p_real(a, p)` / `mtoc2_norm_p_complex(a, p)` — the
+ * `jit_norm_p_real(a, p)` / `jit_norm_p_complex(a, p)` — the
  * `norm(v, p)` form. `p` is a double whose value carries the order:
  *   - finite p>0 → `(sum |x|^p)^(1/p)`
  *   - +Inf       → `max |x|`
@@ -21,7 +21,7 @@
 
 #include <math.h>
 
-static double mtoc2_norm2_real(mtoc2_tensor_t a) {
+static double jit_norm2_real(jit_tensor_t a) {
   long n = 1;
   for (int i = 0; i < a.ndim; i++) n *= a.dims[i];
   double acc = 0.0;
@@ -32,7 +32,7 @@ static double mtoc2_norm2_real(mtoc2_tensor_t a) {
   return sqrt(acc);
 }
 
-static double mtoc2_norm2_complex(mtoc2_tensor_t a) {
+static double jit_norm2_complex(jit_tensor_t a) {
   long n = 1;
   for (int i = 0; i < a.ndim; i++) n *= a.dims[i];
   double acc = 0.0;
@@ -44,7 +44,7 @@ static double mtoc2_norm2_complex(mtoc2_tensor_t a) {
   return sqrt(acc);
 }
 
-static double mtoc2_norm_p_real(mtoc2_tensor_t a, double p) {
+static double jit_norm_p_real(jit_tensor_t a, double p) {
   long n = 1;
   for (int i = 0; i < a.ndim; i++) n *= a.dims[i];
   if (n == 0) return 0.0;
@@ -69,13 +69,13 @@ static double mtoc2_norm_p_real(mtoc2_tensor_t a, double p) {
     for (long i = 0; i < n; i++) acc += fabs(a.real[i]);
     return acc;
   }
-  if (p == 2.0) return mtoc2_norm2_real(a);
+  if (p == 2.0) return jit_norm2_real(a);
   double acc = 0.0;
   for (long i = 0; i < n; i++) acc += pow(fabs(a.real[i]), p);
   return pow(acc, 1.0 / p);
 }
 
-static double mtoc2_norm_p_complex(mtoc2_tensor_t a, double p) {
+static double jit_norm_p_complex(jit_tensor_t a, double p) {
   long n = 1;
   for (int i = 0; i < a.ndim; i++) n *= a.dims[i];
   if (n == 0) return 0.0;
@@ -95,7 +95,7 @@ static double mtoc2_norm_p_complex(mtoc2_tensor_t a, double p) {
     }
     return m;
   }
-  if (p == 2.0) return mtoc2_norm2_complex(a);
+  if (p == 2.0) return jit_norm2_complex(a);
   if (p == 1.0) {
     double acc = 0.0;
     for (long i = 0; i < n; i++) acc += hypot(a.real[i], a.imag[i]);

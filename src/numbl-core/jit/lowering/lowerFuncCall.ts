@@ -13,7 +13,7 @@
  *   5. Zero-arity builtin paren-form (`pi()`, `Inf()`).
  *   6. Numbl resolver verdict — builtin / user-function / class
  *      method.
- *   7. Fallback to mtoc2's own builtin registry for plot-drawing
+ *   7. Fallback to the JIT's own builtin registry for plot-drawing
  *      builtins numbl wires through runtime dispatch.
  */
 
@@ -23,7 +23,7 @@ import type { IRExpr } from "./ir.js";
 import {
   DIM_ONE,
   EXACT_ARRAY_MAX_ELEMENTS,
-  MTOC2_MAX_NDIM,
+  JIT_MAX_NDIM,
   cellTuple,
   cellUniform,
   classMethodSpecSource,
@@ -113,7 +113,7 @@ export function lowerFuncCall(
   }
   const argTypes = args.map(a => a.ty);
 
-  // Zero-arity mtoc2 builtins like `pi()` / `Inf()` / `NaN()`. Numbl
+  // Zero-arity JIT builtins like `pi()` / `Inf()` / `NaN()`. Numbl
   // resolves these through a separate constants table
   // (`BUILTIN_CONSTANTS`) not in `index.builtins`, so
   // `workspace.resolve` returns null. The bare-name read path in
@@ -151,7 +151,7 @@ export function lowerFuncCall(
     e.span
   );
   if (!target) {
-    // Fall back to mtoc2's builtin registry when numbl exposes the
+    // Fall back to the JIT's builtin registry when numbl exposes the
     // name via a non-index surface (e.g. plot drawing primitives like
     // `plot`/`surf`/`imagesc`/`bar`, which numbl wires through its
     // runtime dispatch rather than `index.builtins`). The
@@ -173,7 +173,7 @@ export function lowerFuncCall(
   }
   switch (target.kind) {
     case "builtin": {
-      // Numbl agreed it's a builtin; mtoc2 still requires the builtin
+      // Numbl agreed it's a builtin; the JIT still requires the builtin
       // to be registered in its own table.
       const b = getBuiltin(e.name);
       if (!b) {
@@ -531,9 +531,9 @@ function lowerCellConstructor(
       span: e.span,
     };
   }
-  if (e.args.length > MTOC2_MAX_NDIM) {
+  if (e.args.length > JIT_MAX_NDIM) {
     throw new UnsupportedConstruct(
-      `'cell' accepts up to ${MTOC2_MAX_NDIM} dim arguments (got ${e.args.length})`,
+      `'cell' accepts up to ${JIT_MAX_NDIM} dim arguments (got ${e.args.length})`,
       e.span
     );
   }

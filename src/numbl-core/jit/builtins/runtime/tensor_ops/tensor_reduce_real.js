@@ -7,7 +7,7 @@
 // Output shape rule for `_dim`: input dims with `dims[dim-1] = 1`,
 // then trailing singletons stripped subject to a 2-axis floor.
 
-import { mtoc2_tensor_alloc_nd } from "../tensor/tensor_alloc_nd.js";
+import { jit_tensor_alloc_nd } from "../tensor/tensor_alloc_nd.js";
 
 function squeeze_trailing(dims) {
   while (dims.length > 2 && dims[dims.length - 1] === 1) dims.pop();
@@ -39,7 +39,7 @@ function accum_dim(t, dim, isProd, isMean) {
     // element unchanged. Return a same-shape COPY of the data (the C
     // kernel memcpy's here too); allocating without copying left a
     // zero-filled tensor — the original opt1 bug.
-    const out = mtoc2_tensor_alloc_nd(t.shape.length, t.shape.slice());
+    const out = jit_tensor_alloc_nd(t.shape.length, t.shape.slice());
     out.data.set(t.data);
     return out;
   }
@@ -54,7 +54,7 @@ function accum_dim(t, dim, isProd, isMean) {
   // Re-squeeze after the in-place axis update (the original `out_dims
   // = a.shape.slice(); out_dims[dimIdx] = 1` then squeeze pattern).
   squeeze_trailing(outDims);
-  const out = mtoc2_tensor_alloc_nd(outDims.length, outDims);
+  const out = jit_tensor_alloc_nd(outDims.length, outDims);
   const x = t.data;
   for (let aft = 0; aft < after; aft++) {
     for (let bef = 0; bef < before; bef++) {
@@ -107,7 +107,7 @@ function minmax_all(t, op /* "min" | "max" */) {
 function minmax_dim(t, dim, op) {
   if (dim < 1) throw new Error(`reducer _dim: dim must be >= 1 (got ${dim})`);
   if (dim > t.shape.length) {
-    const out = mtoc2_tensor_alloc_nd(t.shape.length, t.shape.slice());
+    const out = jit_tensor_alloc_nd(t.shape.length, t.shape.slice());
     out.data.set(t.data);
     return out;
   }
@@ -120,7 +120,7 @@ function minmax_dim(t, dim, op) {
   const outDims = t.shape.slice();
   outDims[dimIdx] = 1;
   squeeze_trailing(outDims);
-  const out = mtoc2_tensor_alloc_nd(outDims.length, outDims);
+  const out = jit_tensor_alloc_nd(outDims.length, outDims);
   for (let aft = 0; aft < after; aft++) {
     for (let bef = 0; bef < before; bef++) {
       const base = aft * before * axis + bef;
@@ -155,7 +155,7 @@ function logical_dim(t, dim, emptyResult, shortPredicate) {
   if (dim > t.shape.length) {
     // No-op axis: emit a logical cast of the input (each element →
     // 1 if nonzero, 0 otherwise).
-    const out = mtoc2_tensor_alloc_nd(t.shape.length, t.shape.slice());
+    const out = jit_tensor_alloc_nd(t.shape.length, t.shape.slice());
     for (let i = 0; i < t.data.length; i++) {
       out.data[i] = t.data[i] !== 0 ? 1 : 0;
     }
@@ -170,7 +170,7 @@ function logical_dim(t, dim, emptyResult, shortPredicate) {
   const outDims = t.shape.slice();
   outDims[dimIdx] = 1;
   squeeze_trailing(outDims);
-  const out = mtoc2_tensor_alloc_nd(outDims.length, outDims);
+  const out = jit_tensor_alloc_nd(outDims.length, outDims);
   for (let aft = 0; aft < after; aft++) {
     for (let bef = 0; bef < before; bef++) {
       const base = aft * before * axis + bef;
@@ -188,19 +188,19 @@ function logical_dim(t, dim, emptyResult, shortPredicate) {
 }
 
 // ── Sum / prod / mean ───────────────────────────────────────────────
-export const mtoc2_sum_all = t => sum_all_seq(t.data);
-export const mtoc2_sum_dim = (t, d) => accum_dim(t, d, false, false);
-export const mtoc2_prod_all = t => prod_all_seq(t.data);
-export const mtoc2_prod_dim = (t, d) => accum_dim(t, d, true, false);
-export const mtoc2_mean_all = t =>
+export const jit_sum_all = t => sum_all_seq(t.data);
+export const jit_sum_dim = (t, d) => accum_dim(t, d, false, false);
+export const jit_prod_all = t => prod_all_seq(t.data);
+export const jit_prod_dim = (t, d) => accum_dim(t, d, true, false);
+export const jit_mean_all = t =>
   t.data.length === 0 ? NaN : sum_all_seq(t.data) / t.data.length;
-export const mtoc2_mean_dim = (t, d) => accum_dim(t, d, false, true);
+export const jit_mean_dim = (t, d) => accum_dim(t, d, false, true);
 
 // ── Min / max ───────────────────────────────────────────────────────────
-export const mtoc2_min_all = t => minmax_all(t, "min");
-export const mtoc2_min_dim = (t, d) => minmax_dim(t, d, "min");
-export const mtoc2_max_all = t => minmax_all(t, "max");
-export const mtoc2_max_dim = (t, d) => minmax_dim(t, d, "max");
+export const jit_min_all = t => minmax_all(t, "min");
+export const jit_min_dim = (t, d) => minmax_dim(t, d, "min");
+export const jit_max_all = t => minmax_all(t, "max");
+export const jit_max_dim = (t, d) => minmax_dim(t, d, "max");
 
 // ── Any / all ───────────────────────────────────────────────────────────
 // any: short-circuits on a non-NaN nonzero; emptyResult = 0. NaN is
@@ -209,9 +209,9 @@ export const mtoc2_max_dim = (t, d) => minmax_dim(t, d, "max");
 // (`all` needs no such guard: allShort tests `x === 0`, which NaN
 // already fails, so a NaN simply doesn't force all to false.)
 const anyShort = x => x !== 0 && x === x;
-export const mtoc2_any_all = t => logical_all(t, 0, anyShort);
-export const mtoc2_any_dim = (t, d) => logical_dim(t, d, 0, anyShort);
+export const jit_any_all = t => logical_all(t, 0, anyShort);
+export const jit_any_dim = (t, d) => logical_dim(t, d, 0, anyShort);
 // all: short-circuits on zero; emptyResult = 1.
 const allShort = x => x === 0;
-export const mtoc2_all_all = t => logical_all(t, 1, allShort);
-export const mtoc2_all_dim = (t, d) => logical_dim(t, d, 1, allShort);
+export const jit_all_all = t => logical_all(t, 1, allShort);
+export const jit_all_dim = (t, d) => logical_dim(t, d, 1, allShort);

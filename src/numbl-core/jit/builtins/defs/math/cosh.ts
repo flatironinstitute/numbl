@@ -8,5 +8,5 @@ export const cosh = defineUnaryRealMath({
   cFnReal: "cosh",
   jsFn: Math.cosh,
   signRule: () => "positive",
-  complex: { cFnComplex: "mtoc2_ccosh", jsFnComplex: cCosh },
+  complex: { cFnComplex: "jit_ccosh", jsFnComplex: cCosh },
 });

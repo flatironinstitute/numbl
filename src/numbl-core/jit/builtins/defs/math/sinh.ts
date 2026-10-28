@@ -8,5 +8,5 @@ export const sinh = defineUnaryRealMath({
   cFnReal: "sinh",
   jsFn: Math.sinh,
   signRule: t => t.sign,
-  complex: { cFnComplex: "mtoc2_csinh", jsFnComplex: cSinh },
+  complex: { cFnComplex: "jit_csinh", jsFnComplex: cSinh },
 });

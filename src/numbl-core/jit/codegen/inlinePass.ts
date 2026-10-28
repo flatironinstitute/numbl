@@ -4,7 +4,7 @@
  * producer.
  *
  * After ANF normalization every owned-producing tensor expression
- * lives in its own `_mtoc2_t<N>` temp. Without inlining, a chain
+ * lives in its own `_jit_t<N>` temp. Without inlining, a chain
  * like
  *
  *     _t8  = rx .^ 2

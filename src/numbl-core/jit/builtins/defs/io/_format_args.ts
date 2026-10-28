@@ -8,7 +8,7 @@ import {
   type Type,
 } from "../../../lowering/types.js";
 
-/** Validate that args at positions [from..) are legal `mtoc2_fprintf_arg_t`
+/** Validate that args at positions [from..) are legal `jit_fprintf_arg_t`
  *  slots — scalar real numeric, text, or real multi-element tensor.
  *  Throws TypeError / UnsupportedConstruct (no span — framework attaches
  *  via `withSpan`). Shared by `fprintf`, `error`, future `sprintf`. */
@@ -39,14 +39,14 @@ export function validateFormatArgs(
   }
 }
 
-/** `mtoc2_fprintf_arg_t.kind` tag values. Must stay in lockstep with
- *  the `MTOC2_FA_*` enum in `src/codegen/runtime/format_engine.h`. */
-const MTOC2_FA_DOUBLE = "MTOC2_FA_DOUBLE";
-const MTOC2_FA_TEXT = "MTOC2_FA_TEXT";
-const MTOC2_FA_TENSOR = "MTOC2_FA_TENSOR";
-const MTOC2_FA_CHAR = "MTOC2_FA_CHAR";
+/** `jit_fprintf_arg_t.kind` tag values. Must stay in lockstep with
+ *  the `JIT_FA_*` enum in `src/codegen/runtime/format_engine.h`. */
+const JIT_FA_DOUBLE = "JIT_FA_DOUBLE";
+const JIT_FA_TEXT = "JIT_FA_TEXT";
+const JIT_FA_TENSOR = "JIT_FA_TENSOR";
+const JIT_FA_CHAR = "JIT_FA_CHAR";
 
-/** Emit one `mtoc2_fprintf_arg_t` slot for `argsC[i]` typed `argTypes[i]`.
+/** Emit one `jit_fprintf_arg_t` slot for `argsC[i]` typed `argTypes[i]`.
  *  Used to build the compound-literal slot array for fprintf / error /
  *  sprintf call sites. ANF in the lowerer guarantees multi-element
  *  tensor args are bare Var lvalues (so `&c` is well-defined). */
@@ -57,36 +57,36 @@ export function emitFormatSlot(
   argIndex: number
 ): string {
   if (t.kind === "String") {
-    return `{.kind = ${MTOC2_FA_TEXT}, .u = {.t = mtoc2_text_from_string(${c})}}`;
+    return `{.kind = ${JIT_FA_TEXT}, .u = {.t = jit_text_from_string(${c})}}`;
   }
   if (t.kind === "Char") {
     // Tag as CHAR (not TEXT): under a numeric/%c conversion a char yields
     // its code point, whereas a string is Number()-parsed. %s/%c-as-text
     // treat both alike. Mirrors format_engine.js's toNumber distinction.
-    return `{.kind = ${MTOC2_FA_CHAR}, .u = {.t = mtoc2_text_from_char_tensor(${c})}}`;
+    return `{.kind = ${JIT_FA_CHAR}, .u = {.t = jit_text_from_char_tensor(${c})}}`;
   }
   if (isScalarRealNumeric(t)) {
-    return `{.kind = ${MTOC2_FA_DOUBLE}, .u = {.d = (double)(${c})}}`;
+    return `{.kind = ${JIT_FA_DOUBLE}, .u = {.d = (double)(${c})}}`;
   }
   if (isNumeric(t) && isMultiElement(t)) {
-    return `{.kind = ${MTOC2_FA_TENSOR}, .u = {.tensor = &${c}}}`;
+    return `{.kind = ${JIT_FA_TENSOR}, .u = {.tensor = &${c}}}`;
   }
   throw new Error(
     `internal: '${builtinName}' arg ${argIndex + 1} reached codegen with unsupported type ${t.kind}`
   );
 }
 
-/** Build the `(const mtoc2_fprintf_arg_t[]){ ... }` compound literal
+/** Build the `(const jit_fprintf_arg_t[]){ ... }` compound literal
  *  from a slice of slots (or the `{ {0} }` empty form C99 needs to
  *  avoid the zero-length-array GNU extension). */
 export function emitFormatSlotArray(slots: ReadonlyArray<string>): string {
-  if (slots.length === 0) return `(const mtoc2_fprintf_arg_t[]){ {0} }`;
-  return `(const mtoc2_fprintf_arg_t[]){ ${slots.join(", ")} }`;
+  if (slots.length === 0) return `(const jit_fprintf_arg_t[]){ {0} }`;
+  return `(const jit_fprintf_arg_t[]){ ${slots.join(", ")} }`;
 }
 
-/** Adapter expression for a text-typed format arg → `mtoc2_text_view_t`. */
+/** Adapter expression for a text-typed format arg → `jit_text_view_t`. */
 export function emitTextView(c: string, t: Type): string {
-  if (t.kind === "String") return `mtoc2_text_from_string(${c})`;
-  if (t.kind === "Char") return `mtoc2_text_from_char_tensor(${c})`;
+  if (t.kind === "String") return `jit_text_from_string(${c})`;
+  if (t.kind === "Char") return `jit_text_from_char_tensor(${c})`;
   throw new Error(`internal: emitTextView called on non-text type ${t.kind}`);
 }

@@ -6,9 +6,9 @@
 % opt2 (C-JIT):  0  / [<NUL>]   <-- DIVERGES (a NUL byte for %c)
 % DIVERGING MODE: opt2 only.
 %
-% Cause: the C format engine (io/format_engine.h mtoc2__format_walk) reads
-%   `double dval = (slot.kind==MTOC2_FA_DOUBLE)?slot.d:0.0;` so ANY char/
-%   string (MTOC2_FA_TEXT) slot fed to %d/%i/%u/%f/%e/%g/%x/%o/%c is
+% Cause: the C format engine (io/format_engine.h jit__format_walk) reads
+%   `double dval = (slot.kind==JIT_FA_DOUBLE)?slot.d:0.0;` so ANY char/
+%   string (JIT_FA_TEXT) slot fed to %d/%i/%u/%f/%e/%g/%x/%o/%c is
 %   silently coerced to 0.0 instead of being converted (single char ->
 %   code point). %c of 0.0 then writes a literal NUL byte.
 % FIX DIRECTION: in the C engine, convert a TEXT slot reaching a numeric/%c

@@ -1,8 +1,8 @@
-/* mtoc2 runtime helper: error(fmt, args...) — write formatted text to
+/* JIT runtime helper: error(fmt, args...) — write formatted text to
  * stderr and abort.
  *
  * numbl's `error(...)` throws a RuntimeError; the CLI prints the message
- * and exits non-zero. mtoc2-emitted programs match by writing the
+ * and exits non-zero. JIT-emitted programs match by writing the
  * formatted message to stderr (+ newline) and calling `exit(1)`.
  *
  * Uses the shared format engine, so the spec set / escape rules / arg
@@ -15,14 +15,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-static void mtoc2__error_writer(void *ctx, const char *bytes, long len) {
+static void jit__error_writer(void *ctx, const char *bytes, long len) {
   (void)ctx;
   if (len > 0) fwrite(bytes, 1, (size_t)len, stderr);
 }
 
-static void mtoc2_error_fmt(mtoc2_text_view_t fmt, int nargs,
-                            const mtoc2_fprintf_arg_t *args) {
-  mtoc2__format_walk(mtoc2__error_writer, (void *)0, fmt, nargs, args);
+static void jit_error_fmt(jit_text_view_t fmt, int nargs,
+                            const jit_fprintf_arg_t *args) {
+  jit__format_walk(jit__error_writer, (void *)0, fmt, nargs, args);
   fputc('\n', stderr);
   exit(1);
 }

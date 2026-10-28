@@ -6,7 +6,7 @@
  *
  * Numbl is the dialect oracle (see `src/numbl-core/interpreter/
  * builtins/reductions.ts`). The shape rules here mirror numbl's
- * `shapeAfterReduction` against mtoc2's `DimInfo` lattice
+ * `shapeAfterReduction` against the JIT's `DimInfo` lattice
  * (`{exact, value}` / `unknown`) plus concrete `shape` when set.
  *
  * The lattice analysis is sharper than numbl's static type pass in one
@@ -518,7 +518,7 @@ export function reductionTransfer(argTypes: Type[], spec: KernelSpec): Type {
 
   // Default-axis min/max on statically empty input: numbl returns
   // `[]` (a 0×0 empty), but the C runtime helper
-  // `mtoc2_<min|max>_all` returns a `double` — emitting it through
+  // `jit_<min|max>_all` returns a `double` — emitting it through
   // the normal tensor-Call path would type-mismatch at `cc`. Reject
   // until a tensor-returning variant of the helper lands; users can
   // pass an explicit dim arg as a workaround. sum/prod/mean/any/all
@@ -577,7 +577,7 @@ export function reductionTransfer(argTypes: Type[], spec: KernelSpec): Type {
 // ── Codegen ────────────────────────────────────────────────────────────
 
 /** Build the codegenC closure for a reducer. The kernel name powers
- *  the emitted helper call (`mtoc2_<kernel>_all` / `_dim`). */
+ *  the emitted helper call (`jit_<kernel>_all` / `_dim`). */
 // ── Elementwise 2-arg min/max (not a reduction) ────────────────────────
 
 /** `max(a, b)` / `min(a, b)` scalar-scalar transfer. Result is a scalar
@@ -763,8 +763,8 @@ export function reductionEmitJs(spec: {
     if (isScalar(inputT)) {
       if (spec.outputElem === "logical") {
         if (isComplex) {
-          useRuntime("mtoc2_cscalar");
-          return `mtoc2_cnonzero(${argsJs[0]})`;
+          useRuntime("jit_cscalar");
+          return `jit_cnonzero(${argsJs[0]})`;
         }
         // Coerce booleans through `Number` before the `!== 0` check.
         // A bare `${x} !== 0` would mis-classify a JS boolean argument:
@@ -779,10 +779,10 @@ export function reductionEmitJs(spec: {
     // Tensor path. Mirror `reductionEmit`'s axis resolution exactly
     // so the emitted JS call shape matches the C side per case.
     if (isComplex) {
-      useRuntime("mtoc2_tensor_reduce_complex");
-      useRuntime("mtoc2_cscalar");
+      useRuntime("jit_tensor_reduce_complex");
+      useRuntime("jit_cscalar");
     } else {
-      useRuntime("mtoc2_tensor_reduce_real");
+      useRuntime("jit_tensor_reduce_real");
     }
     const suffixAll = isComplex ? "_complex_all" : "_all";
     const suffixDim = isComplex ? "_complex_dim" : "_dim";
@@ -813,13 +813,13 @@ export function reductionEmitJs(spec: {
     // Scalar-output (axis=all OR axis collapses to scalar) returns
     // a number 0/1 from the runtime helper; wrap to a JS bool when
     // the static output type is logical so the spec result round-
-    // trips through `mtoc2ToNumbl` as a `boolean`. Tensor-output
+    // trips through `jitToNumbl` as a `boolean`. Tensor-output
     // (axis dim returning a 1×N etc.) keeps Float64Array storage
     // with an isLogical flag.
     const wrapLogical = (callExpr: string): string =>
       spec.outputElem === "logical" ? `(${callExpr} !== 0)` : callExpr;
     if (axis.kind === "all") {
-      return wrapLogical(`mtoc2_${spec.name}${suffixAll}(${argsJs[0]})`);
+      return wrapLogical(`jit_${spec.name}${suffixAll}(${argsJs[0]})`);
     }
     // Mirror the C path's scalar-collapse check: if reducing on this
     // axis squeezes the shape down to a scalar, route to `_all`
@@ -827,13 +827,13 @@ export function reductionEmitJs(spec: {
     if (inputT.shape !== undefined) {
       const r = reduceConcreteShape(inputT.shape, axis.dim);
       if (r.scalar)
-        return wrapLogical(`mtoc2_${spec.name}${suffixAll}(${argsJs[0]})`);
+        return wrapLogical(`jit_${spec.name}${suffixAll}(${argsJs[0]})`);
     } else {
       const r = reduceLatticeDims(inputT.dims, axis.dim);
       if (r.scalar)
-        return wrapLogical(`mtoc2_${spec.name}${suffixAll}(${argsJs[0]})`);
+        return wrapLogical(`jit_${spec.name}${suffixAll}(${argsJs[0]})`);
     }
-    return `mtoc2_${spec.name}${suffixDim}(${argsJs[0]}, ${axis.dim})`;
+    return `jit_${spec.name}${suffixDim}(${argsJs[0]}, ${axis.dim})`;
   };
 }
 
@@ -843,9 +843,9 @@ export function reductionEmit(spec: {
   outputElem: "double" | "logical";
 }): Builtin["emitC"] {
   return ({ argsC, argTypes, useRuntime }) => {
-    useRuntime("mtoc2_tensor_reduce_real");
-    useRuntime("mtoc2_tensor_reduce_complex");
-    useRuntime("mtoc2_cscalar");
+    useRuntime("jit_tensor_reduce_real");
+    useRuntime("jit_tensor_reduce_complex");
+    useRuntime("jit_cscalar");
     if (spec.dimArgIndex === 2 && argTypes.length === 2) {
       return `${spec.name === "max" ? "fmax" : "fmin"}((double)(${argsC[0]}), (double)(${argsC[1]}))`;
     }
@@ -859,7 +859,7 @@ export function reductionEmit(spec: {
     if (isScalar(inputT)) {
       if (spec.outputElem === "logical") {
         if (isComplex) {
-          return `(mtoc2_cnonzero(${argsC[0]}) ? 1.0 : 0.0)`;
+          return `(jit_cnonzero(${argsC[0]}) ? 1.0 : 0.0)`;
         }
         return `((${argsC[0]}) != 0.0 ? 1.0 : 0.0)`;
       }
@@ -886,20 +886,20 @@ export function reductionEmit(spec: {
       throw new Error(`internal: ${spec.name} codegen unexpected dim type`);
     }
     if (axis.kind === "all") {
-      return `mtoc2_${spec.name}${suffixAll}(${argsC[0]})`;
+      return `jit_${spec.name}${suffixAll}(${argsC[0]})`;
     }
     if (inputT.shape !== undefined) {
       const r = reduceConcreteShape(inputT.shape, axis.dim);
       if (r.scalar) {
-        return `mtoc2_${spec.name}${suffixAll}(${argsC[0]})`;
+        return `jit_${spec.name}${suffixAll}(${argsC[0]})`;
       }
     } else {
       const r = reduceLatticeDims(inputT.dims, axis.dim);
       if (r.scalar) {
-        return `mtoc2_${spec.name}${suffixAll}(${argsC[0]})`;
+        return `jit_${spec.name}${suffixAll}(${argsC[0]})`;
       }
     }
-    return `mtoc2_${spec.name}${suffixDim}(${argsC[0]}, ${axis.dim})`;
+    return `jit_${spec.name}${suffixDim}(${argsC[0]}, ${axis.dim})`;
   };
 }
 
@@ -919,7 +919,7 @@ function pairwiseMinMax(name: "min" | "max"): Builtin {
     commutative: true,
     fold: (a, b) => (Number.isNaN(a) ? b : Number.isNaN(b) ? a : pick(a, b)),
     signRule: (a, b) => elementwiseMinMaxSign(name, a.sign, b.sign),
-    runtimeDep: "mtoc2_tensor_elemwise_real_fn",
+    runtimeDep: "jit_tensor_elemwise_real_fn",
     jsScalarExpr: (a, b) =>
       `(((_a, _b) => isNaN(_a) ? _b : isNaN(_b) ? _a : ${fn}(_a, _b))(${a}, ${b}))`,
   });

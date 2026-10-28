@@ -6,5 +6,5 @@ export const atan = defineUnaryRealMath({
   cFnReal: "atan",
   jsFn: Math.atan,
   signRule: t => t.sign,
-  complex: { cFnComplex: "mtoc2_catan", jsFnComplex: cAtan },
+  complex: { cFnComplex: "jit_catan", jsFnComplex: cAtan },
 });

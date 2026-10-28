@@ -21,7 +21,7 @@
 % DECLINES (falls back) — only the wrongly-double cases engage and diverge.
 %
 % JIT ENGAGEMENT: CONFIRMED. opt1 --dump-js is 95 lines with
-% mtoc2_tensor_transpose(L) and a folded {value:"double"}; opt2 --dump-c is
+% jit_tensor_transpose(L) and a folded {value:"double"}; opt2 --dump-c is
 % 715 lines; `%!numbl:assert_jit c` passes (C-JIT engages).
 L = [true false; true true];
 disp(class(L'));

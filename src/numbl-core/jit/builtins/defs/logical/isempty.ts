@@ -9,7 +9,7 @@
  *
  * Result is a logical scalar. When the numeric shape is statically
  * known (the common case) it folds; otherwise it emits a runtime
- * `mtoc2_numel(x) == 0` check.
+ * `jit_numel(x) == 0` check.
  */
 import { TypeError, UnsupportedConstruct } from "../../../lowering/errors.js";
 import {
@@ -24,7 +24,7 @@ import type { Builtin } from "../../registry.js";
 
 /** The only runtime-shaped JIT path is a numeric tensor of unknown
  *  extent. Char of unknown length isn't representable as an
- *  `mtoc2_tensor_t`, so the JIT defers it to the interpreter. */
+ *  `jit_tensor_t`, so the JIT defers it to the interpreter. */
 function requireNumericRuntime(t: Type): void {
   if (!isNumeric(t)) {
     throw new UnsupportedConstruct(
@@ -75,8 +75,8 @@ export const isempty: Builtin = {
     if (v === true) return "1.0";
     if (v === false) return "0.0";
     requireNumericRuntime(argTypes[0]);
-    useRuntime("mtoc2_numel");
-    return `(mtoc2_numel(${argsC[0]}) == 0)`;
+    useRuntime("jit_numel");
+    return `(jit_numel(${argsC[0]}) == 0)`;
   },
   emitJs({ argTypes, argsJs }) {
     const v = staticVerdict(argTypes[0]);

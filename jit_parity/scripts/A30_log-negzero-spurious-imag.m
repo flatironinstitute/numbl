@@ -3,7 +3,7 @@
 % path. The JS runtime clog({re:-0, im:0}) computes im = atan2(0,-0) = pi, so
 % log(-0) wrongly becomes a complex number. The opt0 interpreter decides the
 % lift per-VALUE at runtime: -0 is not < 0, so it takes the REAL branch ->
-% real -Inf. The C runtime accidentally matches opt0 because mtoc2_cmake(-0,0)
+% real -Inf. The C runtime accidentally matches opt0 because jit_cmake(-0,0)
 % (= `-0.0 + 0.0*I`) collapses -0 to +0 before clog.
 %
 % opt0:  -Infinity            /  -Infinity   (real, reference)

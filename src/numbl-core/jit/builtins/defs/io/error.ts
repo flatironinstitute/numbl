@@ -51,7 +51,7 @@ export const errorBuiltin: Builtin = {
     return [{ kind: "Void" }];
   },
   emitC({ argsC, argTypes, useRuntime }) {
-    useRuntime("mtoc2_error_fmt");
+    useRuntime("jit_error_fmt");
     const first = argTypes[0];
     const firstExact =
       first.kind === "Char" || first.kind === "String"
@@ -70,7 +70,7 @@ export const errorBuiltin: Builtin = {
     for (let i = fmtIdx + 1; i < argTypes.length; i++) {
       slots.push(emitFormatSlot("error", argsC[i], argTypes[i], i));
     }
-    return `mtoc2_error_fmt(${fmtView}, ${slots.length}, ${emitFormatSlotArray(slots)})`;
+    return `jit_error_fmt(${fmtView}, ${slots.length}, ${emitFormatSlotArray(slots)})`;
   },
   emitJs({ argsJs, argTypes, useRuntime }) {
     const first = argTypes[0];
@@ -87,10 +87,10 @@ export const errorBuiltin: Builtin = {
       fmtIdx = 1;
     }
     if (fmtIdx === 1 && firstExact !== undefined) {
-      useRuntime("mtoc2_error_fmt_id");
-      return `mtoc2_error_fmt_id(${JSON.stringify(firstExact)}, ${argsJs.slice(fmtIdx).join(", ")})`;
+      useRuntime("jit_error_fmt_id");
+      return `jit_error_fmt_id(${JSON.stringify(firstExact)}, ${argsJs.slice(fmtIdx).join(", ")})`;
     }
-    useRuntime("mtoc2_error_fmt");
-    return `mtoc2_error_fmt(${argsJs.slice(fmtIdx).join(", ")})`;
+    useRuntime("jit_error_fmt");
+    return `jit_error_fmt(${argsJs.slice(fmtIdx).join(", ")})`;
   },
 };

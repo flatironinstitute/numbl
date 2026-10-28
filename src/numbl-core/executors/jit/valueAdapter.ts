@@ -1,19 +1,19 @@
 /**
- * Adapter: numbl `RuntimeValue` ↔ mtoc2 emit-JS value shape.
+ * Adapter: numbl `RuntimeValue` ↔ JIT emit-JS value shape.
  *
  * Numbl wraps tensors / chars / complex / structs in Refcounted
  * classes (`RuntimeTensor`, `RuntimeChar`, `RuntimeComplexNumber`)
- * keyed by a `kind:` discriminator. mtoc2's emitted JS uses plain
- * objects keyed by `mtoc2Tag:` (no class wrapper, no refcount).
+ * keyed by a `kind:` discriminator. The JIT's emitted JS uses plain
+ * objects keyed by `jitTag:` (no class wrapper, no refcount).
  *
  * **Pass-by-value at the boundary.** MATLAB function calls are
  * pass-by-value; a JIT'd function that mutates its argument must
- * not leak the mutation to the caller. mtoc2's whole-program
+ * not leak the mutation to the caller. The JIT's whole-program
  * codegen handles this by wrapping every call-site argument in
- * `mtoc2_deep_clone(...)` — but the JIT executor is a *new* call
- * site that mtoc2 doesn't know about, so we have to clone the
+ * `jit_deep_clone(...)` — but the JIT executor is a *new* call
+ * site that the JIT doesn't know about, so we have to clone the
  * tensor data buffer ourselves on the way in. On the way out, we
- * take ownership of the returned buffer directly (mtoc2's spec
+ * take ownership of the returned buffer directly (the JIT's spec
  * always returns a freshly-owned tensor).
  *
  * The executor only invokes these adapters on values whose JitType
@@ -39,8 +39,8 @@ import {
 import type { Type, NumericType } from "../../jit/index.js";
 import { isMultiElement } from "../../jit/index.js";
 
-/** numbl RuntimeValue → mtoc2 emit-JS value shape. Owned-typed
- *  values (tensors) get their data buffer cloned so mtoc2's spec
+/** numbl RuntimeValue → JIT emit-JS value shape. Owned-typed
+ *  values (tensors) get their data buffer cloned so the JIT's spec
  *  body can mutate freely without leaking the change back through
  *  numbl's caller-side env.
  *
@@ -79,15 +79,15 @@ export function numblToJit(v: RuntimeValue, paramType?: Type): unknown {
   if (isRuntimeLogical(v)) return v ? 1 : 0;
   if (isRuntimeString(v)) return v;
   if (isRuntimeTensor(v)) {
-    // Clone the data buffer. mtoc2's emitted body mutates parameters
+    // Clone the data buffer. The JIT's emitted body mutates parameters
     // in place (it expects the caller to have cloned at call site).
     const out: {
-      mtoc2Tag: "tensor";
+      jitTag: "tensor";
       shape: number[];
       data: Float64Array;
       imag?: Float64Array;
     } = {
-      mtoc2Tag: "tensor",
+      jitTag: "tensor",
       shape: [...v.shape],
       data: new Float64Array(v.data),
     };
@@ -95,13 +95,13 @@ export function numblToJit(v: RuntimeValue, paramType?: Type): unknown {
     return out;
   }
   if (isRuntimeChar(v)) {
-    return { mtoc2Tag: "char", value: v.value };
+    return { jitTag: "char", value: v.value };
   }
   if (isRuntimeComplexNumber(v)) {
     return { re: v.re, im: v.im };
   }
   if (isRuntimeStruct(v)) {
-    // mtoc2 represents a struct as a plain JS object keyed by field name
+    // The JIT represents a struct as a plain JS object keyed by field name
     // (see StructLit / MemberLoad in emitJs). Each field is converted with
     // the field type the spec was compiled for, so a 1x1 tensor field
     // reaching a scalar-typed field is unwrapped exactly as an argument
@@ -120,7 +120,7 @@ export function numblToJit(v: RuntimeValue, paramType?: Type): unknown {
   );
 }
 
-/** mtoc2 emit-JS return value → numbl RuntimeValue.
+/** JIT emit-JS return value → numbl RuntimeValue.
  *
  *  `retType` is the compiler type the spec declares for this output. It is
  *  only consulted for plain untagged objects, which is how the emitted code
@@ -136,7 +136,7 @@ export function jitToNumbl(v: unknown, retType?: Type): RuntimeValue {
     throw new Error(`jitToNumbl: unexpected primitive of type ${typeof v}`);
   }
   const tagged = v as {
-    mtoc2Tag?: string;
+    jitTag?: string;
     re?: number;
     im?: number;
     shape?: number[];
@@ -144,13 +144,13 @@ export function jitToNumbl(v: unknown, retType?: Type): RuntimeValue {
     imag?: Float64Array;
     value?: string;
   };
-  if (tagged.mtoc2Tag === "tensor") {
+  if (tagged.jitTag === "tensor") {
     if (!tagged.shape || !tagged.data) {
       throw new Error(`jitToNumbl: tensor missing shape/data`);
     }
     return new RuntimeTensor(tagged.data, [...tagged.shape], tagged.imag);
   }
-  if (tagged.mtoc2Tag === "char") {
+  if (tagged.jitTag === "char") {
     if (typeof tagged.value !== "string") {
       throw new Error(`jitToNumbl: char missing value`);
     }
@@ -160,7 +160,7 @@ export function jitToNumbl(v: unknown, retType?: Type): RuntimeValue {
     return new RuntimeComplexNumber(tagged.re, tagged.im);
   }
   if (retType?.kind === "Struct") {
-    // A struct: mtoc2 emits it as a plain, untagged JS object of field
+    // A struct: the JIT emits it as a plain, untagged JS object of field
     // values, exactly as it emits a class instance — hence the type check.
     const fields = new Map<string, RuntimeValue>();
     for (const f of retType.fields) {
@@ -173,7 +173,7 @@ export function jitToNumbl(v: unknown, retType?: Type): RuntimeValue {
 }
 
 /** True if `e` is the grow-bail sentinel thrown by the emitted JS
- *  store helpers (`mtoc2_idx_*_grow_js` in `scalar_index.js`) — an
+ *  store helpers (`jit_idx_*_grow_js` in `scalar_index.js`) — an
  *  indexed store whose index exceeds the runtime extent, which would
  *  grow the array (unsupported in the JIT). The JS executors recognize
  *  it to surface a one-time warning; they bail on it (and on any other
@@ -183,6 +183,6 @@ export function isGrowBail(e: unknown): boolean {
   return (
     typeof e === "object" &&
     e !== null &&
-    (e as { mtoc2GrowBail?: boolean }).mtoc2GrowBail === true
+    (e as { jitGrowBail?: boolean }).jitGrowBail === true
   );
 }

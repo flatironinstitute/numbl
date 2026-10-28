@@ -26,7 +26,7 @@ The compiler decides feasibility at **compile time**: it either lowers a special
 
 A separate safety pass classifies constructs with observable side effects the JIT cannot faithfully reproduce (interactive input, certain display statements at the top level, etc.) and suppresses JIT for scripts that contain them unsuppressed.
 
-Indexed **stores** are the exception to "no runtime bailout": an index past a tensor's current extent would grow it in MATLAB, which a spec compiled against a fixed shape cannot model, so the emitted store routes through a grow-aware bounds check (`mtoc2_idx_*_grow`) that bails to the interpreter at that point. Both scalar stores (`v(k) = x`) and the scalar slots of slice stores (`A(k, :) = row`) use it, which is what lets a store with a loop-variable index compile at all — the index is never statically known inside a loop.
+Indexed **stores** are the exception to "no runtime bailout": an index past a tensor's current extent would grow it in MATLAB, which a spec compiled against a fixed shape cannot model, so the emitted store routes through a grow-aware bounds check (`jit_idx_*_grow`) that bails to the interpreter at that point. Both scalar stores (`v(k) = x`) and the scalar slots of slice stores (`A(k, :) = row`) use it, which is what lets a store with a loop-variable index compile at all — the index is never statically known inside a loop.
 
 ### Decline diagnostics
 

@@ -1,19 +1,19 @@
-// JS sibling of `tensor_cat.h`. `mtoc2_tensor_cat(dim, nin, xs)`
+// JS sibling of `tensor_cat.h`. `jit_tensor_cat(dim, nin, xs)`
 // concatenates the inputs along axis `dim` (1-based, like MATLAB /
-// numbl). Inputs may be tensor objects (per the `mtoc2_tensor_make`
+// numbl). Inputs may be tensor objects (per the `jit_tensor_make`
 // shape) or plain numbers — scalars are treated as 1×1 tensors.
 //
-// `mtoc2_tensor_cat_complex(dim, nin, xs)` is the complex sibling:
+// `jit_tensor_cat_complex(dim, nin, xs)` is the complex sibling:
 // inputs may be `{re, im}` scalars, real numbers, real tensors, or
 // complex tensors; result is always a complex tensor.
 //
 // Mirrors numbl's `catAlongDim`: empty inputs are dropped (and
 // asymmetrically kept only when their non-cat dims match the reference).
 
-import { mtoc2_tensor_alloc_nd } from "../tensor/tensor_alloc_nd.js";
-import { mtoc2_tensor_alloc_nd_complex } from "../tensor/tensor_alloc_nd_complex.js";
+import { jit_tensor_alloc_nd } from "../tensor/tensor_alloc_nd.js";
+import { jit_tensor_alloc_nd_complex } from "../tensor/tensor_alloc_nd_complex.js";
 
-export function mtoc2_tensor_cat(dim, nin, xs) {
+export function jit_tensor_cat(dim, nin, xs) {
   if (dim < 1) {
     throw new Error(`JIT: cat dim ${dim} must be >= 1`);
   }
@@ -57,7 +57,7 @@ export function mtoc2_tensor_cat(dim, nin, xs) {
   }
   if (refIdx === -1) {
     // All inputs empty (or none given): canonical [0, 0] empty.
-    return mtoc2_tensor_alloc_nd(2, [0, 0]);
+    return jit_tensor_alloc_nd(2, [0, 0]);
   }
 
   const refShape = parts[refIdx].shape;
@@ -90,7 +90,7 @@ export function mtoc2_tensor_cat(dim, nin, xs) {
   }
   resultShape[dimIdx] = catSum;
 
-  const out = mtoc2_tensor_alloc_nd(ndim, resultShape);
+  const out = jit_tensor_alloc_nd(ndim, resultShape);
   let resultTotal = 1;
   for (const d of resultShape) resultTotal *= d;
   if (resultTotal === 0) return out;
@@ -134,7 +134,7 @@ function inputLanesComplex(x) {
   return { shape: x.shape.slice(), data: x.data, imag: x.imag };
 }
 
-export function mtoc2_tensor_cat_complex(dim, nin, xs) {
+export function jit_tensor_cat_complex(dim, nin, xs) {
   if (dim < 1) {
     throw new Error(`JIT: cat_complex dim ${dim} must be >= 1`);
   }
@@ -166,7 +166,7 @@ export function mtoc2_tensor_cat_complex(dim, nin, xs) {
     }
   }
   if (refIdx === -1) {
-    return mtoc2_tensor_alloc_nd_complex(2, [0, 0]);
+    return jit_tensor_alloc_nd_complex(2, [0, 0]);
   }
   const refShape = parts[refIdx].shape;
 
@@ -197,7 +197,7 @@ export function mtoc2_tensor_cat_complex(dim, nin, xs) {
   }
   resultShape[dimIdx] = catSum;
 
-  const out = mtoc2_tensor_alloc_nd_complex(ndim, resultShape);
+  const out = jit_tensor_alloc_nd_complex(ndim, resultShape);
   let resultTotal = 1;
   for (const d of resultShape) resultTotal *= d;
   if (resultTotal === 0) return out;

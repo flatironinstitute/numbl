@@ -1,10 +1,10 @@
 /* mtoc runtime helper: allocate an uninitialized real tensor of the
  * given shape. Sets `imag = NULL` (the static-real marker). The
  * returned tensor owns its `real` buffer; caller must release via
- * `mtoc2_tensor_free` (or hand it to `mtoc2_tensor_assign`, which takes
+ * `jit_tensor_free` (or hand it to `jit_tensor_assign`, which takes
  * ownership).
  *
- * `mtoc2_alloc` aborts on OOM, so the returned struct's `real` is
+ * `jit_alloc` aborts on OOM, so the returned struct's `real` is
  * always non-NULL. Used by codegen as the workhorse for elementwise-
  * result construction at every multi-element Assign RHS that isn't a
  * plain tensor literal.
@@ -14,14 +14,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-static mtoc2_tensor_t mtoc2_tensor_alloc(long rows, long cols) {
+static jit_tensor_t jit_tensor_alloc(long rows, long cols) {
   /* MATLAB / numbl clamp negative dim values to 0 (resulting in an
    * empty tensor) rather than aborting; without this the bare
    * `(size_t)rows` cast below would wrap a negative `long` to
    * SIZE_MAX and trigger a spurious "allocation overflow" abort. */
   if (rows < 0) rows = 0;
   if (cols < 0) cols = 0;
-  mtoc2_tensor_t out;
+  jit_tensor_t out;
   size_t n;
 #if defined(__has_builtin) && __has_builtin(__builtin_mul_overflow)
   size_t bytes;
@@ -40,7 +40,7 @@ static mtoc2_tensor_t mtoc2_tensor_alloc(long rows, long cols) {
   n = (size_t)rows * (size_t)cols;
   size_t bytes = n * sizeof(double);
 #endif
-  out.real = mtoc2_alloc(bytes);
+  out.real = jit_alloc(bytes);
   out.imag = NULL;
   out.ndim = 2;
   out.dims[0] = rows;

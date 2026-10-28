@@ -12,10 +12,10 @@
 // consumed this pass" guard against infinite output).
 
 function isTensor(v) {
-  return typeof v === "object" && v !== null && v.mtoc2Tag === "tensor";
+  return typeof v === "object" && v !== null && v.jitTag === "tensor";
 }
 function isChar(v) {
-  return typeof v === "object" && v !== null && v.mtoc2Tag === "char";
+  return typeof v === "object" && v !== null && v.jitTag === "char";
 }
 
 function toNumber(v) {
@@ -87,9 +87,9 @@ function applyWidth(spec, str) {
   return " ".repeat(padLen) + str;
 }
 
-export function mtoc2_sprintf_format(fmt, args) {
+export function jit_sprintf_format(fmt, args) {
   // Char literals (`'foo'`) come through wrapped as
-  // `{mtoc2Tag:"char", value:"..."}` to match the interpreter's
+  // `{jitTag:"char", value:"..."}` to match the interpreter's
   // RuntimeValue convention; unwrap so the format walker indexes
   // a plain JS string.
   if (isChar(fmt)) fmt = fmt.value;

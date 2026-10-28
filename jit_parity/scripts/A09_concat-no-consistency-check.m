@@ -1,5 +1,5 @@
 % DIAGNOSIS: JIT-compiled vertical concatenation [a; b] takes the column count
-% from the FIRST operand only (_mtoc2_tc = a.shape[1]) and copies each operand
+% from the FIRST operand only (_jit_tc = a.shape[1]) and copies each operand
 % without verifying subsequent operands have matching column counts. When the
 % JIT cannot statically prove the shapes it builds a result sized to the first
 % row and silently zero-pads/drops the rest instead of raising

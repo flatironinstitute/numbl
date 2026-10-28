@@ -11,5 +11,5 @@ export const logical = defineUnaryPred({
   cScalar: arg => `((${arg}) != 0.0)`,
   jsScalar: arg => `((${arg}) !== 0)`,
   jsFn: x => x !== 0,
-  tensorHelper: "mtoc2_tensor_predicate",
+  tensorHelper: "jit_tensor_predicate",
 });

@@ -1,4 +1,4 @@
-/* mtoc2 runtime helpers for `isequal` over real numeric values.
+/* JIT runtime helpers for `isequal` over real numeric values.
  *
  * `emitC` rejects complex tensors, char / string, struct and cell
  * argument combinations with `UnsupportedConstruct`. These two
@@ -11,7 +11,7 @@
  */
 
 /* Two real tensors: equal iff identical shape and data. */
-static double mtoc2_isequal_tt(mtoc2_tensor_t a, mtoc2_tensor_t b) {
+static double jit_isequal_tt(jit_tensor_t a, jit_tensor_t b) {
   if (a.ndim != b.ndim) return 0.0;
   long n = 1;
   for (int i = 0; i < a.ndim; i++) {
@@ -26,7 +26,7 @@ static double mtoc2_isequal_tt(mtoc2_tensor_t a, mtoc2_tensor_t b) {
 
 /* Real scalar vs real tensor: equal iff the tensor holds exactly one
  * element equal to `s` (numbl treats a scalar as a 1×1 tensor). */
-static double mtoc2_isequal_st(double s, mtoc2_tensor_t t) {
+static double jit_isequal_st(double s, jit_tensor_t t) {
   long n = 1;
   for (int i = 0; i < t.ndim; i++) n *= t.dims[i];
   if (n != 1) return 0.0;

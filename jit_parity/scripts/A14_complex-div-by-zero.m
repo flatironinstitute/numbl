@@ -1,7 +1,7 @@
 % DIAGNOSIS: complex division by an exactly-zero divisor diverges. The
 % interpreter (opt0) complexDivide() special-cases a zero divisor and
 % returns signed Inf (nonzero numerator) or NaN (0/0). The JS-JIT
-% runtime mtoc2_cdiv has no zero-divisor branch: Smith's algorithm
+% runtime jit_cdiv has no zero-divisor branch: Smith's algorithm
 % yields 0/0 = NaN in both components.
 % opt0: Infinity + Infinityi
 % opt1: NaN + NaNi

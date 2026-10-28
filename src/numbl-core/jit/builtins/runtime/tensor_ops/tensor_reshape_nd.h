@@ -1,8 +1,8 @@
-/* mtoc2 runtime helper: reshape a real tensor to an N-D shape.
+/* JIT runtime helper: reshape a real tensor to an N-D shape.
  *
- * Receives the input tensor by value (`mtoc2_tensor_t`) plus a
+ * Receives the input tensor by value (`jit_tensor_t`) plus a
  * caller-supplied dim list (`ndim`, `dims`). Allocates a fresh
- * output tensor via `mtoc2_tensor_alloc_nd` and copies the input's
+ * output tensor via `jit_tensor_alloc_nd` and copies the input's
  * column-major buffer wholesale — reshape is a layout reinterpret,
  * so the linear element order is unchanged.
  *
@@ -19,17 +19,17 @@
  * mismatch it prints to stderr and aborts, matching numbl's
  * runtime-error surface.
  *
- * Real-only — mtoc2's tensor side is real-only today; the type
+ * Real-only — the JIT's tensor side is real-only today; the type
  * lattice rejects complex inputs at lowering. The output's `imag`
- * is NULL, set by `mtoc2_tensor_alloc_nd`.
+ * is NULL, set by `jit_tensor_alloc_nd`.
  */
 
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
 
-static mtoc2_tensor_t mtoc2_reshape_nd(
-    mtoc2_tensor_t in, int ndim, const long *dims) {
+static jit_tensor_t jit_reshape_nd(
+    jit_tensor_t in, int ndim, const long *dims) {
   size_t in_total = 1;
   for (int i = 0; i < in.ndim; i++) in_total *= (size_t)in.dims[i];
   /* Scan for at most one `-1` infer slot and the product of the
@@ -53,7 +53,7 @@ static mtoc2_tensor_t mtoc2_reshape_nd(
       explicit_prod *= (size_t)dims[i];
     }
   }
-  long resolved_dims[MTOC2_MAX_NDIM];
+  long resolved_dims[JIT_MAX_NDIM];
   for (int i = 0; i < ndim; i++) resolved_dims[i] = dims[i];
   size_t out_total;
   if (infer_idx != -1) {
@@ -81,7 +81,7 @@ static mtoc2_tensor_t mtoc2_reshape_nd(
       abort();
     }
   }
-  mtoc2_tensor_t out = mtoc2_tensor_alloc_nd(ndim, resolved_dims);
+  jit_tensor_t out = jit_tensor_alloc_nd(ndim, resolved_dims);
   if (out_total > 0)
     memcpy(out.real, in.real, out_total * sizeof(double));
   return out;

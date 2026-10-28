@@ -1,4 +1,4 @@
-/* mtoc2 runtime helper: uniquetol for real-double tensors.
+/* JIT runtime helper: uniquetol for real-double tensors.
  *
  * Numbl's elementwise `uniquetol(x, tol)` scans column-major and
  * keeps the first occurrence of each new value — a value is "new"
@@ -22,7 +22,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-static mtoc2_tensor_t mtoc2_uniquetol_real(mtoc2_tensor_t a, double tol,
+static jit_tensor_t jit_uniquetol_real(jit_tensor_t a, double tol,
                                            int row_out) {
   long n = 1;
   for (int i = 0; i < a.ndim; i++) n *= a.dims[i];
@@ -47,8 +47,8 @@ static mtoc2_tensor_t mtoc2_uniquetol_real(mtoc2_tensor_t a, double tol,
       if (!found) uniques[nu++] = x;
     }
   }
-  mtoc2_tensor_t r;
-  r.real = mtoc2_alloc((size_t)nu * sizeof(double));
+  jit_tensor_t r;
+  r.real = jit_alloc((size_t)nu * sizeof(double));
   r.imag = NULL;
   r.ndim = 2;
   if (row_out) {

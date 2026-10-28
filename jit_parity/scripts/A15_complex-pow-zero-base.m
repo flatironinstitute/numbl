@@ -1,7 +1,7 @@
 % DIAGNOSIS: complex power with a zero base diverges. The interpreter
 % (opt0) complexPow returns 0 whenever Re(exp)>0 (any imag), and
 % Infinity for a negative/zero-real exponent. The JS-JIT runtime
-% mtoc2_cpow only returns 0 when the exponent is real-positive
+% jit_cpow only returns 0 when the exponent is real-positive
 % (b.im===0) and returns NaN+NaNi in every other zero-base case.
 % opt0: 0          (for 0 ^ (2+3i))
 % opt1: NaN + NaNi

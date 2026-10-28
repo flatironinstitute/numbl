@@ -1,14 +1,14 @@
 // JS sibling of `tensor_repmat.h`. Two helpers:
-//   - `mtoc2_tensor_repmat(in, nreps, reps)` — tile a real tensor.
-//   - `mtoc2_tensor_repmat_complex(in, nreps, reps)` — tile both
+//   - `jit_tensor_repmat(in, nreps, reps)` — tile a real tensor.
+//   - `jit_tensor_repmat_complex(in, nreps, reps)` — tile both
 //     lanes of a complex tensor (zero imag when input is real).
 // Negative reps clamp to 0; input shape and reps are right-padded
 // with 1s to a common rank.
 
-import { mtoc2_tensor_alloc_nd } from "../tensor/tensor_alloc_nd.js";
-import { mtoc2_tensor_alloc_nd_complex } from "../tensor/tensor_alloc_nd_complex.js";
+import { jit_tensor_alloc_nd } from "../tensor/tensor_alloc_nd.js";
+import { jit_tensor_alloc_nd_complex } from "../tensor/tensor_alloc_nd_complex.js";
 
-export function mtoc2_tensor_repmat(input, nreps, repsIn) {
+export function jit_tensor_repmat(input, nreps, repsIn) {
   const reps = [];
   for (let i = 0; i < nreps; i++) {
     const r = repsIn[i] < 0 ? 0 : repsIn[i];
@@ -25,7 +25,7 @@ export function mtoc2_tensor_repmat(input, nreps, repsIn) {
     padReps.push(i < nreps ? reps[i] : 1);
     outDims.push(padShape[i] * padReps[i]);
   }
-  const out = mtoc2_tensor_alloc_nd(outNdim, outDims);
+  const out = jit_tensor_alloc_nd(outNdim, outDims);
   let outTotal = 1;
   for (const d of outDims) outTotal *= d;
   if (outTotal === 0) return out;
@@ -72,7 +72,7 @@ export function mtoc2_tensor_repmat(input, nreps, repsIn) {
   return out;
 }
 
-export function mtoc2_tensor_repmat_complex(input, nreps, repsIn) {
+export function jit_tensor_repmat_complex(input, nreps, repsIn) {
   const reps = [];
   for (let i = 0; i < nreps; i++) {
     const r = repsIn[i] < 0 ? 0 : repsIn[i];
@@ -89,7 +89,7 @@ export function mtoc2_tensor_repmat_complex(input, nreps, repsIn) {
     padReps.push(i < nreps ? reps[i] : 1);
     outDims.push(padShape[i] * padReps[i]);
   }
-  const out = mtoc2_tensor_alloc_nd_complex(outNdim, outDims);
+  const out = jit_tensor_alloc_nd_complex(outNdim, outDims);
   let outTotal = 1;
   for (const d of outDims) outTotal *= d;
   if (outTotal === 0) return out;

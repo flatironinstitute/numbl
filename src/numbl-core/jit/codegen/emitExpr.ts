@@ -86,12 +86,12 @@ function emitMemberLoadBare(
 
 /** Lower a scalar cond expression to a C bool expression. Complex
  *  scalars use the numbl/MATLAB `creal(z) != 0 || cimag(z) != 0` rule
- *  via the `mtoc2_cnonzero` helper; real scalars compare against `0.0`. */
+ *  via the `jit_cnonzero` helper; real scalars compare against `0.0`. */
 export function emitCondToBoolExpr(e: IRExpr, state: RuntimeState): string {
   const c = emitExpr(e, state);
   if (isNumeric(e.ty) && e.ty.isComplex) {
-    useRuntimeByName(state, "mtoc2_cscalar");
-    return `mtoc2_cnonzero(${c})`;
+    useRuntimeByName(state, "jit_cscalar");
+    return `jit_cnonzero(${c})`;
   }
   return `${c} != 0.0`;
 }
@@ -101,8 +101,8 @@ export function emitExpr(e: IRExpr, state: RuntimeState): string {
     case "NumLit":
       return formatDouble(e.value);
     case "ImagLit":
-      useRuntimeByName(state, "mtoc2_cscalar");
-      return `mtoc2_cmake(0.0, ${formatDouble(e.value)})`;
+      useRuntimeByName(state, "jit_cscalar");
+      return `jit_cmake(0.0, ${formatDouble(e.value)})`;
     case "StringLit": {
       // Text literal — kind comes from `e.ty`: `Char` (single-quoted,
       // 1×N char array) or `String` (double-quoted, scalar handle).
@@ -113,12 +113,12 @@ export function emitExpr(e: IRExpr, state: RuntimeState): string {
       // text literal that needs the owned struct.
       const { lit, byteLen } = cStringLiteral(e.value);
       if (e.ty.kind === "String") {
-        useRuntimeByName(state, "mtoc2_string_from_literal");
-        return `mtoc2_string_from_literal(${lit}, ${byteLen})`;
+        useRuntimeByName(state, "jit_string_from_literal");
+        return `jit_string_from_literal(${lit}, ${byteLen})`;
       }
       if (e.ty.kind === "Char") {
-        useRuntimeByName(state, "mtoc2_char_tensor_from_literal");
-        return `mtoc2_char_tensor_from_literal(${lit}, ${byteLen})`;
+        useRuntimeByName(state, "jit_char_tensor_from_literal");
+        return `jit_char_tensor_from_literal(${lit}, ${byteLen})`;
       }
       // Reducer-builtin slot context (e.g. `'all'` to `sum`/`min`/`max`):
       // the surrounding builtin reads `ty.exact` at transfer time and
@@ -136,7 +136,7 @@ export function emitExpr(e: IRExpr, state: RuntimeState): string {
       if (isComplex) {
         // Two parallel `double[]` arrays — real parts and imag parts.
         // Real-typed cells project to `(re, 0.0)`; complex cells
-        // split via `mtoc2_creal` / `mtoc2_cimag`. This avoids ever
+        // split via `jit_creal` / `jit_cimag`. This avoids ever
         // passing `double _Complex *` arrays around and keeps each
         // compound literal a plain real-double array.
         const reParts: string[] = [];
@@ -144,9 +144,9 @@ export function emitExpr(e: IRExpr, state: RuntimeState): string {
         for (const el of e.elements) {
           const c = emitExpr(el, state);
           if (isNumeric(el.ty) && el.ty.isComplex) {
-            useRuntimeByName(state, "mtoc2_cscalar");
-            reParts.push(`mtoc2_creal(${c})`);
-            imParts.push(`mtoc2_cimag(${c})`);
+            useRuntimeByName(state, "jit_cscalar");
+            reParts.push(`jit_creal(${c})`);
+            imParts.push(`jit_cimag(${c})`);
           } else {
             reParts.push(c);
             imParts.push("0.0");
@@ -155,19 +155,19 @@ export function emitExpr(e: IRExpr, state: RuntimeState): string {
         const reFlat = reParts.join(", ");
         const imFlat = imParts.join(", ");
         if (rows === 1) {
-          useRuntimeByName(state, "mtoc2_tensor_from_row_complex");
-          return `mtoc2_tensor_from_row_complex((double[]){${reFlat}}, (double[]){${imFlat}}, ${cols})`;
+          useRuntimeByName(state, "jit_tensor_from_row_complex");
+          return `jit_tensor_from_row_complex((double[]){${reFlat}}, (double[]){${imFlat}}, ${cols})`;
         }
-        useRuntimeByName(state, "mtoc2_tensor_from_matrix_complex");
-        return `mtoc2_tensor_from_matrix_complex((double[]){${reFlat}}, (double[]){${imFlat}}, ${rows}, ${cols})`;
+        useRuntimeByName(state, "jit_tensor_from_matrix_complex");
+        return `jit_tensor_from_matrix_complex((double[]){${reFlat}}, (double[]){${imFlat}}, ${rows}, ${cols})`;
       }
       const flat = e.elements.map(el => emitExpr(el, state)).join(", ");
       if (rows === 1) {
-        useRuntimeByName(state, "mtoc2_tensor_from_row");
-        return `mtoc2_tensor_from_row((double[]){${flat}}, ${cols})`;
+        useRuntimeByName(state, "jit_tensor_from_row");
+        return `jit_tensor_from_row((double[]){${flat}}, ${cols})`;
       }
-      useRuntimeByName(state, "mtoc2_tensor_from_matrix");
-      return `mtoc2_tensor_from_matrix((double[]){${flat}}, ${rows}, ${cols})`;
+      useRuntimeByName(state, "jit_tensor_from_matrix");
+      return `jit_tensor_from_matrix((double[]){${flat}}, ${rows}, ${cols})`;
     }
     case "TensorConcat":
       return emitTensorConcat(e, state);
@@ -214,21 +214,18 @@ export function emitExpr(e: IRExpr, state: RuntimeState): string {
       // Lowerer-synthesized bare-`toc;` print form. Not registered as
       // a public builtin (the registry only knows about value-returning
       // `toc`); the lowerer routes here for ExprStmt-position calls.
-      // Activate the tic/toc runtime snippet so `mtoc2_toc_print` is
+      // Activate the tic/toc runtime snippet so `jit_toc_print` is
       // declared.
-      if (e.name === "toc_print" && e.cName === "mtoc2_toc_print") {
-        useRuntimeByName(state, "mtoc2_tic_toc");
-        return `mtoc2_toc_print()`;
+      if (e.name === "toc_print" && e.cName === "jit_toc_print") {
+        useRuntimeByName(state, "jit_tic_toc");
+        return `jit_toc_print()`;
       }
       // Lowerer-synthesized bare-`toc(t0);` print form (1-arg handle
       // variant). Same activation path as `toc_print`.
-      if (
-        e.name === "toc_handle_print" &&
-        e.cName === "mtoc2_toc_handle_print"
-      ) {
-        useRuntimeByName(state, "mtoc2_tic_toc");
+      if (e.name === "toc_handle_print" && e.cName === "jit_toc_handle_print") {
+        useRuntimeByName(state, "jit_tic_toc");
         const argC = emitExpr(e.args[0], state);
-        return `mtoc2_toc_handle_print(${argC})`;
+        return `jit_toc_handle_print(${argC})`;
       }
       // User function call: owned args wrap in copy (callee owns).
       const args = e.args
@@ -299,12 +296,12 @@ export function emitExpr(e: IRExpr, state: RuntimeState): string {
       }
       const offset = emitNdScalarOffset(state, e.indices, e.base.cName);
       if (isNumeric(e.base.ty) && e.base.ty.isComplex) {
-        // Compose the complex value from both lanes via `mtoc2_cmake`
+        // Compose the complex value from both lanes via `jit_cmake`
         // (parallel to the JS `{re, im}` impl). Avoid recomputing the offset twice by hoisting through a GCC
         // statement-expression — the offset may include autoinc /
         // bounds-checked sub-calls we don't want to re-evaluate.
-        useRuntimeByName(state, "mtoc2_cscalar");
-        return `({ long _mtoc2_off = ${offset}; mtoc2_cmake(${e.base.cName}.real[_mtoc2_off], ${e.base.cName}.imag[_mtoc2_off]); })`;
+        useRuntimeByName(state, "jit_cscalar");
+        return `({ long _jit_off = ${offset}; jit_cmake(${e.base.cName}.real[_jit_off], ${e.base.cName}.imag[_jit_off]); })`;
       }
       return `${e.base.cName}.real[${offset}]`;
     }
@@ -332,11 +329,11 @@ function emitMakeRange(
   e: Extract<IRExpr, { kind: "MakeRange" }>,
   state: RuntimeState
 ): string {
-  useRuntimeByName(state, "mtoc2_tensor_make_range");
+  useRuntimeByName(state, "jit_tensor_make_range");
   const startStr = emitExpr(e.start, state);
   const stepStr = emitExpr(e.step, state);
   const endStr = emitExpr(e.end, state);
-  return `mtoc2_tensor_make_range(${startStr}, ${stepStr}, ${endStr})`;
+  return `jit_tensor_make_range(${startStr}, ${stepStr}, ${endStr})`;
 }
 
 /** Emit a `CellLit` expression — tuple-mode cell literal. Each slot
@@ -397,7 +394,7 @@ function emitCellEmptyC(
   // expanded it to two dim exprs sharing the same source value.
   const dimExprs = e.dims.map(d => emitExpr(d, state));
   // Emit one `_v.dims[i] = (size_t)(<exprI>);` line per axis. The
-  // helper computes `nslots` as the product. Up to MTOC2_MAX_NDIM = 8.
+  // helper computes `nslots` as the product. Up to JIT_MAX_NDIM = 8.
   const ndim = dimExprs.length;
   const setDims = dimExprs
     .map((d, i) => `_v.dims[${i}] = (size_t)(${d});`)
@@ -452,10 +449,10 @@ function emitCellIndexLoadC(
       state
     );
     return (
-      `({ size_t _mtoc2_off = ${offsetExpr}; ` +
-      `if (_mtoc2_off >= ${baseCName}.nslots) { ` +
+      `({ size_t _jit_off = ${offsetExpr}; ` +
+      `if (_jit_off >= ${baseCName}.nslots) { ` +
       `fprintf(stderr, "C-JIT: cell index out of bounds\\n"); exit(1); } ` +
-      `${baseCName}.slots[_mtoc2_off]; })`
+      `${baseCName}.slots[_jit_off]; })`
     );
   }
 
@@ -471,14 +468,14 @@ function emitCellIndexLoadC(
   const slotCType = cTypeFor(e.ty);
   const branches: string[] = [];
   for (let i = 0; i < elements.length; i++) {
-    branches.push(`case ${i}: _mtoc2_v = ${baseCName}.slot_${i}; break;`);
+    branches.push(`case ${i}: _jit_v = ${baseCName}.slot_${i}; break;`);
   }
   return (
-    `({ size_t _mtoc2_off = ${offsetExpr}; ` +
-    `${slotCType} _mtoc2_v; ` +
-    `switch (_mtoc2_off) { ` +
+    `({ size_t _jit_off = ${offsetExpr}; ` +
+    `${slotCType} _jit_v; ` +
+    `switch (_jit_off) { ` +
     branches.join(" ") +
     ` default: fprintf(stderr, "C-JIT: cell index out of bounds\\n"); exit(1); } ` +
-    `_mtoc2_v; })`
+    `_jit_v; })`
   );
 }

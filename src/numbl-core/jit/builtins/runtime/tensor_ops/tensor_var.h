@@ -1,4 +1,4 @@
-/* mtoc2 runtime helpers: variance / standard deviation reductions.
+/* JIT runtime helpers: variance / standard deviation reductions.
  *
  * Two-pass per fiber (mean, then sum of squared deviations), matching
  * numbl's `varianceOf` (interpreter/builtins/reductions.ts):
@@ -25,7 +25,7 @@
 /* Strip trailing singleton axes down to a 2-axis floor. Unique name to
  * avoid colliding with tensor_reduce_real.h's identical helper when both
  * snippets are inlined into one translation unit. */
-static void mtoc2__var_squeeze_trailing(int *ndim, long *dims) {
+static void jit__var_squeeze_trailing(int *ndim, long *dims) {
   while (*ndim > 2 && dims[*ndim - 1] == 1) {
     (*ndim)--;
   }
@@ -33,7 +33,7 @@ static void mtoc2__var_squeeze_trailing(int *ndim, long *dims) {
 
 /* Variance of the length-`n` fiber starting at `base` with `stride`
  * between consecutive elements. */
-static double mtoc2__variance_fiber(const double *data, long base, long n,
+static double jit__variance_fiber(const double *data, long base, long n,
                                     long stride, int w) {
   if (n == 0) return NAN;
   if (n <= 1 && w == 0) return 0.0;
@@ -48,14 +48,14 @@ static double mtoc2__variance_fiber(const double *data, long base, long n,
   return ss / (double)(w == 1 ? n : n - 1);
 }
 
-#define MTOC2_DEFINE_VARIANCE_REDUCTION(name, TRANSFORM)                       \
-  static double mtoc2_##name##_all(mtoc2_tensor_t a, int w) {                  \
+#define JIT_DEFINE_VARIANCE_REDUCTION(name, TRANSFORM)                         \
+  static double jit_##name##_all(jit_tensor_t a, int w) {                      \
     long n = 1;                                                                \
     for (int i = 0; i < a.ndim; i++) n *= a.dims[i];                           \
-    return TRANSFORM(mtoc2__variance_fiber(a.real, 0, n, 1, w));               \
+    return TRANSFORM(jit__variance_fiber(a.real, 0, n, 1, w));                 \
   }                                                                            \
                                                                               \
-  static mtoc2_tensor_t mtoc2_##name##_dim(mtoc2_tensor_t a, int dim,          \
+  static jit_tensor_t jit_##name##_dim(jit_tensor_t a, int dim,                \
                                            int w) {                            \
     if (dim < 1) {                                                             \
       fprintf(stderr, "C-JIT: " #name "_dim: dim must be >= 1 (got %d)\n",     \
@@ -68,7 +68,7 @@ static double mtoc2__variance_fiber(const double *data, long base, long n,
        * so var/std return the input unchanged here — not zeros. */       \
       long total = 1;                                                          \
       for (int i = 0; i < a.ndim; i++) total *= a.dims[i];                     \
-      mtoc2_tensor_t out = mtoc2_tensor_alloc_nd(a.ndim, a.dims);              \
+      jit_tensor_t out = jit_tensor_alloc_nd(a.ndim, a.dims);                  \
       memcpy(out.real, a.real, (size_t)total * sizeof(double));               \
       return out;                                                              \
     }                                                                          \
@@ -78,24 +78,24 @@ static double mtoc2__variance_fiber(const double *data, long base, long n,
     for (int i = 0; i < dimIdx; i++) before *= a.dims[i];                      \
     long after = 1;                                                            \
     for (int i = dimIdx + 1; i < a.ndim; i++) after *= a.dims[i];             \
-    long out_dims[MTOC2_MAX_NDIM];                                             \
+    long out_dims[JIT_MAX_NDIM];                                               \
     int out_ndim = a.ndim;                                                     \
     for (int i = 0; i < a.ndim; i++) out_dims[i] = a.dims[i];                  \
     out_dims[dimIdx] = 1;                                                      \
-    mtoc2__var_squeeze_trailing(&out_ndim, out_dims);                          \
-    mtoc2_tensor_t out = mtoc2_tensor_alloc_nd(out_ndim, out_dims);            \
+    jit__var_squeeze_trailing(&out_ndim, out_dims);                            \
+    jit_tensor_t out = jit_tensor_alloc_nd(out_ndim, out_dims);                \
     long slab = before * axis;                                                 \
     for (long outer = 0; outer < after; outer++) {                            \
       long slabBase = outer * slab;                                            \
       for (long inner = 0; inner < before; inner++) {                          \
         double v =                                                             \
-            mtoc2__variance_fiber(a.real, slabBase + inner, axis, before, w);  \
+            jit__variance_fiber(a.real, slabBase + inner, axis, before, w);    \
         out.real[outer * before + inner] = TRANSFORM(v);                       \
       }                                                                        \
     }                                                                          \
     return out;                                                                \
   }
 
-#define MTOC2_VAR_IDENTITY(x) (x)
-MTOC2_DEFINE_VARIANCE_REDUCTION(var, MTOC2_VAR_IDENTITY)
-MTOC2_DEFINE_VARIANCE_REDUCTION(std, sqrt)
+#define JIT_VAR_IDENTITY(x) (x)
+JIT_DEFINE_VARIANCE_REDUCTION(var, JIT_VAR_IDENTITY)
+JIT_DEFINE_VARIANCE_REDUCTION(std, sqrt)

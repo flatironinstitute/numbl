@@ -1,9 +1,9 @@
-/* mtoc2 runtime helper: reshape a complex tensor to an N-D shape.
+/* JIT runtime helper: reshape a complex tensor to an N-D shape.
  *
- * Sibling of `mtoc2_reshape_nd`. Same `-1` auto-infer slot, same
+ * Sibling of `jit_reshape_nd`. Same `-1` auto-infer slot, same
  * element-count check, same runtime-error surface — the only
  * difference is the output is allocated via
- * `mtoc2_tensor_alloc_nd_complex` (both lanes) and both lanes get
+ * `jit_tensor_alloc_nd_complex` (both lanes) and both lanes get
  * memcpy'd from the input. Reshape is a layout reinterpret, so the
  * linear element order is unchanged on either lane.
  *
@@ -15,8 +15,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-static mtoc2_tensor_t mtoc2_reshape_nd_complex(
-    mtoc2_tensor_t in, int ndim, const long *dims) {
+static jit_tensor_t jit_reshape_nd_complex(
+    jit_tensor_t in, int ndim, const long *dims) {
   size_t in_total = 1;
   for (int i = 0; i < in.ndim; i++) in_total *= (size_t)in.dims[i];
   int infer_idx = -1;
@@ -38,7 +38,7 @@ static mtoc2_tensor_t mtoc2_reshape_nd_complex(
       explicit_prod *= (size_t)dims[i];
     }
   }
-  long resolved_dims[MTOC2_MAX_NDIM];
+  long resolved_dims[JIT_MAX_NDIM];
   for (int i = 0; i < ndim; i++) resolved_dims[i] = dims[i];
   size_t out_total;
   if (infer_idx != -1) {
@@ -66,7 +66,7 @@ static mtoc2_tensor_t mtoc2_reshape_nd_complex(
       abort();
     }
   }
-  mtoc2_tensor_t out = mtoc2_tensor_alloc_nd_complex(ndim, resolved_dims);
+  jit_tensor_t out = jit_tensor_alloc_nd_complex(ndim, resolved_dims);
   if (out_total > 0) {
     memcpy(out.real, in.real, out_total * sizeof(double));
     if (in.imag != NULL) {

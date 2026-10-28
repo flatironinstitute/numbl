@@ -25,7 +25,7 @@
  * data, and the result fits `EXACT_ARRAY_MAX_ELEMENTS`, the result is
  * computed at transfer time.
  *
- * Codegen dispatches to `mtoc2_tensor_cat(dim, nin, xs)` (a single
+ * Codegen dispatches to `jit_tensor_cat(dim, nin, xs)` (a single
  * runtime helper that accepts a tagged-arg array — see
  * `tensor_cat.h`).
  */
@@ -33,7 +33,7 @@
 import { TypeError, UnsupportedConstruct } from "../../../lowering/errors.js";
 import {
   EXACT_ARRAY_MAX_ELEMENTS,
-  MTOC2_MAX_NDIM,
+  JIT_MAX_NDIM,
   isNumeric,
   isScalar,
   shapeNumel,
@@ -90,9 +90,9 @@ function resolveDim(argTypes: Type[]): number {
   if (!Number.isFinite(v) || !Number.isInteger(v) || v < 1) {
     throw new TypeError(`'cat' dim must be a positive integer (got ${v})`);
   }
-  if (v > MTOC2_MAX_NDIM) {
+  if (v > JIT_MAX_NDIM) {
     throw new UnsupportedConstruct(
-      `'cat' supports dim ≤ ${MTOC2_MAX_NDIM} (got ${v})`
+      `'cat' supports dim ≤ ${JIT_MAX_NDIM} (got ${v})`
     );
   }
   return v;
@@ -388,9 +388,9 @@ export const cat: Builtin = {
         ndim = a.dims.length;
       }
     }
-    if (ndim > MTOC2_MAX_NDIM) {
+    if (ndim > JIT_MAX_NDIM) {
       throw new UnsupportedConstruct(
-        `'cat' result ndim ${ndim} exceeds ${MTOC2_MAX_NDIM}`
+        `'cat' result ndim ${ndim} exceeds ${JIT_MAX_NDIM}`
       );
     }
 
@@ -495,20 +495,20 @@ export const cat: Builtin = {
   },
 
   emitC({ argsC, argTypes, useRuntime }) {
-    useRuntime("mtoc2_tensor_cat");
+    useRuntime("jit_tensor_cat");
     const dim = resolveDim(argTypes);
     const nin = argTypes.length - 1;
     const anyComplex = argTypes.slice(1).some(a => isNumeric(a) && a.isComplex);
     if (nin === 0) {
       if (anyComplex) {
-        useRuntime("mtoc2_tensor_alloc_nd_complex");
-        return `mtoc2_tensor_alloc_nd_complex(2, (long[]){0L, 0L})`;
+        useRuntime("jit_tensor_alloc_nd_complex");
+        return `jit_tensor_alloc_nd_complex(2, (long[]){0L, 0L})`;
       }
-      useRuntime("mtoc2_tensor_alloc_nd");
-      return `mtoc2_tensor_alloc_nd(2, (long[]){0L, 0L})`;
+      useRuntime("jit_tensor_alloc_nd");
+      return `jit_tensor_alloc_nd(2, (long[]){0L, 0L})`;
     }
     if (anyComplex) {
-      useRuntime("mtoc2_cscalar");
+      useRuntime("jit_cscalar");
       const argInits: string[] = [];
       for (let i = 1; i < argTypes.length; i++) {
         const a = argTypes[i];
@@ -529,8 +529,8 @@ export const cat: Builtin = {
         }
       }
       return (
-        `mtoc2_tensor_cat_complex(${dim}L, ${nin}, ` +
-        `(mtoc2_cat_complex_arg_t[]){${argInits.join(", ")}})`
+        `jit_tensor_cat_complex(${dim}L, ${nin}, ` +
+        `(jit_cat_complex_arg_t[]){${argInits.join(", ")}})`
       );
     }
     const argInits: string[] = [];
@@ -543,29 +543,29 @@ export const cat: Builtin = {
       }
     }
     return (
-      `mtoc2_tensor_cat(${dim}L, ${nin}, ` +
-      `(mtoc2_cat_arg_t[]){${argInits.join(", ")}})`
+      `jit_tensor_cat(${dim}L, ${nin}, ` +
+      `(jit_cat_arg_t[]){${argInits.join(", ")}})`
     );
   },
 
   emitJs({ argsJs, argTypes, useRuntime }) {
-    useRuntime("mtoc2_tensor_cat");
+    useRuntime("jit_tensor_cat");
     const dim = resolveDim(argTypes);
     const nin = argTypes.length - 1;
     const anyComplex = argTypes.slice(1).some(a => isNumeric(a) && a.isComplex);
     if (nin === 0) {
       if (anyComplex) {
-        useRuntime("mtoc2_tensor_alloc_nd_complex");
-        return `mtoc2_tensor_alloc_nd_complex(2, [0, 0])`;
+        useRuntime("jit_tensor_alloc_nd_complex");
+        return `jit_tensor_alloc_nd_complex(2, [0, 0])`;
       }
-      useRuntime("mtoc2_tensor_alloc_nd");
-      return `mtoc2_tensor_alloc_nd(2, [0, 0])`;
+      useRuntime("jit_tensor_alloc_nd");
+      return `jit_tensor_alloc_nd(2, [0, 0])`;
     }
     const items: string[] = [];
     for (let i = 1; i < argTypes.length; i++) {
       items.push(argsJs[i]);
     }
-    const helper = anyComplex ? "mtoc2_tensor_cat_complex" : "mtoc2_tensor_cat";
+    const helper = anyComplex ? "jit_tensor_cat_complex" : "jit_tensor_cat";
     return `${helper}(${dim}, ${nin}, [${items.join(", ")}])`;
   },
 };

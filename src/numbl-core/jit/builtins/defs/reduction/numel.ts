@@ -30,12 +30,12 @@ export const numel: Builtin = {
     return [scalarDouble(signFromNumber(v), v)];
   },
   emitC({ argsC, argTypes, useRuntime }) {
-    useRuntime("mtoc2_numel");
+    useRuntime("jit_numel");
     const t = argTypes[0];
     if (isNumeric(t) && isScalar(t)) {
       return `1.0`;
     }
-    return `mtoc2_numel(${argsC[0]})`;
+    return `jit_numel(${argsC[0]})`;
   },
   emitJs({ argsJs, argTypes }) {
     const t = argTypes[0];

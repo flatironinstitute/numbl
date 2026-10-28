@@ -6,5 +6,5 @@ export const sin = defineUnaryRealMath({
   cFnReal: "sin",
   jsFn: Math.sin,
   signRule: () => "unknown",
-  complex: { cFnComplex: "mtoc2_csin", jsFnComplex: cSin },
+  complex: { cFnComplex: "jit_csin", jsFnComplex: cSin },
 });

@@ -72,17 +72,17 @@ export const logspace: Builtin = {
     return [ROW_UNKNOWN()];
   },
   emitC({ argsC, argTypes, useRuntime }) {
-    useRuntime("mtoc2_tensor_logspace");
+    useRuntime("jit_tensor_logspace");
     const aC = argsC[0];
     const bC = argsC[1];
     const nC = argTypes.length === 3 ? argsC[2] : `${DEFAULT_N}.0`;
-    return `mtoc2_tensor_logspace((double)(${aC}), (double)(${bC}), (long)lround(${nC}))`;
+    return `jit_tensor_logspace((double)(${aC}), (double)(${bC}), (long)lround(${nC}))`;
   },
   emitJs({ argsJs, argTypes, useRuntime }) {
-    useRuntime("mtoc2_tensor_logspace");
+    useRuntime("jit_tensor_logspace");
     const aJs = argsJs[0];
     const bJs = argsJs[1];
     const nJs = argTypes.length === 3 ? argsJs[2] : String(DEFAULT_N);
-    return `mtoc2_tensor_logspace(${aJs}, ${bJs}, Math.round(${nJs}))`;
+    return `jit_tensor_logspace(${aJs}, ${bJs}, Math.round(${nJs}))`;
   },
 };

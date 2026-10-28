@@ -3,9 +3,9 @@
 // behaviour as the C side: throws (instead of `abort()`) on bad
 // inputs.
 
-import { mtoc2_tensor_alloc_nd } from "../tensor/tensor_alloc_nd.js";
+import { jit_tensor_alloc_nd } from "../tensor/tensor_alloc_nd.js";
 
-export function mtoc2_reshape_nd(input, ndim, dims) {
+export function jit_reshape_nd(input, ndim, dims) {
   let inTotal = 1;
   for (const d of input.shape) inTotal *= d;
   let inferIdx = -1;
@@ -48,7 +48,7 @@ export function mtoc2_reshape_nd(input, ndim, dims) {
       );
     }
   }
-  const out = mtoc2_tensor_alloc_nd(ndim, resolved);
+  const out = jit_tensor_alloc_nd(ndim, resolved);
   if (outTotal > 0) out.data.set(input.data.subarray(0, outTotal));
   return out;
 }

@@ -6,7 +6,7 @@
 % (-1)^(0.5 + 1i):   opt0 2.6461e-18 + 0.043214i| opt1 same | opt2 0.043214i   <-- DIVERGES
 %
 % DIVERGING MODE: opt2 vs opt0/opt1.
-% CAUSE: interpreter & JS mtoc2_cpow compute a^b = exp(b*log(a)), which leaves
+% CAUSE: interpreter & JS jit_cpow compute a^b = exp(b*log(a)), which leaves
 %   a tiny nonzero residue in the lane that should be exactly 0. C99 cpow
 %   returns the cleaner value (exact 2i / pure-imaginary).
 % JIT ENGAGEMENT: confirmed (cpow in --dump-c).

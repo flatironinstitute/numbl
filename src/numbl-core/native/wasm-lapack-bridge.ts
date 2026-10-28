@@ -168,7 +168,7 @@ export function buildLapackBridgeFromWasm(
 
 /**
  * Install/remove the JS-JIT matmul accelerator hook (`globalThis.$matmulAccel`)
- * that `mtoc2_tensor_mtimes_real` consults. Pass `null` to uninstall.
+ * that `jit_tensor_mtimes_real` consults. Pass `null` to uninstall.
  */
 export function setMatmulAccelerator(
   fn:

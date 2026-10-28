@@ -45,7 +45,7 @@ export interface WorkspaceFile {
   ast?: AbstractSyntaxTree;
 }
 
-/** Narrow shape mtoc2 cares about. The resolver may return additional
+/** Narrow shape the JIT cares about. The resolver may return additional
  *  kinds (private, JS user functions, ...) — those are fenced off
  *  here with `UnsupportedConstruct` so the diagnostic gets a span at
  *  the call site. */
@@ -62,7 +62,7 @@ export type ResolvedTarget =
       file: string;
     }
   | {
-      /** Numbl says this name resolves to a builtin. mtoc2 still
+      /** Numbl says this name resolves to a builtin. The JIT still
        *  validates it against its own builtin registry. */
       kind: "builtin";
       name: string;
@@ -218,7 +218,7 @@ export class Workspace {
   /** Pull the primary Function AST from each `@ClassName/<methodName>.m`
    *  external method file that numbl registered for `info`. Any other
    *  top-level functions in the file are per-method-file local helpers;
-   *  mtoc2 surfaces them
+   *  the JIT surfaces them
    *  through the resolve path via `target.source.from === "classFile"`,
    *  so we don't need to collect them here — only the primary needs to
    *  join the class's method registry. Returns `undefined` when the
@@ -297,7 +297,7 @@ export class Workspace {
   }
 
   /** Resolve a call site to a single target. Wraps numbl's
-   *  `resolveFunction`, applies mtoc2-narrow validation, and routes
+   *  `resolveFunction`, applies JIT-narrow validation, and routes
    *  classMethod verdicts (instance + static) through one shape. */
   resolve(
     name: string,
@@ -308,7 +308,7 @@ export class Workspace {
     this.finalize();
     const itemTypes = argTypes.map(mtypeToItemType);
     // Numbl's resolver only routes a call to a class-file subfunction
-    // when callSite.{className,methodName} are set. mtoc2 hasn't
+    // when callSite.{className,methodName} are set. The JIT hasn't
     // threaded those through every call site explicitly, but for an
     // `@ClassName/<methodName>.m` file the values are recoverable
     // from the path. Augment the callSite so external-method-file
@@ -390,7 +390,7 @@ export class Workspace {
             // subfunction from outside any method. Numbl wouldn't
             // route the call here in that case (its resolver gates
             // on `callSite.methodName`), so reaching here means the
-            // call came from inside a class method but mtoc2 didn't
+            // call came from inside a class method but the JIT didn't
             // recover the method scope. Surface the gap directly.
             throw new UnsupportedConstruct(
               `function '${name}' resolves to a subfunction of class ` +
@@ -407,7 +407,7 @@ export class Workspace {
             // helper was discovered in that file's body. classdef-body
             // subfunctions (helpers at the top level of `<Class>.m`
             // itself, visible to every method) are a related feature
-            // class mtoc2 hasn't wired yet — keep the explicit reject.
+            // class the JIT hasn't wired yet — keep the explicit reject.
             throw new UnsupportedConstruct(
               `function '${name}' resolves to a subfunction of class ` +
                 `'${className}', but the owning method scope ` +

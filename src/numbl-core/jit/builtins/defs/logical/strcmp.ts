@@ -9,11 +9,11 @@
  *     behind `isText(a) && isText(b)`; non-text just yields `0`
  *     silently. We mirror that.
  *   - Cell-of-text vectorization (`strcmp({'a','b'}, 'a')`) is in
- *     numbl but cells aren't yet a feature class in mtoc2 — that
+ *     numbl but cells aren't yet a feature class in the JIT — that
  *     overload will fall out naturally when cells land.
  *
  * Folds to a literal when both args are exact text. Otherwise emits
- * the runtime `mtoc2_strcmp` / `mtoc2_strcmpi` helper which compares
+ * the runtime `jit_strcmp` / `jit_strcmpi` helper which compares
  * byte-for-byte on text views.
  */
 
@@ -73,5 +73,5 @@ function makeBuiltin(name: string, mode: CmpMode, helperName: string): Builtin {
   };
 }
 
-export const strcmp = makeBuiltin("strcmp", "exact", "mtoc2_strcmp");
-export const strcmpi = makeBuiltin("strcmpi", "case-fold", "mtoc2_strcmpi");
+export const strcmp = makeBuiltin("strcmp", "exact", "jit_strcmp");
+export const strcmpi = makeBuiltin("strcmpi", "case-fold", "jit_strcmpi");

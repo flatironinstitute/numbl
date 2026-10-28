@@ -4,7 +4,7 @@
  *  - `write(s)` — output sink. Routed to `rt.output(...)` so `disp` /
  *    `fprintf` / `warning` etc. land in numbl's output stream.
  *  - `plotDispatch(name, args)` — host hook for plot builtins.
- *    The emitted `mtoc2_plot_dispatch(...)` calls this in
+ *    The emitted `jit_plot_dispatch(...)` calls this in
  *    preference to the JSON-on-stdout wire format.
  *    We translate args from the emitted value shape into `RuntimeValue`
  *    via `jitToNumbl` and call numbl's `dispatchPlotBuiltin`,

@@ -1,12 +1,12 @@
-/* mtoc2 runtime helper: disp(t) for a multi-element complex tensor.
+/* JIT runtime helper: disp(t) for a multi-element complex tensor.
  *
  * Mirrors `disp_tensor.h`'s 2-D-slice / page-by-page rendering, but
- * each cell is formatted via `mtoc2_format_complex` (which mirrors
+ * each cell is formatted via `jit_format_complex` (which mirrors
  * numbl's `formatComplex`). Padding is computed against the
  * formatted-string lengths so a column with `1 - 2i` cells still
  * lines up with sibling cells of differing widths.
  *
- * Builds each `double _Complex` cell via `mtoc2_cmake` rather than
+ * Builds each `double _Complex` cell via `jit_cmake` rather than
  * the `I` macro. The JS sibling formats `{re, im}` objects.
  */
 
@@ -14,7 +14,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-static void mtoc2__disp_complex_slice(
+static void jit__disp_complex_slice(
     const double *re, const double *im, long rows, long cols) {
   /* Allow up to 80 chars per cell — `1.2345e+08 - 2.3456e+08i` and
    * friends comfortably fit. */
@@ -25,7 +25,7 @@ static void mtoc2__disp_complex_slice(
   if (!cells || !col_widths) {
     free(cells);
     free(col_widths);
-    fprintf(stderr, "C-JIT: out of memory in mtoc2_disp_tensor_complex\n");
+    fprintf(stderr, "C-JIT: out of memory in jit_disp_tensor_complex\n");
     return;
   }
 
@@ -33,31 +33,31 @@ static void mtoc2__disp_complex_slice(
     for (long r = 0; r < rows; r++) {
       long idx = r + c * rows;
       char *cell = cells + idx * CELL_CAP;
-      double _Complex z = mtoc2_cmake(re[idx], im[idx]);
-      mtoc2_format_complex(cell, CELL_CAP, z);
+      double _Complex z = jit_cmake(re[idx], im[idx]);
+      jit_format_complex(cell, CELL_CAP, z);
       long len = (long)strlen(cell);
       if (len > col_widths[c]) col_widths[c] = len;
     }
   }
 
   for (long r = 0; r < rows; r++) {
-    mtoc2_stdout("   ", 3);
+    jit_stdout("   ", 3);
     for (long c = 0; c < cols; c++) {
       long idx = r + c * rows;
       char *cell = cells + idx * CELL_CAP;
       long len = (long)strlen(cell);
-      for (long i = 0; i < col_widths[c] - len; i++) mtoc2_stdout(" ", 1);
-      mtoc2_stdout_s(cell);
-      if (c < cols - 1) mtoc2_stdout("   ", 3);
+      for (long i = 0; i < col_widths[c] - len; i++) jit_stdout(" ", 1);
+      jit_stdout_s(cell);
+      if (c < cols - 1) jit_stdout("   ", 3);
     }
-    mtoc2_stdout("\n", 1);
+    jit_stdout("\n", 1);
   }
 
   free(cells);
   free(col_widths);
 }
 
-static void mtoc2_disp_tensor_complex(mtoc2_tensor_t t) {
+static void jit_disp_tensor_complex(jit_tensor_t t) {
   if (t.ndim == 0 || t.real == NULL) return;
   long rows = t.ndim >= 1 ? t.dims[0] : 1;
   long cols = t.ndim >= 2 ? t.dims[1] : 1;
@@ -70,18 +70,18 @@ static void mtoc2_disp_tensor_complex(mtoc2_tensor_t t) {
 
   for (long p = 0; p < num_pages; p++) {
     if (t.ndim > 2) {
-      if (p > 0) mtoc2_stdout("\n", 1);
+      if (p > 0) jit_stdout("\n", 1);
       long rem = p;
-      mtoc2_stdout("(:,:", 4);
+      jit_stdout("(:,:", 4);
       for (int i = 2; i < t.ndim; i++) {
         long d = t.dims[i];
         long s = rem % d;
         rem /= d;
-        mtoc2_stdout_printf(",%ld", s + 1);
+        jit_stdout_printf(",%ld", s + 1);
       }
-      mtoc2_stdout_s(") =\n\n");
+      jit_stdout_s(") =\n\n");
     }
-    mtoc2__disp_complex_slice(
+    jit__disp_complex_slice(
       t.real + p * page_size, t.imag + p * page_size, rows, cols);
   }
 }

@@ -5,7 +5,7 @@
  * of the lowered expression above each emitted block.
  *
  * The output is NOT a faithful reproduction of the user's source
- * (synthetic names like `_mtoc2_t1`, ANF temps, and folded branches
+ * (synthetic names like `_jit_t1`, ANF temps, and folded branches
  * are visible). It IS a faithful render of what the IR actually says
  * after lowering — useful when debugging the translator.
  */

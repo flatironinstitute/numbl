@@ -22,11 +22,11 @@ export function getOrCreateSession(interp: Interpreter): SessionState {
   const key = interp.code;
   let s = sessionStateByCode.get(key);
   if (!s) {
-    // Mtoc2's resolver delegates to numbl's `resolveFunction`, but
-    // mtoc2 keeps its own `Workspace.files` map keyed by file name
+    // The JIT's resolver delegates to numbl's `resolveFunction`, but
+    // the JIT keeps its own `Workspace.files` map keyed by file name
     // and looks up the *main file's AST* through it (not through
     // `code.fileASTCache`) for main-file local function resolution.
-    // Mirror every AST numbl has cached so mtoc2 can find them.
+    // Mirror every AST numbl has cached so the JIT can find them.
     const files: WorkspaceFile[] = [];
     for (const [name, ast] of interp.code.fileASTCache) {
       files.push({ name, source: "", ast });

@@ -1,7 +1,7 @@
 import { defineUnaryRealMath } from "./_unary_real.js";
 import { signIsPositive } from "../../../lowering/types.js";
 import { exactDouble, exactRealArray } from "../_shared.js";
-import { mtoc2_realsqrt } from "../../runtime/snippets.gen.js";
+import { jit_realsqrt } from "../../runtime/snippets.gen.js";
 
 /** `realsqrt(x)`: square root that stays real. Unlike `sqrt`, an input
  *  of unknown sign stays on the real path; a negative element raises
@@ -10,9 +10,9 @@ import { mtoc2_realsqrt } from "../../runtime/snippets.gen.js";
  *  interpreter raises the error. */
 export const realsqrt = defineUnaryRealMath({
   name: "realsqrt",
-  cFnReal: "mtoc2_realsqrt",
-  jsFnReal: "mtoc2_realsqrt",
-  jsFn: mtoc2_realsqrt as (x: number) => number,
+  cFnReal: "jit_realsqrt",
+  jsFnReal: "jit_realsqrt",
+  jsFn: jit_realsqrt as (x: number) => number,
   signRule: t => (signIsPositive(t.sign) ? "positive" : "nonneg"),
   realDomainOk: t => {
     if (t.sign === "negative") return false;

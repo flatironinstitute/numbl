@@ -1,4 +1,4 @@
-/* mtoc2 runtime helpers: elementwise binary + unary ops on real
+/* JIT runtime helpers: elementwise binary + unary ops on real
  * tensors.
  *
  * Convention in the function names:
@@ -13,7 +13,7 @@
  *                 broadcast output shape and walks it column-major.
  *
  * Every helper returns a freshly-owned tensor — the codegen
- * invariant. The caller hands the result to `mtoc2_tensor_assign`
+ * invariant. The caller hands the result to `jit_tensor_assign`
  * (or to a hoisted temp Assign for in-line uses). The `_tt` path is
  * picked whenever the emitter can't statically prove the shapes match
  * (unknown dims), so it re-checks at runtime and defers a mismatch to
@@ -27,8 +27,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#define MTOC2_DEFINE_ELEMWISE_TT(name, OP, bcast)                          \
-  static mtoc2_tensor_t name(mtoc2_tensor_t a, mtoc2_tensor_t b) {          \
+#define JIT_DEFINE_ELEMWISE_TT(name, OP, bcast)                            \
+  static jit_tensor_t name(jit_tensor_t a, jit_tensor_t b) {                \
     /* Runtime shape re-check (mirrors the JS tt_kernel): a mismatch       \
      * defers to the bcast kernel, which broadcasts compatible shapes      \
      * and errors on incompatible ones, rather than reading past `b`. */   \
@@ -37,40 +37,40 @@
     if (!eq) return bcast(a, b);                                           \
     long n = 1;                                                             \
     for (int i = 0; i < a.ndim; i++) n *= a.dims[i];                        \
-    mtoc2_tensor_t r;                                                       \
-    r.real = mtoc2_alloc((size_t)n * sizeof(double));                       \
+    jit_tensor_t r;                                                         \
+    r.real = jit_alloc((size_t)n * sizeof(double));                         \
     r.imag = NULL;                                                          \
     r.ndim = a.ndim;                                                        \
     for (int i = 0; i < a.ndim; i++) r.dims[i] = a.dims[i];                 \
-    MTOC2_OMP_PARFOR_N                                                      \
+    JIT_OMP_PARFOR_N                                                        \
     for (long i = 0; i < n; i++) r.real[i] = a.real[i] OP b.real[i];        \
     return r;                                                               \
   }
 
-#define MTOC2_DEFINE_ELEMWISE_TS(name, OP)                                  \
-  static mtoc2_tensor_t name(mtoc2_tensor_t a, double s) {                  \
+#define JIT_DEFINE_ELEMWISE_TS(name, OP)                                    \
+  static jit_tensor_t name(jit_tensor_t a, double s) {                      \
     long n = 1;                                                             \
     for (int i = 0; i < a.ndim; i++) n *= a.dims[i];                        \
-    mtoc2_tensor_t r;                                                       \
-    r.real = mtoc2_alloc((size_t)n * sizeof(double));                       \
+    jit_tensor_t r;                                                         \
+    r.real = jit_alloc((size_t)n * sizeof(double));                         \
     r.imag = NULL;                                                          \
     r.ndim = a.ndim;                                                        \
     for (int i = 0; i < a.ndim; i++) r.dims[i] = a.dims[i];                 \
-    MTOC2_OMP_PARFOR_N                                                      \
+    JIT_OMP_PARFOR_N                                                        \
     for (long i = 0; i < n; i++) r.real[i] = a.real[i] OP s;                \
     return r;                                                               \
   }
 
-#define MTOC2_DEFINE_ELEMWISE_ST(name, OP)                                  \
-  static mtoc2_tensor_t name(double s, mtoc2_tensor_t b) {                  \
+#define JIT_DEFINE_ELEMWISE_ST(name, OP)                                    \
+  static jit_tensor_t name(double s, jit_tensor_t b) {                      \
     long n = 1;                                                             \
     for (int i = 0; i < b.ndim; i++) n *= b.dims[i];                        \
-    mtoc2_tensor_t r;                                                       \
-    r.real = mtoc2_alloc((size_t)n * sizeof(double));                       \
+    jit_tensor_t r;                                                         \
+    r.real = jit_alloc((size_t)n * sizeof(double));                         \
     r.imag = NULL;                                                          \
     r.ndim = b.ndim;                                                        \
     for (int i = 0; i < b.ndim; i++) r.dims[i] = b.dims[i];                 \
-    MTOC2_OMP_PARFOR_N                                                      \
+    JIT_OMP_PARFOR_N                                                        \
     for (long i = 0; i < n; i++) r.real[i] = s OP b.real[i];                \
     return r;                                                               \
   }
@@ -80,12 +80,12 @@
  * the dims match or one of them is 1 (replicated to the other's size).
  * The codegen path emits this only when at least one axis statically
  * needs broadcasting; same-shape calls still go through `_tt`. */
-#define MTOC2_DEFINE_ELEMWISE_BCAST_TT(name, OP)                            \
-  static mtoc2_tensor_t name(mtoc2_tensor_t a, mtoc2_tensor_t b) {          \
+#define JIT_DEFINE_ELEMWISE_BCAST_TT(name, OP)                              \
+  static jit_tensor_t name(jit_tensor_t a, jit_tensor_t b) {                \
     int rnd = a.ndim > b.ndim ? a.ndim : b.ndim;                            \
-    long adim[MTOC2_MAX_NDIM], bdim[MTOC2_MAX_NDIM];                        \
-    long rdim[MTOC2_MAX_NDIM];                                              \
-    long astride[MTOC2_MAX_NDIM], bstride[MTOC2_MAX_NDIM];                  \
+    long adim[JIT_MAX_NDIM], bdim[JIT_MAX_NDIM];                            \
+    long rdim[JIT_MAX_NDIM];                                                \
+    long astride[JIT_MAX_NDIM], bstride[JIT_MAX_NDIM];                      \
     long aacc = 1, bacc = 1;                                                \
     long n = 1;                                                             \
     for (int i = 0; i < rnd; i++) {                                         \
@@ -105,8 +105,8 @@
       bacc *= bdim[i];                                                      \
       n *= rdim[i];                                                         \
     }                                                                       \
-    mtoc2_tensor_t r;                                                       \
-    r.real = mtoc2_alloc((size_t)n * sizeof(double));                       \
+    jit_tensor_t r;                                                         \
+    r.real = jit_alloc((size_t)n * sizeof(double));                         \
     r.imag = NULL;                                                          \
     r.ndim = rnd;                                                           \
     for (int i = 0; i < rnd; i++) r.dims[i] = rdim[i];                      \
@@ -121,7 +121,7 @@
       /* Compute each row's `k` offset (`i1 * d0`) per outer iteration so   \
        * the outer loop has no carried state — required for the OpenMP     \
        * parallel-for below to be safe. */                                  \
-      MTOC2_OMP_PARFOR_N                                                    \
+      JIT_OMP_PARFOR_N                                                      \
       for (long i1 = 0; i1 < d1; i1++) {                                    \
         long aoff1 = i1 * as1, boff1 = i1 * bs1, koff1 = i1 * d0;           \
         for (long i0 = 0; i0 < d0; i0++) {                                  \
@@ -130,7 +130,7 @@
       }                                                                     \
       return r;                                                             \
     }                                                                       \
-    long ix[MTOC2_MAX_NDIM] = {0};                                          \
+    long ix[JIT_MAX_NDIM] = {0};                                            \
     for (long k = 0; k < n; k++) {                                          \
       long ai = 0, bi = 0;                                                  \
       for (int i = 0; i < rnd; i++) {                                       \
@@ -149,36 +149,36 @@
 
 /* Bcast helpers are instantiated first so the `_tt` helpers below can
  * delegate to them on a runtime shape mismatch. */
-MTOC2_DEFINE_ELEMWISE_BCAST_TT(mtoc2_tensor_plus_bcast_tt, +)
-MTOC2_DEFINE_ELEMWISE_BCAST_TT(mtoc2_tensor_minus_bcast_tt, -)
-MTOC2_DEFINE_ELEMWISE_BCAST_TT(mtoc2_tensor_times_bcast_tt, *)
-MTOC2_DEFINE_ELEMWISE_BCAST_TT(mtoc2_tensor_rdivide_bcast_tt, /)
+JIT_DEFINE_ELEMWISE_BCAST_TT(jit_tensor_plus_bcast_tt, +)
+JIT_DEFINE_ELEMWISE_BCAST_TT(jit_tensor_minus_bcast_tt, -)
+JIT_DEFINE_ELEMWISE_BCAST_TT(jit_tensor_times_bcast_tt, *)
+JIT_DEFINE_ELEMWISE_BCAST_TT(jit_tensor_rdivide_bcast_tt, /)
 
-MTOC2_DEFINE_ELEMWISE_TT(mtoc2_tensor_plus_tt, +, mtoc2_tensor_plus_bcast_tt)
-MTOC2_DEFINE_ELEMWISE_TT(mtoc2_tensor_minus_tt, -, mtoc2_tensor_minus_bcast_tt)
-MTOC2_DEFINE_ELEMWISE_TT(mtoc2_tensor_times_tt, *, mtoc2_tensor_times_bcast_tt)
-MTOC2_DEFINE_ELEMWISE_TT(mtoc2_tensor_rdivide_tt, /, mtoc2_tensor_rdivide_bcast_tt)
+JIT_DEFINE_ELEMWISE_TT(jit_tensor_plus_tt, +, jit_tensor_plus_bcast_tt)
+JIT_DEFINE_ELEMWISE_TT(jit_tensor_minus_tt, -, jit_tensor_minus_bcast_tt)
+JIT_DEFINE_ELEMWISE_TT(jit_tensor_times_tt, *, jit_tensor_times_bcast_tt)
+JIT_DEFINE_ELEMWISE_TT(jit_tensor_rdivide_tt, /, jit_tensor_rdivide_bcast_tt)
 
-MTOC2_DEFINE_ELEMWISE_TS(mtoc2_tensor_plus_ts, +)
-MTOC2_DEFINE_ELEMWISE_TS(mtoc2_tensor_minus_ts, -)
-MTOC2_DEFINE_ELEMWISE_TS(mtoc2_tensor_times_ts, *)
-MTOC2_DEFINE_ELEMWISE_TS(mtoc2_tensor_rdivide_ts, /)
+JIT_DEFINE_ELEMWISE_TS(jit_tensor_plus_ts, +)
+JIT_DEFINE_ELEMWISE_TS(jit_tensor_minus_ts, -)
+JIT_DEFINE_ELEMWISE_TS(jit_tensor_times_ts, *)
+JIT_DEFINE_ELEMWISE_TS(jit_tensor_rdivide_ts, /)
 
 /* Commutative ops (plus, times) reuse `_ts` for `scalar OP tensor`.
  * Non-commutative ops need their own scalar-first flavor. */
-MTOC2_DEFINE_ELEMWISE_ST(mtoc2_tensor_minus_st, -)
-MTOC2_DEFINE_ELEMWISE_ST(mtoc2_tensor_rdivide_st, /)
+JIT_DEFINE_ELEMWISE_ST(jit_tensor_minus_st, -)
+JIT_DEFINE_ELEMWISE_ST(jit_tensor_rdivide_st, /)
 
 /* Unary minus — negate every element. */
-static mtoc2_tensor_t mtoc2_tensor_uminus(mtoc2_tensor_t a) {
+static jit_tensor_t jit_tensor_uminus(jit_tensor_t a) {
   long n = 1;
   for (int i = 0; i < a.ndim; i++) n *= a.dims[i];
-  mtoc2_tensor_t r;
-  r.real = mtoc2_alloc((size_t)n * sizeof(double));
+  jit_tensor_t r;
+  r.real = jit_alloc((size_t)n * sizeof(double));
   r.imag = NULL;
   r.ndim = a.ndim;
   for (int i = 0; i < a.ndim; i++) r.dims[i] = a.dims[i];
-  MTOC2_OMP_PARFOR_N
+  JIT_OMP_PARFOR_N
   for (long i = 0; i < n; i++) r.real[i] = -a.real[i];
   return r;
 }

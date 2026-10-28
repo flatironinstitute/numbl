@@ -6,7 +6,7 @@
 // `tensor_reduce_real.js`'s `squeeze_trailing` when both snippets are
 // inlined into one generated module.
 
-import { mtoc2_tensor_alloc_nd } from "../tensor/tensor_alloc_nd.js";
+import { jit_tensor_alloc_nd } from "../tensor/tensor_alloc_nd.js";
 
 function var_squeeze_trailing(dims) {
   while (dims.length > 2 && dims[dims.length - 1] === 1) dims.pop();
@@ -34,7 +34,7 @@ function var_dim_impl(t, dim, w, transform) {
     // No-op axis: numbl's reduceDim copies the input verbatim when
     // dim > ndim (forEachSlice returns null), regardless of the
     // reducer — so var/std return the input unchanged, not zeros.
-    const out = mtoc2_tensor_alloc_nd(t.shape.length, t.shape.slice());
+    const out = jit_tensor_alloc_nd(t.shape.length, t.shape.slice());
     out.data.set(t.data);
     return out;
   }
@@ -47,7 +47,7 @@ function var_dim_impl(t, dim, w, transform) {
   const outDims = t.shape.slice();
   outDims[dimIdx] = 1;
   var_squeeze_trailing(outDims);
-  const out = mtoc2_tensor_alloc_nd(outDims.length, outDims);
+  const out = jit_tensor_alloc_nd(outDims.length, outDims);
   for (let aft = 0; aft < after; aft++) {
     for (let bef = 0; bef < before; bef++) {
       const base = aft * before * axis + bef;
@@ -59,15 +59,15 @@ function var_dim_impl(t, dim, w, transform) {
   return out;
 }
 
-export function mtoc2_var_all(t, w) {
+export function jit_var_all(t, w) {
   return var_all_impl(t, w, x => x);
 }
-export function mtoc2_var_dim(t, dim, w) {
+export function jit_var_dim(t, dim, w) {
   return var_dim_impl(t, dim, w, x => x);
 }
-export function mtoc2_std_all(t, w) {
+export function jit_std_all(t, w) {
   return var_all_impl(t, w, Math.sqrt);
 }
-export function mtoc2_std_dim(t, dim, w) {
+export function jit_std_dim(t, dim, w) {
   return var_dim_impl(t, dim, w, Math.sqrt);
 }

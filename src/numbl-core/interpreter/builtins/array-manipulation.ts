@@ -161,7 +161,7 @@ function varargMatch2(argTypes: JitType[]): JitType[] | null {
 
 // Size / replication args must be integers — MATLAB errors on a
 // non-integer (reshape(x,2.5,[]), repmat(x,1,2.5)), matching numbl's
-// array-construction validateDim and the JIT's mtoc2_check_dim. A
+// array-construction validateDim and the JIT's jit_check_dim. A
 // negative clamps to 0 (empty axis), as validateDim does.
 function validateSizeArg(x: number): number {
   if (!Number.isFinite(x) || !Number.isInteger(x)) {

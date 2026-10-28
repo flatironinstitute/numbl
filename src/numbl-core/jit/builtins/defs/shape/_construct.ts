@@ -1,11 +1,11 @@
 /**
  * Shared infrastructure for the rank-N constructor builtins
- * (`zeros`, `ones`). Each call site supplies 1..MTOC2_MAX_NDIM scalar
+ * (`zeros`, `ones`). Each call site supplies 1..JIT_MAX_NDIM scalar
  * real shape arguments. Each dim arg is either statically-known
  * (`exact` set on its NumericType) or dynamic (a runtime scalar
  * `double`); both are accepted. MATLAB's `zeros(n)` / `ones(n)`
  * one-arg form means an n×n square — codegen routes the dynamic
- * variant through `mtoc2_tensor_<kind>_square` so the dim expression
+ * variant through `jit_tensor_<kind>_square` so the dim expression
  * is evaluated exactly once.
  *
  * When every dim is exact the transfer can compute the shape (and
@@ -14,13 +14,13 @@
  * through the type lattice unchanged.
  *
  * Codegen always emits a runtime call:
- *   - all-exact dims: `mtoc2_tensor_<kind>_nd(<N>, (long[]){<lit>,…})`
+ *   - all-exact dims: `jit_tensor_<kind>_nd(<N>, (long[]){<lit>,…})`
  *   - dynamic single-arg square form:
- *     `mtoc2_tensor_<kind>_square((long)(<arg>))`
+ *     `jit_tensor_<kind>_square((long)(<arg>))`
  *   - dynamic multi-arg form:
- *     `mtoc2_tensor_<kind>_nd(<N>, (long[]){<lit-or-cast>,…})`
+ *     `jit_tensor_<kind>_nd(<N>, (long[]){<lit-or-cast>,…})`
  *
- * The element cap (8 = MTOC2_MAX_NDIM) is enforced at the source side
+ * The element cap (8 = JIT_MAX_NDIM) is enforced at the source side
  * too; the runtime helper aborts beyond that, but raising at lowering
  * time gives a proper span.
  */
@@ -29,7 +29,7 @@ import { UnsupportedConstruct, TypeError } from "../../../lowering/errors.js";
 import {
   DIM_ONE,
   EXACT_ARRAY_MAX_ELEMENTS,
-  MTOC2_MAX_NDIM,
+  JIT_MAX_NDIM,
   tensorDouble,
   tensorDoubleFromDims,
   scalarDouble,
@@ -91,9 +91,9 @@ interface ResolvedShape {
  *  `kind: "dynamic"` axes. Throws on bad arg types or out-of-range
  *  exact values. */
 function resolveShape(name: string, argTypes: Type[]): ResolvedShape {
-  if (argTypes.length < 1 || argTypes.length > MTOC2_MAX_NDIM) {
+  if (argTypes.length < 1 || argTypes.length > JIT_MAX_NDIM) {
     throw new UnsupportedConstruct(
-      `'${name}' supports 1..${MTOC2_MAX_NDIM} shape arguments (got ${argTypes.length})`
+      `'${name}' supports 1..${JIT_MAX_NDIM} shape arguments (got ${argTypes.length})`
     );
   }
 
@@ -124,9 +124,9 @@ function resolveShape(name: string, argTypes: Type[]): ResolvedShape {
         `'${name}' dim vector must be a statically-known constant in v1`
       );
     }
-    if (arr.length < 1 || arr.length > MTOC2_MAX_NDIM) {
+    if (arr.length < 1 || arr.length > JIT_MAX_NDIM) {
       throw new UnsupportedConstruct(
-        `'${name}' supports 1..${MTOC2_MAX_NDIM} output dims (got ${arr.length})`
+        `'${name}' supports 1..${JIT_MAX_NDIM} output dims (got ${arr.length})`
       );
     }
     const axes: ResolvedAxis[] = [];
@@ -203,16 +203,16 @@ function exactShapeOf(r: ResolvedShape): number[] | undefined {
  *  (`(long)` / `Math.trunc`), so `zeros(1, 3.7)` built a 1×3 instead of
  *  raising. */
 export const CHECK_DIM_SNIPPET: InlineSnippet = {
-  name: "mtoc2_check_dim",
+  name: "jit_check_dim",
   headers: ["<math.h>", "<stdio.h>", "<stdlib.h>"],
-  code: `static long mtoc2_check_dim(double x) {
+  code: `static long jit_check_dim(double x) {
   if (!isfinite(x) || x != floor(x)) {
     fprintf(stderr, "Size inputs must be nonnegative integers.\\n");
     exit(1);
   }
   return x < 0.0 ? 0L : (long)x;
 }`,
-  jsCode: `function mtoc2_check_dim(x) {
+  jsCode: `function jit_check_dim(x) {
   if (!Number.isFinite(x) || !Number.isInteger(x))
     throw new Error("Size inputs must be nonnegative integers.");
   return x < 0 ? 0 : x;
@@ -223,13 +223,13 @@ export const CHECK_DIM_SNIPPET: InlineSnippet = {
  *  for exact, validated conversion for dynamic. */
 function dimC(axis: ResolvedAxis, argsC: string[]): string {
   if (axis.kind === "exact") return `${axis.value}L`;
-  return `mtoc2_check_dim(${argsC[axis.argIndex]})`;
+  return `jit_check_dim(${argsC[axis.argIndex]})`;
 }
 
 /** Options for `defineShapeConstructor`. When `cFillValue` is set, the
  *  factory builds a "parameterized fill" constructor: the runtime
  *  helpers are invoked with `cFillValue` as their first arg
- *  (`mtoc2_tensor_fill_nd(v, ndim, dims)` style) and the scalar-
+ *  (`jit_tensor_fill_nd(v, ndim, dims)` style) and the scalar-
  *  collapse emit uses `cFillValue` verbatim. This is the path used by
  *  the non-finite constants (`nan`/`NaN`/`Inf`/`inf`), where the JS
  *  number's `toString` ("NaN" / "Infinity") doesn't round-trip to
@@ -267,9 +267,9 @@ export function defineShapeConstructor(
   return {
     name,
     transfer(argTypes, nargout) {
-      if (argTypes.length < minArgs || argTypes.length > MTOC2_MAX_NDIM) {
+      if (argTypes.length < minArgs || argTypes.length > JIT_MAX_NDIM) {
         throw new UnsupportedConstruct(
-          `'${name}' supports ${minArgs}..${MTOC2_MAX_NDIM} arg(s), got ${argTypes.length}`
+          `'${name}' supports ${minArgs}..${JIT_MAX_NDIM} arg(s), got ${argTypes.length}`
         );
       }
       if (nargout !== 1) {
@@ -329,7 +329,7 @@ export function defineShapeConstructor(
       useRuntime(CHECK_DIM_SNIPPET);
       if (resolved.isSquare) {
         const src = resolved.axes[0];
-        return `${squareHelper}(${helperPrefix}mtoc2_check_dim(${argsC[src.argIndex]}))`;
+        return `${squareHelper}(${helperPrefix}jit_check_dim(${argsC[src.argIndex]}))`;
       }
       const dimList = resolved.axes.map(a => dimC(a, argsC)).join(", ");
       return `${ndHelper}(${helperPrefix}${resolved.ndim}, (long[]){${dimList}})`;
@@ -341,7 +341,7 @@ export function defineShapeConstructor(
       const shape = exactShapeOf(resolved);
       // Helper-call prefix: `value, ndim, [...]` for fill-style,
       // `ndim, [...]` for plain zeros/ones. The JS-side
-      // `mtoc2_tensor_fill_nd` takes (value, ndim, dims), matching.
+      // `jit_tensor_fill_nd` takes (value, ndim, dims), matching.
       const jsPrefix =
         cFillValue !== undefined ? `${fillValueAsJsLiteral(fillValue)}, ` : "";
       if (shape !== undefined) {
@@ -356,13 +356,13 @@ export function defineShapeConstructor(
       useRuntime(CHECK_DIM_SNIPPET);
       if (resolved.isSquare) {
         const src = resolved.axes[0];
-        return `${squareHelper}(${jsPrefix}mtoc2_check_dim(${argsJs[src.argIndex]}))`;
+        return `${squareHelper}(${jsPrefix}jit_check_dim(${argsJs[src.argIndex]}))`;
       }
       const dimList = resolved.axes
         .map(a =>
           a.kind === "exact"
             ? String(a.value)
-            : `mtoc2_check_dim(${argsJs[a.argIndex]})`
+            : `jit_check_dim(${argsJs[a.argIndex]})`
         )
         .join(", ");
       return `${ndHelper}(${jsPrefix}${resolved.ndim}, [${dimList}])`;

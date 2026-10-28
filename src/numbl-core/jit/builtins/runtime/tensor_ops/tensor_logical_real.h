@@ -1,9 +1,9 @@
-/* mtoc2 runtime helpers: elementwise logical ops on tensors.
+/* JIT runtime helpers: elementwise logical ops on tensors.
  *
  * Same allocate-and-fill pattern as tensor_unary_real_math.h, but the
  * per-element kernel is a logical predicate that returns 0.0 or 1.0.
  *
- * `mtoc2_tensor_not` mirrors numbl's `not(v)` (runtimeOperators.ts):
+ * `jit_tensor_not` mirrors numbl's `not(v)` (runtimeOperators.ts):
  * a real-tensor input produces a freshly-owned logical-typed tensor
  * of the same shape with `out[i] = (in[i] == 0.0) ? 1.0 : 0.0`. The
  * complex sibling fires "true" iff both lanes are exactly zero. The
@@ -13,11 +13,11 @@
  */
 #include <stdlib.h>
 
-static mtoc2_tensor_t mtoc2_tensor_not(mtoc2_tensor_t a) {
+static jit_tensor_t jit_tensor_not(jit_tensor_t a) {
   long n = 1;
   for (int i = 0; i < a.ndim; i++) n *= a.dims[i];
-  mtoc2_tensor_t r;
-  r.real = mtoc2_alloc((size_t)n * sizeof(double));
+  jit_tensor_t r;
+  r.real = jit_alloc((size_t)n * sizeof(double));
   r.imag = NULL;
   r.ndim = a.ndim;
   for (int i = 0; i < a.ndim; i++) r.dims[i] = a.dims[i];
@@ -25,11 +25,11 @@ static mtoc2_tensor_t mtoc2_tensor_not(mtoc2_tensor_t a) {
   return r;
 }
 
-static mtoc2_tensor_t mtoc2_tensor_not_complex(mtoc2_tensor_t a) {
+static jit_tensor_t jit_tensor_not_complex(jit_tensor_t a) {
   long n = 1;
   for (int i = 0; i < a.ndim; i++) n *= a.dims[i];
-  mtoc2_tensor_t r;
-  r.real = mtoc2_alloc((size_t)n * sizeof(double));
+  jit_tensor_t r;
+  r.real = jit_alloc((size_t)n * sizeof(double));
   r.imag = NULL;
   r.ndim = a.ndim;
   for (int i = 0; i < a.ndim; i++) r.dims[i] = a.dims[i];

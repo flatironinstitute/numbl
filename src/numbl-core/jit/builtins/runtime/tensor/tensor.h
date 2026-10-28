@@ -10,19 +10,19 @@
  * Scalars never use this struct — real scalars are bare `double`,
  * complex scalars are `double _Complex`. Anything the type system
  * classifies as multi-element (any axis is not statically 1) gets
- * one `mtoc2_tensor_t` value. The data buffers are column-major to match
+ * one `jit_tensor_t` value. The data buffers are column-major to match
  * MATLAB / LAPACK.
  *
  * Shape: `ndim` axes with sizes `dims[0..ndim-1]`. The minimum
  * logical ndim is 2 (matching numbl) — a row vector is `{1, n}` and
- * a column vector is `{n, 1}`. `MTOC2_MAX_NDIM` caps the inline dims
+ * a column vector is `{n, 1}`. `JIT_MAX_NDIM` caps the inline dims
  * array; tensors with more axes than that are unrepresentable in
  * mtoc today (the static type system enforces this at lowering).
  * Keeping `dims` inline preserves the value-typed semantics of
- * `mtoc2_tensor_t` — assign / copy / free do a struct copy and
+ * `jit_tensor_t` — assign / copy / free do a struct copy and
  * touch only the two heap pointers; the shape rides along for free.
  *
- * Storage is heap-allocated via `mtoc2_alloc` at every assignment
+ * Storage is heap-allocated via `jit_alloc` at every assignment
  * site. The struct is predeclared with `real = imag = NULL` and
  * `ndim = 0` (no dims populated); the first assignment populates
  * them, and subsequent reassignments at a different runtime shape
@@ -30,45 +30,45 @@
  * predeclared NULLs is a no-op (well-defined by C), so the cleanup
  * path is uniform for first and subsequent assignments alike.
  *
- * The `MTOC2_RESTRICT` qualifier on the buffer pointers tells the
- * compiler that distinct `mtoc2_tensor_t` values' buffers do not
+ * The `JIT_RESTRICT` qualifier on the buffer pointers tells the
+ * compiler that distinct `jit_tensor_t` values' buffers do not
  * alias each other. It expands to `__restrict__` under GCC/Clang
  * and to nothing on compilers that don't recognize it.
  */
 
-#ifndef MTOC2_RESTRICT
+#ifndef JIT_RESTRICT
 # if defined(__GNUC__) || defined(__clang__)
-#  define MTOC2_RESTRICT __restrict__
+#  define JIT_RESTRICT __restrict__
 # else
-#  define MTOC2_RESTRICT
+#  define JIT_RESTRICT
 # endif
 #endif
 
-#ifndef MTOC2_MAX_NDIM
-#define MTOC2_MAX_NDIM 8
+#ifndef JIT_MAX_NDIM
+#define JIT_MAX_NDIM 8
 #endif
 
 typedef struct {
-  double *MTOC2_RESTRICT real;   /* always non-NULL */
-  double *MTOC2_RESTRICT imag;   /* NULL iff the tensor is statically real */
+  double *JIT_RESTRICT real;   /* always non-NULL */
+  double *JIT_RESTRICT imag;   /* NULL iff the tensor is statically real */
   int  ndim;
-  long dims[MTOC2_MAX_NDIM];
-} mtoc2_tensor_t;
+  long dims[JIT_MAX_NDIM];
+} jit_tensor_t;
 
 /* OpenMP `#pragma omp parallel for if(n > 1024)` for elementwise
  * loops that iterate over a length-`n` index. Active only when the
- * C compiler runs with `-fopenmp` (which mtoc2's build adds when
+ * C compiler runs with `-fopenmp` (which the JIT's build adds when
  * `--threads` is `auto` or a number `>= 2`); otherwise `_OPENMP` is
  * undefined and the macro expands to nothing — the loop stays
  * serial and the pragma never reaches the compiler. The
  * `if(n > 1024)` clause keeps small loops serial regardless, so
  * OpenMP region startup doesn't dominate for tensors that don't
  * amortize the overhead. Defined once here because every elementwise
- * runtime helper depends transitively on `mtoc2_tensor_t`. */
-#ifndef MTOC2_OMP_PARFOR_N
+ * runtime helper depends transitively on `jit_tensor_t`. */
+#ifndef JIT_OMP_PARFOR_N
 # ifdef _OPENMP
-#  define MTOC2_OMP_PARFOR_N _Pragma("omp parallel for if(n > 1024)")
+#  define JIT_OMP_PARFOR_N _Pragma("omp parallel for if(n > 1024)")
 # else
-#  define MTOC2_OMP_PARFOR_N
+#  define JIT_OMP_PARFOR_N
 # endif
 #endif

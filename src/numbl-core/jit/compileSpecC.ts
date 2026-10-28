@@ -19,7 +19,7 @@
  *   "decline this JIT proposal" signal.
  *
  * Returns a `signature` describing the C function the host needs to
- * declare to koffi. The signature uses mtoc2 `Type` values directly —
+ * declare to koffi. The signature uses JIT `Type` values directly —
  * the host adapter translates each to a koffi type spec and assembles
  * the prototype string.
  */
@@ -45,7 +45,7 @@ type FuncStmt = Extract<Stmt, { type: "Function" }>;
 export interface SpecCParam {
   /** Identifier the C source uses for the param. */
   readonly cName: string;
-  /** mtoc2 type — host translates to koffi type + marshals values. */
+  /** JIT type — host translates to koffi type + marshals values. */
   readonly ty: Type;
 }
 
@@ -53,7 +53,7 @@ export interface SpecCParam {
  *  For `nargout === 1`: a single by-value return slot whose `cName` is
  *  unused (the function uses C `return`).
  *  For `nargout >= 2`: each output is appended as an out-pointer param
- *  named `_mtoc2_o<i>` AFTER the user params — see `emitStmt.ts`
+ *  named `_jit_o<i>` AFTER the user params — see `emitStmt.ts`
  *  `fnParamList` for the convention.
  *  For `nargout === 0`: no return slot. */
 export interface SpecCOutput {
@@ -62,7 +62,7 @@ export interface SpecCOutput {
 }
 
 export interface SpecCSignature {
-  /** mtoc2-mangled C name of the entry function (the symbol koffi
+  /** JIT-mangled C name of the entry function (the symbol koffi
    *  resolves after `dlopen`). */
   readonly cName: string;
   /** Param shape, in the order the C function expects. */
@@ -138,7 +138,7 @@ export function compileSpecC(args: CompileSpecCArgs): CompileSpecCResult {
       undefined
     );
     // Same boundary check the JS path uses: bare non-void ExprStmts
-    // would bind to numbl's `ans`, which mtoc2 has no protocol for.
+    // would bind to numbl's `ans`, which the JIT has no protocol for.
     assertNoNonVoidBareExprStmts(spec);
     // Decline (fall back to JS-JIT / interpreter) when any function may read a
     // local before it is definitely assigned. C predeclares locals to 0, so it

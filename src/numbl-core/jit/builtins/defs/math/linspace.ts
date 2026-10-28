@@ -122,7 +122,7 @@ export const linspace: Builtin = {
     return [tensorDoubleFromDims(dims)];
   },
   emitC({ argsC, argTypes, useRuntime }) {
-    useRuntime("mtoc2_tensor_linspace");
+    useRuntime("jit_tensor_linspace");
     const aC = argsC[0];
     const bC = argsC[1];
     const nC = argTypes.length === 3 ? argsC[2] : `${DEFAULT_N}.0`;
@@ -133,10 +133,10 @@ export const linspace: Builtin = {
         return `((${aC}), (${bC}))`;
       }
     }
-    return `mtoc2_tensor_linspace((double)(${aC}), (double)(${bC}), (long)lround(${nC}))`;
+    return `jit_tensor_linspace((double)(${aC}), (double)(${bC}), (long)lround(${nC}))`;
   },
   emitJs({ argsJs, argTypes, useRuntime }) {
-    useRuntime("mtoc2_tensor_linspace");
+    useRuntime("jit_tensor_linspace");
     const aJs = argsJs[0];
     const bJs = argsJs[1];
     const nJs = argTypes.length === 3 ? argsJs[2] : String(DEFAULT_N);
@@ -146,6 +146,6 @@ export const linspace: Builtin = {
         return `((${aJs}), (${bJs}))`;
       }
     }
-    return `mtoc2_tensor_linspace(${aJs}, ${bJs}, Math.round(${nJs}))`;
+    return `jit_tensor_linspace(${aJs}, ${bJs}, Math.round(${nJs}))`;
   },
 };

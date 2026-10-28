@@ -7,21 +7,21 @@
  *
  *     // c = a + b;     emits:
  *     {
- *       mtoc2_tensor_t _r = mtoc2_tensor_alloc_nd(a.ndim, a.dims);
- *       long _mtoc2_n = 1; for (int _mtoc2_i = 0; _mtoc2_i < _r.ndim; _mtoc2_i++) _mtoc2_n *= _r.dims[_mtoc2_i];
- *       MTOC2_OMP_PARFOR_N
- *       for (long _mtoc2_i = 0; _mtoc2_i < _mtoc2_n; _mtoc2_i++) _r.real[_mtoc2_i] = (a.real[_mtoc2_i] + b.real[_mtoc2_i]);
- *       mtoc2_tensor_assign(&c, _r);
+ *       jit_tensor_t _r = jit_tensor_alloc_nd(a.ndim, a.dims);
+ *       long _jit_n = 1; for (int _jit_i = 0; _jit_i < _r.ndim; _jit_i++) _jit_n *= _r.dims[_jit_i];
+ *       JIT_OMP_PARFOR_N
+ *       for (long _jit_i = 0; _jit_i < _jit_n; _jit_i++) _r.real[_jit_i] = (a.real[_jit_i] + b.real[_jit_i]);
+ *       jit_tensor_assign(&c, _r);
  *     }
  *
- * The local element-count + iter variables use the `_mtoc2_` reserved
+ * The local element-count + iter variables use the `_jit_` reserved
  * prefix so they can't collide with user-scope identifiers (`n`, `i`
  * are common single-letter names in MATLAB and would shadow the
  * function param / local on the enclosing block if we declared them
  * with their natural names).
  *
  * For a single-Binary RHS this is equivalent (post-`-O3`) to the
- * existing `mtoc2_tensor_assign(&c, mtoc2_tensor_plus_tt(a, b))`
+ * existing `jit_tensor_assign(&c, jit_tensor_plus_tt(a, b))`
  * path — the helper's body is literally the same loop. The point of
  * doing the inlining at the IR level is that an IR-to-IR pass
  * (`inlinePass.ts`, run by `compileSpecC` before emit)
@@ -32,7 +32,7 @@
  * Only the *same-static-shape* case is handled. If any multi-element
  * operand has a statically-different shape from the target, the
  * Assign falls back to the runtime-helper path
- * (`mtoc2_tensor_<op>_bcast_tt(...)`).
+ * (`jit_tensor_<op>_bcast_tt(...)`).
  */
 
 import type { Assign, IRExpr } from "../lowering/ir.js";
@@ -56,9 +56,9 @@ import { formatDouble } from "./cHelpers.js";
  *  fuses (it always routes tensor ops through the shape-checking
  *  `_tt` helpers). */
 const FUSED_SHAPE_EQ_SNIPPET: InlineSnippet = {
-  name: "mtoc2_fused_shape_eq",
-  deps: ["mtoc2_tensor_t"],
-  code: `static int mtoc2_fused_shape_eq(mtoc2_tensor_t a, mtoc2_tensor_t b) {
+  name: "jit_fused_shape_eq",
+  deps: ["jit_tensor_t"],
+  code: `static int jit_fused_shape_eq(jit_tensor_t a, jit_tensor_t b) {
   if (a.ndim != b.ndim) return 0;
   for (int i = 0; i < a.ndim; i++)
     if (a.dims[i] != b.dims[i]) return 0;
@@ -292,11 +292,11 @@ function walkExpr(e: IRExpr, visit: (sub: IRExpr) => void): void {
 }
 
 /** Render the per-slot C expression for `e`. Multi-element Vars
- *  become `<cName>.real[_mtoc2_i]`; scalar Vars stay as their bare
+ *  become `<cName>.real[_jit_i]`; scalar Vars stay as their bare
  *  cName; NumLits render as their double form; Binary/Unary/Call
  *  routes through each builtin's `perSlotC`. The fixed iter variable
- *  name `_mtoc2_i` matches the outer loop emitted by
- *  `emitTensorAssignFused`; the `_mtoc2_` reserved prefix is used so
+ *  name `_jit_i` matches the outer loop emitted by
+ *  `emitTensorAssignFused`; the `_jit_` reserved prefix is used so
  *  the iter doesn't shadow a user-named loop variable like `i`. */
 function emitPerSlotExpr(e: IRExpr, state: RuntimeState): string {
   switch (e.kind) {
@@ -304,7 +304,7 @@ function emitPerSlotExpr(e: IRExpr, state: RuntimeState): string {
       return formatDouble(e.value);
     case "Var":
       if (isNumeric(e.ty) && isMultiElement(e.ty)) {
-        return `${e.cName}.real[_mtoc2_i]`;
+        return `${e.cName}.real[_jit_i]`;
       }
       return e.cName;
     case "Binary": {
@@ -402,28 +402,28 @@ export function emitTensorAssignFused(
     );
   }
 
-  // Allocate via the N-D helper. `MTOC2_OMP_PARFOR_N` comes with the
-  // tensor typedef (transitively pulled in by `mtoc2_tensor_alloc_nd`).
-  useRuntimeByName(state, "mtoc2_tensor_alloc_nd");
-  useRuntimeByName(state, "mtoc2_tensor_assign");
+  // Allocate via the N-D helper. `JIT_OMP_PARFOR_N` comes with the
+  // tensor typedef (transitively pulled in by `jit_tensor_alloc_nd`).
+  useRuntimeByName(state, "jit_tensor_alloc_nd");
+  useRuntimeByName(state, "jit_tensor_assign");
 
   const slot = emitPerSlotExpr(s.expr, state);
-  // Use `_mtoc2_`-reserved local names so a user identifier called `n`
+  // Use `_jit_`-reserved local names so a user identifier called `n`
   // or `i` (legitimate in MATLAB — `i` is also the imaginary unit
   // fallback) doesn't get shadowed by the inlined loop's count /
   // iter. The slot expression embeds raw operand reads (e.g.
-  // `_t1.real[_mtoc2_i] * n`); if `n` were a local here it would
+  // `_t1.real[_jit_i] * n`); if `n` were a local here it would
   // bind to the loop count rather than the user's function parameter,
   // silently mis-computing every elementwise op against a user-named
   // scalar.
   const fusedBlock = (ind: string): string[] => [
     `${ind}{`,
-    `${ind}  mtoc2_tensor_t _r = mtoc2_tensor_alloc_nd(${shapeSrcCName}.ndim, ${shapeSrcCName}.dims);`,
-    `${ind}  long _mtoc2_n = 1;`,
-    `${ind}  for (int _mtoc2_i = 0; _mtoc2_i < _r.ndim; _mtoc2_i++) _mtoc2_n *= _r.dims[_mtoc2_i];`,
-    `${ind}  MTOC2_OMP_PARFOR_N`,
-    `${ind}  for (long _mtoc2_i = 0; _mtoc2_i < _mtoc2_n; _mtoc2_i++) _r.real[_mtoc2_i] = ${slot};`,
-    `${ind}  mtoc2_tensor_assign(&${s.cName}, _r);`,
+    `${ind}  jit_tensor_t _r = jit_tensor_alloc_nd(${shapeSrcCName}.ndim, ${shapeSrcCName}.dims);`,
+    `${ind}  long _jit_n = 1;`,
+    `${ind}  for (int _jit_i = 0; _jit_i < _r.ndim; _jit_i++) _jit_n *= _r.dims[_jit_i];`,
+    `${ind}  JIT_OMP_PARFOR_N`,
+    `${ind}  for (long _jit_i = 0; _jit_i < _jit_n; _jit_i++) _r.real[_jit_i] = ${slot};`,
+    `${ind}  jit_tensor_assign(&${s.cName}, _r);`,
     `${ind}}`,
   ];
 
@@ -434,7 +434,7 @@ export function emitTensorAssignFused(
     c => c !== shapeSrcCName
   );
   const cond = others
-    .map(c => `mtoc2_fused_shape_eq(${c}, ${shapeSrcCName})`)
+    .map(c => `jit_fused_shape_eq(${c}, ${shapeSrcCName})`)
     .join(" && ");
   return [
     `${indent}if (${cond}) {`,

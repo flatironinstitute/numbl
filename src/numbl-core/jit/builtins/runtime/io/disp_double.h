@@ -7,9 +7,9 @@
 
 #include <stdio.h>
 
-static void mtoc2_disp_double(double x) {
+static void jit_disp_double(double x) {
   char buf[64];
-  mtoc2_format_double(buf, sizeof(buf), x);
-  mtoc2_stdout_s(buf);
-  mtoc2_stdout("\n", 1);
+  jit_format_double(buf, sizeof(buf), x);
+  jit_stdout_s(buf);
+  jit_stdout("\n", 1);
 }

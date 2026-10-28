@@ -6,5 +6,5 @@ export const exp = defineUnaryRealMath({
   cFnReal: "exp",
   jsFn: Math.exp,
   signRule: () => "positive",
-  complex: { cFnComplex: "mtoc2_cexp", jsFnComplex: cExp },
+  complex: { cFnComplex: "jit_cexp", jsFnComplex: cExp },
 });

@@ -46,16 +46,16 @@ export const imag: Builtin = {
     const a = argTypes[0] as NumericType;
     if (isMultiElement(a)) {
       if (a.isComplex) {
-        useRuntime("mtoc2_tensor_unary_complex_math");
-        useRuntime("mtoc2_cscalar");
-        return `mtoc2_tensor_imag_complex(${argsC[0]})`;
+        useRuntime("jit_tensor_unary_complex_math");
+        useRuntime("jit_cscalar");
+        return `jit_tensor_imag_complex(${argsC[0]})`;
       }
-      useRuntime("mtoc2_tensor_elemwise_real");
-      return `mtoc2_tensor_times_ts(${argsC[0]}, 0.0)`;
+      useRuntime("jit_tensor_elemwise_real");
+      return `jit_tensor_times_ts(${argsC[0]}, 0.0)`;
     }
     if (a.isComplex) {
-      useRuntime("mtoc2_cscalar");
-      return `mtoc2_cimag(${argsC[0]})`;
+      useRuntime("jit_cscalar");
+      return `jit_cimag(${argsC[0]})`;
     }
     return `0.0`;
   },
@@ -63,16 +63,16 @@ export const imag: Builtin = {
     const a = argTypes[0] as NumericType;
     if (isMultiElement(a)) {
       if (a.isComplex) {
-        useRuntime("mtoc2_tensor_unary_complex_math");
-        useRuntime("mtoc2_cscalar");
-        return `mtoc2_tensor_imag_complex(${argsJs[0]})`;
+        useRuntime("jit_tensor_unary_complex_math");
+        useRuntime("jit_cscalar");
+        return `jit_tensor_imag_complex(${argsJs[0]})`;
       }
-      useRuntime("mtoc2_tensor_elemwise_real");
-      return `mtoc2_tensor_times_ts(${argsJs[0]}, 0)`;
+      useRuntime("jit_tensor_elemwise_real");
+      return `jit_tensor_times_ts(${argsJs[0]}, 0)`;
     }
     if (a.isComplex) {
-      useRuntime("mtoc2_cscalar");
-      return `mtoc2_cimag(${argsJs[0]})`;
+      useRuntime("jit_cscalar");
+      return `jit_cimag(${argsJs[0]})`;
     }
     return `0`;
   },

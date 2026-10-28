@@ -8,7 +8,7 @@
  *
  * Discipline:
  *   - A may be a scalar or a tensor of double / logical / complex
- *     elements. Complex inputs route through `mtoc2_tensor_repmat_complex`
+ *     elements. Complex inputs route through `jit_tensor_repmat_complex`
  *     (or `_fill_nd_complex` for scalar A).
  *   - Each rep arg is a scalar real double; statically-known finite
  *     integers pin the corresponding output axis, dynamic scalars leave
@@ -25,9 +25,9 @@
  *     an `n×n` square instead of a 1-D vector.
  *
  * Codegen:
- *   - Scalar input: emit `mtoc2_tensor_fill_nd(<val>, ndim, dims)`
+ *   - Scalar input: emit `jit_tensor_fill_nd(<val>, ndim, dims)`
  *     directly — no need to build a 1×1 tensor first.
- *   - Tensor input: emit `mtoc2_tensor_repmat(<in>, ndim, dims)`.
+ *   - Tensor input: emit `jit_tensor_repmat(<in>, ndim, dims)`.
  *
  * Exact-data folding: when the input is exact and the reps are exact,
  * the transfer computes the tiled data and pins it on the result type
@@ -38,7 +38,7 @@ import { TypeError, UnsupportedConstruct } from "../../../lowering/errors.js";
 import {
   DIM_ONE,
   EXACT_ARRAY_MAX_ELEMENTS,
-  MTOC2_MAX_NDIM,
+  JIT_MAX_NDIM,
   isNumeric,
   isScalar,
   scalarComplex,
@@ -110,9 +110,9 @@ function resolveReps(argTypes: Type[]): ResolvedReps {
     if (arr.length < 1) {
       throw new TypeError(`'repmat' rep vector must be non-empty`);
     }
-    if (arr.length > MTOC2_MAX_NDIM) {
+    if (arr.length > JIT_MAX_NDIM) {
       throw new UnsupportedConstruct(
-        `'repmat' supports up to ${MTOC2_MAX_NDIM} rep dims (got ${arr.length})`
+        `'repmat' supports up to ${JIT_MAX_NDIM} rep dims (got ${arr.length})`
       );
     }
     const reps: RepAxis[] = [];
@@ -133,9 +133,9 @@ function resolveReps(argTypes: Type[]): ResolvedReps {
   }
 
   // Form A: variadic scalar reps.
-  if (argTypes.length - 1 > MTOC2_MAX_NDIM) {
+  if (argTypes.length - 1 > JIT_MAX_NDIM) {
     throw new UnsupportedConstruct(
-      `'repmat' supports up to ${MTOC2_MAX_NDIM} rep dims (got ${argTypes.length - 1})`
+      `'repmat' supports up to ${JIT_MAX_NDIM} rep dims (got ${argTypes.length - 1})`
     );
   }
   const reps: RepAxis[] = [];
@@ -310,14 +310,14 @@ function effectiveCodegenReps(
 function repC(axis: RepAxis, argsC: string[]): string {
   if (axis.kind === "exact") return `${axis.value}L`;
   // A non-integer rep is an error (MATLAB + interpreter), not a silent
-  // round/truncate — mtoc2_check_dim validates then converts.
-  return `mtoc2_check_dim(${argsC[axis.argIndex]})`;
+  // round/truncate — jit_check_dim validates then converts.
+  return `jit_check_dim(${argsC[axis.argIndex]})`;
 }
 
 /** Per-axis JS expression for one rep axis. */
 function repJs(axis: RepAxis, argsJs: string[]): string {
   if (axis.kind === "exact") return String(axis.value);
-  return `mtoc2_check_dim(${argsJs[axis.argIndex]})`;
+  return `jit_check_dim(${argsJs[axis.argIndex]})`;
 }
 
 export const repmat: Builtin = {
@@ -423,7 +423,7 @@ export const repmat: Builtin = {
           }
           return [tensorComplex(outShape)];
         }
-        // Normalize: mtoc2 tensors are always ≥ 2-D. inShape is
+        // Normalize: JIT tensors are always ≥ 2-D. inShape is
         // already ≥ 2-D and outNdim ≥ inShape.length, so outShape is too.
         if (outShape.every(s => s === 1)) {
           const ex = exactRealArray(a);
@@ -498,21 +498,21 @@ export const repmat: Builtin = {
     const allRepsOne = cgReps.every(r => r.kind === "exact" && r.value === 1);
     if (scalarInput) {
       if (allRepsOne) return argsC[0];
-      useRuntime("mtoc2_tensor_fill_nd");
+      useRuntime("jit_tensor_fill_nd");
       const dimList = cgReps.map(r => repC(r, argsC)).join(", ");
       if (a.isComplex) {
-        useRuntime("mtoc2_cscalar");
-        return `mtoc2_tensor_fill_nd_complex(creal(${argsC[0]}), cimag(${argsC[0]}), ${ndim}, (long[]){${dimList}})`;
+        useRuntime("jit_cscalar");
+        return `jit_tensor_fill_nd_complex(creal(${argsC[0]}), cimag(${argsC[0]}), ${ndim}, (long[]){${dimList}})`;
       }
-      return `mtoc2_tensor_fill_nd((double)(${argsC[0]}), ${ndim}, (long[]){${dimList}})`;
+      return `jit_tensor_fill_nd((double)(${argsC[0]}), ${ndim}, (long[]){${dimList}})`;
     }
 
-    useRuntime("mtoc2_tensor_repmat");
+    useRuntime("jit_tensor_repmat");
     const dimList = cgReps.map(r => repC(r, argsC)).join(", ");
     if (a.isComplex) {
-      return `mtoc2_tensor_repmat_complex(${argsC[0]}, ${ndim}, (long[]){${dimList}})`;
+      return `jit_tensor_repmat_complex(${argsC[0]}, ${ndim}, (long[]){${dimList}})`;
     }
-    return `mtoc2_tensor_repmat(${argsC[0]}, ${ndim}, (long[]){${dimList}})`;
+    return `jit_tensor_repmat(${argsC[0]}, ${ndim}, (long[]){${dimList}})`;
   },
 
   emitJs({ argsJs, argTypes, useRuntime }) {
@@ -532,19 +532,19 @@ export const repmat: Builtin = {
     const allRepsOne = cgReps.every(r => r.kind === "exact" && r.value === 1);
     if (scalarInput) {
       if (allRepsOne) return argsJs[0];
-      useRuntime("mtoc2_tensor_fill_nd");
+      useRuntime("jit_tensor_fill_nd");
       const dimList = cgReps.map(r => repJs(r, argsJs)).join(", ");
       if (a.isComplex) {
-        return `mtoc2_tensor_fill_nd_complex(${argsJs[0]}.re, ${argsJs[0]}.im, ${ndim}, [${dimList}])`;
+        return `jit_tensor_fill_nd_complex(${argsJs[0]}.re, ${argsJs[0]}.im, ${ndim}, [${dimList}])`;
       }
-      return `mtoc2_tensor_fill_nd(${argsJs[0]}, ${ndim}, [${dimList}])`;
+      return `jit_tensor_fill_nd(${argsJs[0]}, ${ndim}, [${dimList}])`;
     }
 
-    useRuntime("mtoc2_tensor_repmat");
+    useRuntime("jit_tensor_repmat");
     const dimList = cgReps.map(r => repJs(r, argsJs)).join(", ");
     if (a.isComplex) {
-      return `mtoc2_tensor_repmat_complex(${argsJs[0]}, ${ndim}, [${dimList}])`;
+      return `jit_tensor_repmat_complex(${argsJs[0]}, ${ndim}, [${dimList}])`;
     }
-    return `mtoc2_tensor_repmat(${argsJs[0]}, ${ndim}, [${dimList}])`;
+    return `jit_tensor_repmat(${argsJs[0]}, ${ndim}, [${dimList}])`;
   },
 };

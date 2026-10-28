@@ -1,4 +1,4 @@
-/* mtoc2 runtime helpers: cumulative (prefix-scan) ops on tensors.
+/* JIT runtime helpers: cumulative (prefix-scan) ops on tensors.
  *
  * One macro per op generates a `_dim` helper that scans along the
  * 1-based axis `dim`, returning a freshly-owned tensor of the SAME
@@ -23,8 +23,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define MTOC2_DEFINE_CUMULATIVE(name, INIT, ACCUM)                            \
-  static mtoc2_tensor_t mtoc2_tensor_##name##_dim(mtoc2_tensor_t a, int dim) {\
+#define JIT_DEFINE_CUMULATIVE(name, INIT, ACCUM)                              \
+  static jit_tensor_t jit_tensor_##name##_dim(jit_tensor_t a, int dim) {\
     if (dim < 1) {                                                            \
       fprintf(stderr, "C-JIT: " #name "_dim: dim must be >= 1 (got %d)\n",    \
               dim);                                                           \
@@ -32,9 +32,9 @@
     }                                                                         \
     long total = 1;                                                           \
     for (int i = 0; i < a.ndim; i++) total *= a.dims[i];                      \
-    long out_dims[MTOC2_MAX_NDIM];                                            \
+    long out_dims[JIT_MAX_NDIM];                                              \
     for (int i = 0; i < a.ndim; i++) out_dims[i] = a.dims[i];                 \
-    mtoc2_tensor_t out = mtoc2_tensor_alloc_nd(a.ndim, out_dims);             \
+    jit_tensor_t out = jit_tensor_alloc_nd(a.ndim, out_dims);                 \
     if (dim > a.ndim) {                                                       \
       /* No-op axis: output is a fresh copy of the input. */                  \
       memcpy(out.real, a.real, (size_t)total * sizeof(double));               \
@@ -62,11 +62,11 @@
     return out;                                                               \
   }
 
-#define MTOC2_CUM_ACC_SUM(acc, x)  do { (acc) += (x); } while (0)
-#define MTOC2_CUM_ACC_PROD(acc, x) do { (acc) *= (x); } while (0)
+#define JIT_CUM_ACC_SUM(acc, x)  do { (acc) += (x); } while (0)
+#define JIT_CUM_ACC_PROD(acc, x) do { (acc) *= (x); } while (0)
 
-MTOC2_DEFINE_CUMULATIVE(cumsum,  0.0, MTOC2_CUM_ACC_SUM)
-MTOC2_DEFINE_CUMULATIVE(cumprod, 1.0, MTOC2_CUM_ACC_PROD)
+JIT_DEFINE_CUMULATIVE(cumsum,  0.0, JIT_CUM_ACC_SUM)
+JIT_DEFINE_CUMULATIVE(cumprod, 1.0, JIT_CUM_ACC_PROD)
 
 /* cummax / cummin scan with JS `Math.max` / `Math.min` semantics —
  * NaN PROPAGATES (C's fmax/fmin would NaN-skip, diverging from numbl's
@@ -74,27 +74,27 @@ MTOC2_DEFINE_CUMULATIVE(cumprod, 1.0, MTOC2_CUM_ACC_PROD)
  * Seeding with -INF / +INF reproduces numbl's seed-with-the-first-
  * element behaviour: js_max(-INF, x) == x for every x (finite, ±INF,
  * or NaN). */
-static double mtoc2_js_max(double a, double b) {
+static double jit_js_max(double a, double b) {
   if (a != a || b != b) return NAN;
   if (a > b) return a;
   if (b > a) return b;
   return signbit(a) ? b : a;
 }
-static double mtoc2_js_min(double a, double b) {
+static double jit_js_min(double a, double b) {
   if (a != a || b != b) return NAN;
   if (a < b) return a;
   if (b < a) return b;
   return signbit(a) ? a : b;
 }
-#define MTOC2_CUM_ACC_MAX(acc, x) do { (acc) = mtoc2_js_max((acc), (x)); } while (0)
-#define MTOC2_CUM_ACC_MIN(acc, x) do { (acc) = mtoc2_js_min((acc), (x)); } while (0)
+#define JIT_CUM_ACC_MAX(acc, x) do { (acc) = jit_js_max((acc), (x)); } while (0)
+#define JIT_CUM_ACC_MIN(acc, x) do { (acc) = jit_js_min((acc), (x)); } while (0)
 
-MTOC2_DEFINE_CUMULATIVE(cummax, -INFINITY, MTOC2_CUM_ACC_MAX)
-MTOC2_DEFINE_CUMULATIVE(cummin,  INFINITY, MTOC2_CUM_ACC_MIN)
+JIT_DEFINE_CUMULATIVE(cummax, -INFINITY, JIT_CUM_ACC_MAX)
+JIT_DEFINE_CUMULATIVE(cummin,  INFINITY, JIT_CUM_ACC_MIN)
 
-#define MTOC2_DEFINE_CUMULATIVE_COMPLEX(name, INIT_RE, INIT_IM, ACCUM)        \
-  static mtoc2_tensor_t                                                       \
-  mtoc2_tensor_##name##_complex_dim(mtoc2_tensor_t a, int dim) {              \
+#define JIT_DEFINE_CUMULATIVE_COMPLEX(name, INIT_RE, INIT_IM, ACCUM)          \
+  static jit_tensor_t                                                         \
+  jit_tensor_##name##_complex_dim(jit_tensor_t a, int dim) {                  \
     if (dim < 1) {                                                            \
       fprintf(stderr, "C-JIT: " #name "_complex_dim: dim must be >= 1 (got %d)\n", \
               dim);                                                           \
@@ -102,9 +102,9 @@ MTOC2_DEFINE_CUMULATIVE(cummin,  INFINITY, MTOC2_CUM_ACC_MIN)
     }                                                                         \
     long total = 1;                                                           \
     for (int i = 0; i < a.ndim; i++) total *= a.dims[i];                      \
-    long out_dims[MTOC2_MAX_NDIM];                                            \
+    long out_dims[JIT_MAX_NDIM];                                              \
     for (int i = 0; i < a.ndim; i++) out_dims[i] = a.dims[i];                 \
-    mtoc2_tensor_t out = mtoc2_tensor_alloc_nd_complex(a.ndim, out_dims);     \
+    jit_tensor_t out = jit_tensor_alloc_nd_complex(a.ndim, out_dims);         \
     int srcHasImag = (a.imag != NULL);                                        \
     if (dim > a.ndim) {                                                       \
       memcpy(out.real, a.real, (size_t)total * sizeof(double));               \
@@ -140,10 +140,10 @@ MTOC2_DEFINE_CUMULATIVE(cummin,  INFINITY, MTOC2_CUM_ACC_MIN)
     return out;                                                               \
   }
 
-#define MTOC2_CUM_ACC_SUM_COMPLEX(aRe, aIm, xRe, xIm)                         \
+#define JIT_CUM_ACC_SUM_COMPLEX(aRe, aIm, xRe, xIm)                           \
   do { (aRe) += (xRe); (aIm) += (xIm); } while (0)
 
-#define MTOC2_CUM_ACC_PROD_COMPLEX(aRe, aIm, xRe, xIm)                        \
+#define JIT_CUM_ACC_PROD_COMPLEX(aRe, aIm, xRe, xIm)                          \
   do {                                                                        \
     double _t_re = (aRe) * (xRe) - (aIm) * (xIm);                             \
     double _t_im = (aRe) * (xIm) + (aIm) * (xRe);                             \
@@ -151,5 +151,5 @@ MTOC2_DEFINE_CUMULATIVE(cummin,  INFINITY, MTOC2_CUM_ACC_MIN)
     (aIm) = _t_im;                                                            \
   } while (0)
 
-MTOC2_DEFINE_CUMULATIVE_COMPLEX(cumsum,  0.0, 0.0, MTOC2_CUM_ACC_SUM_COMPLEX)
-MTOC2_DEFINE_CUMULATIVE_COMPLEX(cumprod, 1.0, 0.0, MTOC2_CUM_ACC_PROD_COMPLEX)
+JIT_DEFINE_CUMULATIVE_COMPLEX(cumsum,  0.0, 0.0, JIT_CUM_ACC_SUM_COMPLEX)
+JIT_DEFINE_CUMULATIVE_COMPLEX(cumprod, 1.0, 0.0, JIT_CUM_ACC_PROD_COMPLEX)

@@ -1,15 +1,15 @@
-/* mtoc2 runtime helper: sprintf — return formatted text as an owned
+/* JIT runtime helper: sprintf — return formatted text as an owned
  * string or char-array, matching numbl's `sprintf` shape rule:
- *   - char-typed format ('...')  → returns `mtoc2_char_tensor_t`
- *   - string-typed format ("...") → returns `mtoc2_string_t`
+ *   - char-typed format ('...')  → returns `jit_char_tensor_t`
+ *   - string-typed format ("...") → returns `jit_string_t`
  *
  * The format kind is decided statically (by the format arg's lattice
- * type); codegen picks `mtoc2_sprintf_char` or `mtoc2_sprintf_str`
+ * type); codegen picks `jit_sprintf_char` or `jit_sprintf_str`
  * accordingly. Both share a growable-buffer writer over the shared
  * format engine.
  *
  * The returned handle owns its byte buffer; the caller passes it to
- * `mtoc2_string_assign` / `mtoc2_char_tensor_assign` (or frees it
+ * `jit_string_assign` / `jit_char_tensor_assign` (or frees it
  * directly via the matching `_free`). Empty results are returned as
  * owned handles with NULL data — no zero-byte malloc.
  */
@@ -22,17 +22,17 @@ typedef struct {
   char *data;
   long len;
   long cap;
-} mtoc2__sprintf_buf_t;
+} jit__sprintf_buf_t;
 
-static void mtoc2__sprintf_writer(void *ctx, const char *bytes, long len) {
-  mtoc2__sprintf_buf_t *b = (mtoc2__sprintf_buf_t *)ctx;
+static void jit__sprintf_writer(void *ctx, const char *bytes, long len) {
+  jit__sprintf_buf_t *b = (jit__sprintf_buf_t *)ctx;
   if (len <= 0) return;
   if (b->len + len > b->cap) {
     long new_cap = b->cap == 0 ? 64 : b->cap * 2;
     while (new_cap < b->len + len) new_cap *= 2;
     char *nb = (char *)realloc(b->data, (size_t)new_cap);
     if (!nb) {
-      fprintf(stderr, "C-JIT: out of memory in mtoc2_sprintf\n");
+      fprintf(stderr, "C-JIT: out of memory in jit_sprintf\n");
       abort();
     }
     b->data = nb;
@@ -42,14 +42,14 @@ static void mtoc2__sprintf_writer(void *ctx, const char *bytes, long len) {
   b->len += len;
 }
 
-static mtoc2_string_t mtoc2_sprintf_str(mtoc2_text_view_t fmt, int nargs,
-                                        const mtoc2_fprintf_arg_t *args) {
-  mtoc2__sprintf_buf_t b;
+static jit_string_t jit_sprintf_str(jit_text_view_t fmt, int nargs,
+                                        const jit_fprintf_arg_t *args) {
+  jit__sprintf_buf_t b;
   b.data = (char *)0;
   b.len = 0;
   b.cap = 0;
-  mtoc2__format_walk(mtoc2__sprintf_writer, &b, fmt, nargs, args);
-  mtoc2_string_t s;
+  jit__format_walk(jit__sprintf_writer, &b, fmt, nargs, args);
+  jit_string_t s;
   if (b.len == 0) {
     free(b.data);
     s.data = (const char *)0;
@@ -65,14 +65,14 @@ static mtoc2_string_t mtoc2_sprintf_str(mtoc2_text_view_t fmt, int nargs,
   return s;
 }
 
-static mtoc2_char_tensor_t mtoc2_sprintf_char(mtoc2_text_view_t fmt, int nargs,
-                                              const mtoc2_fprintf_arg_t *args) {
-  mtoc2__sprintf_buf_t b;
+static jit_char_tensor_t jit_sprintf_char(jit_text_view_t fmt, int nargs,
+                                              const jit_fprintf_arg_t *args) {
+  jit__sprintf_buf_t b;
   b.data = (char *)0;
   b.len = 0;
   b.cap = 0;
-  mtoc2__format_walk(mtoc2__sprintf_writer, &b, fmt, nargs, args);
-  mtoc2_char_tensor_t c;
+  jit__format_walk(jit__sprintf_writer, &b, fmt, nargs, args);
+  jit_char_tensor_t c;
   if (b.len == 0) {
     free(b.data);
     c.data = (char *)0;

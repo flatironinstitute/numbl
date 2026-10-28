@@ -12,9 +12,9 @@
 %
 % Cause: the generated cell _disp helper (emitCellTypedef.ts) prints the
 % braces/commas/scalar slots with raw printf()/fputs(...,stdout) and the
-% tensor slots via mtoc2_disp_tensor_inline (also raw stdout). All of
+% tensor slots via jit_disp_tensor_inline (also raw stdout). All of
 % that goes to libc stdout, while fprintf and disp(scalar) route through
-% the host-write callback (mtoc2_stdout -> mtoc2_host_write). Under a
+% the host-write callback (jit_stdout -> jit_host_write). Under a
 % captured --opt 2 run the two channels are flushed independently, so the
 % cell's whole output jumps ahead of the surrounding fprintf/disp lines.
 % Same root cause as 04 (raw printf bypasses the host-write hook).

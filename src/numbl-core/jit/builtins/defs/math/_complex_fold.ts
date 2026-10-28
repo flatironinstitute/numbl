@@ -1,7 +1,7 @@
 /**
  * JS-side scalar-complex fold functions for unary math builtins.
  *
- * Mirrors the `mtoc2_c*` helpers in cscalar.h and cscalar.js; all
+ * Mirrors the `jit_c*` helpers in cscalar.h and cscalar.js; all
  * three must agree on these formulas. Used by
  * `_unary_real.ts`'s factory at type-system-fold time when an input
  * has an exact `{re, im}` carrier.
@@ -14,7 +14,7 @@
 export type C = { re: number; im: number };
 
 export function cSqrt(z: C): C {
-  // Smith's stable formula — matches `mtoc2_csqrt` in cscalar.js
+  // Smith's stable formula — matches `jit_csqrt` in cscalar.js
   // exactly. The polar form (`mag * cos/sin(phase/2)`) carries a
   // ~6e-17 real residue for pure-real negative input because
   // `Math.cos(pi/2)` isn't exactly 0; the Smith form returns clean
@@ -65,7 +65,7 @@ export function cCos(z: C): C {
 }
 
 function cdiv(a: C, b: C): C {
-  // Smith's algorithm (matches mtoc2_cdiv).
+  // Smith's algorithm (matches jit_cdiv).
   if (Math.abs(b.re) >= Math.abs(b.im)) {
     const r = b.im / b.re;
     const den = b.re + r * b.im;
@@ -95,7 +95,7 @@ export function cCosh(z: C): C {
 }
 
 export function cTanh(z: C): C {
-  // Double-angle form, matching `mtoc2_ctanh` (cscalar.js) and the
+  // Double-angle form, matching `jit_ctanh` (cscalar.js) and the
   // interpreter — avoids overflow that sinh(z)/cosh(z) would hit for
   // large real parts.
   const denom = Math.cosh(2 * z.re) + Math.cos(2 * z.im);

@@ -6,14 +6,14 @@
  *      linkage so the host can `dlsym` it.
  *
  * Scalars compile to bare `double`. Multi-element tensors compile to
- * `mtoc2_tensor_t` — no refcount, no COW. The codegen invariant
+ * `jit_tensor_t` — no refcount, no COW. The codegen invariant
  * (matching mtoc's): every tensor RHS is freshly owned, every
  * ownership-transferring use of a Var read wraps in
- * `mtoc2_tensor_copy(name)`. Pre-declaration of every owned local
- * via `mtoc2_tensor_empty()` at function top makes the first-vs-
+ * `jit_tensor_copy(name)`. Pre-declaration of every owned local
+ * via `jit_tensor_empty()` at function top makes the first-vs-
  * later distinction uniform (the assign helper releases the prior
  * buffer, which is NULL on first call). Scope-exit emits a
- * `mtoc2_tensor_free` for every owned local.
+ * `jit_tensor_free` for every owned local.
  */
 
 import type { IRExpr, IRStmt, IRProgram } from "../lowering/ir.js";
@@ -69,8 +69,8 @@ export function emitProgram(prog: IRProgram, opts: EmitOptions): string {
   // up front — before any function body is emitted — so the host-entry
   // function's `setjmp` guard is emitted regardless of whether the
   // growing store sits in the entry itself or in a callee emitted later
-  // in the loop below. The `setjmp` guard references `mtoc2_grow_bail_buf`
-  // and needs `<setjmp.h>`, both provided by the `mtoc2_grow_bail`
+  // in the loop below. The `setjmp` guard references `jit_grow_bail_buf`
+  // and needs `<setjmp.h>`, both provided by the `jit_grow_bail`
   // snippet — so activate it HERE, tied to the guard decision. (Per-path
   // activation in `emitNdScalarOffset` / `emitLinearRangeSetup` covers
   // the scalar/linear-range *grow* helpers, but slice/colon stores arm
@@ -80,7 +80,7 @@ export function emitProgram(prog: IRProgram, opts: EmitOptions): string {
   for (const fn of prog.functions.values()) {
     if (bodyHasIndexStore(fn.body)) {
       state.usedGrowBail = true;
-      useRuntimeByName(state, "mtoc2_grow_bail");
+      useRuntimeByName(state, "jit_grow_bail");
       break;
     }
   }
@@ -130,7 +130,7 @@ export function emitProgram(prog: IRProgram, opts: EmitOptions): string {
   const out: string[] = [];
   // Feature-test macro: must precede every <...> include so glibc
   // exposes POSIX.1b extensions (clock_gettime / CLOCK_MONOTONIC,
-  // used by tictoc.h). Hosts that compile mtoc2-emitted C under a
+  // used by tictoc.h). Hosts that compile JIT-emitted C under a
   // strict dialect (`-std=c11`, not `-std=gnu11`) need this to see
   // the POSIX prototypes inside <time.h>.
   out.push("#define _POSIX_C_SOURCE 199309L");
@@ -154,7 +154,7 @@ export function emitProgram(prog: IRProgram, opts: EmitOptions): string {
   // ordinary identifiers like `I`, `complex`, `imaginary`. The runtime
   // snippets are emitted above this point, so they've already
   // expanded any macros they used; the user code below sees plain
-  // identifiers. mtoc2's own complex-literal emit uses `_Complex_I`
+  // identifiers. The JIT's own complex-literal emit uses `_Complex_I`
   // (always defined by `<complex.h>` per C99 §7.3.1) so it doesn't
   // need the `I` macro either.
   out.push("#ifdef I");
@@ -175,9 +175,9 @@ export function emitProgram(prog: IRProgram, opts: EmitOptions): string {
   // buffers of returned tensors, through the same libc malloc/free.
   out.push("/* JIT-host allocator wrappers. */");
   out.push(
-    "void *mtoc2_jit_malloc(long n) { return malloc(n > 0 ? (size_t)n : 1); }"
+    "void *jit_malloc(long n) { return malloc(n > 0 ? (size_t)n : 1); }"
   );
-  out.push("void mtoc2_jit_free(void *p) { free(p); }");
+  out.push("void jit_free(void *p) { free(p); }");
   out.push("");
   return out.join("\n");
 }

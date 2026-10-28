@@ -16,13 +16,13 @@ export const isinf = defineUnaryPred({
   cScalar: arg => `(isinf(${arg}) != 0)`,
   jsScalar: arg => `(Math.abs(${arg}) === Infinity)`,
   jsFn: isInfNumber,
-  tensorHelper: "mtoc2_tensor_predicate",
+  tensorHelper: "jit_tensor_predicate",
   complex: {
     cScalarComplex: (re, im) => `isinf(${re}) || isinf(${im})`,
     jsScalarComplex: (re, im) =>
       `Math.abs(${re}) === Infinity || Math.abs(${im}) === Infinity`,
     jsFnComplex: (re, im) => isInfNumber(re) || isInfNumber(im),
-    tensorHelperComplex: "mtoc2_tensor_isinf_complex",
+    tensorHelperComplex: "jit_tensor_isinf_complex",
   },
 });
 
@@ -31,12 +31,12 @@ export const isfinite = defineUnaryPred({
   cScalar: arg => `isfinite(${arg})`,
   jsScalar: arg => `Number.isFinite(${arg})`,
   jsFn: Number.isFinite,
-  tensorHelper: "mtoc2_tensor_predicate",
+  tensorHelper: "jit_tensor_predicate",
   complex: {
     cScalarComplex: (re, im) => `isfinite(${re}) && isfinite(${im})`,
     jsScalarComplex: (re, im) =>
       `Number.isFinite(${re}) && Number.isFinite(${im})`,
     jsFnComplex: (re, im) => Number.isFinite(re) && Number.isFinite(im),
-    tensorHelperComplex: "mtoc2_tensor_isfinite_complex",
+    tensorHelperComplex: "jit_tensor_isfinite_complex",
   },
 });

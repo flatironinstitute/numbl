@@ -14,7 +14,7 @@
  *    cells), with per-row horzcat shape and an outer vertcat. Empty
  *    cells are dropped. Per-row width / per-cell height mismatches
  *    are caught statically when both sides are known; runtime-only
- *    axes trust the user (a future `mtoc2_check_concat_axis` could
+ *    axes trust the user (a future `jit_check_concat_axis` could
  *    validate at runtime).
  */
 
@@ -113,7 +113,7 @@ export function lowerTensorLit(
       }
       // Tensor cell. Per-axis dim is `number` when exact, `null`
       // when runtime-only. `dims.length === 2` is guaranteed
-      // (mtoc2 normalizes to min-2D and rejected rank>2 above).
+      // (the JIT normalizes to min-2D and rejected rank>2 above).
       const d0 = ty.dims[0];
       const d1 = ty.dims[1];
       const cr: number | null = d0.kind === "exact" ? d0.value : null;
@@ -243,7 +243,7 @@ export function lowerTensorLit(
   // For each row, drop empty cells. The row's height is the unique
   // non-empty cell's `rows` (validated against neighbors when both
   // sides are static; mismatched runtime/static pairs trust the
-  // user — `mtoc2_check_concat_axis` could later validate at
+  // user — `jit_check_concat_axis` could later validate at
   // runtime, but the current emit just uses whichever value is
   // known). A row with no non-empty cells contributes nothing to
   // the vertcat.

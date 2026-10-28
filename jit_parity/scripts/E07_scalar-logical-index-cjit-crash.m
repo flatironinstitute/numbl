@@ -12,7 +12,7 @@
 % CAUSE: isScalarRealNumeric() accepts a scalar logical, so lowerIndexLoad/
 %   lowerIndexStore/lowerIndexSlice classified `A(false)` as a POSITIONAL
 %   read of index 0 (false -> 0.0) instead of a logical mask. opt1 escaped
-%   via a runtime bail; opt2's mtoc2_idx_lin aborts. The logical-mask
+%   via a runtime bail; opt2's jit_idx_lin aborts. The logical-mask
 %   codegen needs a tensor and scalar logicals are bare doubles, so the fix
 %   DECLINES the scalar-logical index to the interpreter (a clean
 %   compile-time decline, like the other unsupported index forms). The

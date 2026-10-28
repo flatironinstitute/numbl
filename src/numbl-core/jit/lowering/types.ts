@@ -1,5 +1,5 @@
 /**
- * mtoc2 type system. Built from scratch — not derived from numbl's
+ * JIT type system. Built from scratch — not derived from numbl's
  * JitType. Designed to be the long-term home for static type info,
  * with "exact known value" tracking as a first-class feature on
  * every scalar (and eventually small arrays). The lowerer and codegen
@@ -107,7 +107,7 @@ export function isDimOne(d: DimInfo): boolean {
 
 /** Product of every entry in `shape` — i.e. `numel` for a tensor with
  *  this concrete shape. Returns 1 for an empty shape array (a 0-D
- *  scalar in MATLAB terms; mtoc2 always pads to 2-D so this is rare
+ *  scalar in MATLAB terms; the JIT always pads to 2-D so this is rare
  *  but well-defined). */
 export function shapeNumel(shape: ReadonlyArray<number>): number {
   let n = 1;
@@ -121,10 +121,10 @@ export function shapeNumel(shape: ReadonlyArray<number>): number {
  *  system. Anything larger drops to non-exact. */
 export const EXACT_ARRAY_MAX_ELEMENTS = 256;
 
-/** Max rank for `mtoc2_tensor_t`. Mirror of `MTOC2_MAX_NDIM` in
+/** Max rank for `jit_tensor_t`. Mirror of `JIT_MAX_NDIM` in
  *  `src/codegen/runtime/tensor.h` — kept in lockstep with the runtime
  *  helpers that allocate per-axis stride/index buffers on the stack. */
-export const MTOC2_MAX_NDIM = 8;
+export const JIT_MAX_NDIM = 8;
 
 /** Exact-value variants.
  *  - `number`: scalar real.
@@ -162,7 +162,7 @@ export interface NumericType {
 
 /** Scalar string handle — the double-quoted (`"foo"`) text type.
  *  `length("foo") == 1` (numbl treats it as a single value, not a
- *  byte array). Backed by `mtoc2_string_t` in emitted C; participates
+ *  byte array). Backed by `jit_string_t` in emitted C; participates
  *  in the standard owned-value lifecycle (empty/assign/copy/free).
  *  `exact` carries the literal value when the source is a `"..."`
  *  expression. */
@@ -173,7 +173,7 @@ export interface StringType {
 
 /** 1×N row-vector of bytes — the single-quoted (`'foo'`) char-array
  *  type. `length('foo') == 3` (numbl exposes the byte count). Backed
- *  by `mtoc2_char_tensor_t` in emitted C; same owned-value lifecycle
+ *  by `jit_char_tensor_t` in emitted C; same owned-value lifecycle
  *  as `String`. Multi-row chars aren't constructable in v1, so the
  *  type doesn't carry a shape — `exact.length` is the column count.
  *  `exact` carries the literal value when the source is a `'...'`
@@ -202,7 +202,7 @@ export interface HandleCapture {
   ty: Type;
 }
 
-/** Function handle. mtoc2 supports only user-function targets
+/** Function handle. The JIT supports only user-function targets
  *  (named `@user_func` and anonymous `@(p1,...,pN) <body>`); `@builtin`
  *  is rejected. Captures may be any non-Void / non-Unknown / non-String
  *  value type — scalar real numeric, tensor, struct, class instance, or
@@ -595,7 +595,7 @@ export function isCell(t: Type): t is CellType {
 }
 
 /** True when `t` can be consumed by a "text-accepting" runtime helper
- *  via `mtoc2_text_view_t` — today: a `String` handle or a `Char` array.
+ *  via `jit_text_view_t` — today: a `String` handle or a `Char` array.
  *  The shared predicate lets builtins like `disp` / future
  *  `error` / `fprintf` accept either source kind. */
 export function isText(t: Type): boolean {
@@ -639,7 +639,7 @@ export function isScalarRealNumeric(t: Type): boolean {
 
 /** True when any axis is statically known to be ≠ 1 (or unknown).
  *  Drives the scalar/tensor split in codegen: scalars compile to bare
- *  `double`; multi-element values compile to `mtoc2_tensor_t`. A
+ *  `double`; multi-element values compile to `jit_tensor_t`. A
  *  zero-sized axis (`{exact, 0}`) also returns true — an empty tensor
  *  still needs tensor storage. */
 export function isMultiElement(t: Type): boolean {
@@ -704,7 +704,7 @@ export function isOwned(t: Type): boolean {
 }
 
 /** Types that may appear in an N≥2-output multi-assign slot. Scalar
- *  real numeric outputs are stored by `*_mtoc2_o<i> = <local>` struct-
+ *  real numeric outputs are stored by `*_jit_o<i> = <local>` struct-
  *  copy; owned outputs (tensor, struct, class instance, function
  *  handle, Char, String) use the kind's `_assign` helper to transfer
  *  ownership of the buffer pointer. Only Void / Unknown stay rejected. */
@@ -1208,7 +1208,7 @@ export function canonicalizeType(t: Type): string {
 
 /** Storage compatibility: do two types occupy the same C-level slot?
  *  This is COARSER than canonical equality — every multi-element
- *  tensor shares the same `mtoc2_tensor_t` storage regardless of
+ *  tensor shares the same `jit_tensor_t` storage regardless of
  *  shape, every scalar real numeric maps to `double`, and every
  *  struct/class needs its canonical typedef to match.
  *
@@ -1216,7 +1216,7 @@ export function canonicalizeType(t: Type): string {
  *  cram a tensor into a scalar slot (or vice versa) — the typedef
  *  hash is built from storage shapes, so changing the underlying
  *  representation would break the C side. Shape, sign, and exact
- *  differences are fine: the slot still holds an `mtoc2_tensor_t`. */
+ *  differences are fine: the slot still holds an `jit_tensor_t`. */
 export function storageEquivalent(a: Type, b: Type): boolean {
   // Two types occupy the same C slot iff they reduce to the same
   // C-type string. `cFieldTypeStr` already collapses everything that
@@ -1340,20 +1340,20 @@ export function hashType(s: string): string {
 }
 
 /** Mangled C typedef name for a handle's capture shape. All no-capture
- *  handles share `mtoc2_handle_empty_t` regardless of target identity
+ *  handles share `jit_handle_empty_t` regardless of target identity
  *  (the function dispatch is static — the struct is just a carrier).
- *  Handles with captures get a per-shape `mtoc2_handle__<8hex>` typedef
+ *  Handles with captures get a per-shape `jit_handle__<8hex>` typedef
  *  whose hash covers the `(name, cFieldTypeStr)` tuple of each capture
  *  in order. Matches the struct/class precedent: the typedef hash sees
  *  only the C-level type of each capture, so two handle types that
  *  differ only in lattice precision (sign, exact, tensor shape) share
  *  one typedef and one set of owned-helpers. */
 export function handleTypedefName(t: HandleType): string {
-  if (t.captures.length === 0) return "mtoc2_handle_empty_t";
+  if (t.captures.length === 0) return "jit_handle_empty_t";
   const canonical = JSON.stringify(
     t.captures.map(c => [c.name, cFieldTypeStr(c.ty)])
   );
-  return `mtoc2_handle__${hashType(canonical)}`;
+  return `jit_handle__${hashType(canonical)}`;
 }
 
 /** C-level type string for a struct/class field or function-handle
@@ -1367,7 +1367,7 @@ export function handleTypedefName(t: HandleType): string {
  *  typedef.
  *
  *  - Scalar real numeric (any sign/exact)   → "double"
- *  - Multi-element tensor (any shape/exact) → "mtoc2_tensor_t"
+ *  - Multi-element tensor (any shape/exact) → "jit_tensor_t"
  *  - Handle                                  → handleTypedefName(t)
  *  - Struct (recurse on fields)              → structTypedefName(t)
  *  - Class (recurse on properties)           → classTypedefName(t)
@@ -1376,12 +1376,12 @@ export function handleTypedefName(t: HandleType): string {
  *  in v1 — the lowerer rejects them at construction sites. */
 export function cFieldTypeStr(t: Type): string {
   if (t.kind === "Numeric") {
-    if (isMultiElement(t)) return "mtoc2_tensor_t";
+    if (isMultiElement(t)) return "jit_tensor_t";
     if (t.isComplex) return "double _Complex";
     return "double";
   }
-  if (t.kind === "String") return "mtoc2_string_t";
-  if (t.kind === "Char") return "mtoc2_char_tensor_t";
+  if (t.kind === "String") return "jit_string_t";
+  if (t.kind === "Char") return "jit_char_tensor_t";
   if (t.kind === "Handle") return handleTypedefName(t);
   if (t.kind === "Struct") return structTypedefName(t);
   if (t.kind === "Class") return classTypedefName(t);
@@ -1401,7 +1401,7 @@ export function structTypedefName(t: StructType): string {
   const canonical = JSON.stringify(
     t.fields.map(f => [f.name, cFieldTypeStr(f.ty)])
   );
-  return `mtoc2_struct__${hashType(canonical)}`;
+  return `jit_struct__${hashType(canonical)}`;
 }
 
 /** Replace every non-C-identifier character (`[^A-Za-z0-9_]`) with `_`.
@@ -1423,7 +1423,7 @@ export function classTypedefName(t: ClassType): string {
     n: t.className,
     p: t.properties.map(p => [p.name, cFieldTypeStr(p.ty)]),
   });
-  return `mtoc2_class_${sanitizeCIdent(t.className)}__${hashType(canonical)}`;
+  return `jit_class_${sanitizeCIdent(t.className)}__${hashType(canonical)}`;
 }
 
 /** Mangled C typedef name for a cell shape. The hash sees the cell's
@@ -1448,7 +1448,7 @@ export function cellTypedefName(t: CellType): string {
       e: cFieldTypeStr(t.elem!),
     });
   }
-  return `mtoc2_cell__${hashType(canonical)}`;
+  return `jit_cell__${hashType(canonical)}`;
 }
 
 /** Class-method specialization-name source. Becomes the input to

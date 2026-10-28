@@ -26,9 +26,9 @@ import { emitExpr } from "./emitExpr.js";
 /** Runtime guard mirroring the interpreter's concatenation-consistency
  *  error. Registered on demand by the dynamic path. */
 const CONCAT_CHECK_SNIPPET = {
-  name: "mtoc2_concat_check",
+  name: "jit_concat_check",
   headers: ["<stdio.h>", "<stdlib.h>"],
-  code: `static void mtoc2_concat_check(long got, long want) {
+  code: `static void jit_concat_check(long got, long want) {
   if (got != want) {
     fprintf(stderr,
       "Dimensions of arrays being concatenated are not consistent\\n");
@@ -44,8 +44,8 @@ export function emitTensorConcat(
   e: Extract<IRExpr, { kind: "TensorConcat" }>,
   state: RuntimeState
 ): string {
-  useRuntimeByName(state, "mtoc2_tensor_t");
-  useRuntimeByName(state, "mtoc2_tensor_alloc_nd");
+  useRuntimeByName(state, "jit_tensor_t");
+  useRuntimeByName(state, "jit_tensor_alloc_nd");
 
   const allStatic =
     e.shape.every(s => s !== null) &&
@@ -74,7 +74,7 @@ function emitTensorConcatStatic(
   void totalCols;
   const lines: string[] = [];
   lines.push(
-    `mtoc2_tensor_t _mtoc2_t = mtoc2_tensor_alloc_nd(2, (long[]){${totalRows}L, ${shape[1]}L});`
+    `jit_tensor_t _jit_t = jit_tensor_alloc_nd(2, (long[]){${totalRows}L, ${shape[1]}L});`
   );
 
   let rowOff = 0;
@@ -89,19 +89,17 @@ function emitTensorConcatStatic(
 
       if (cellRows === 1 && cellColsHere === 1) {
         const dstIdx = `${rowOff}L + ${colOff}L * ${totalRows}L`;
-        lines.push(`_mtoc2_t.real[${dstIdx}] = ${cellStr};`);
+        lines.push(`_jit_t.real[${dstIdx}] = ${cellStr};`);
       } else {
         lines.push(
-          `for (long _mtoc2_sc = 0; _mtoc2_sc < ${cellColsHere}L; _mtoc2_sc++) {`
+          `for (long _jit_sc = 0; _jit_sc < ${cellColsHere}L; _jit_sc++) {`
         );
         lines.push(
-          `  for (long _mtoc2_sr = 0; _mtoc2_sr < ${cellRows}L; _mtoc2_sr++) {`
+          `  for (long _jit_sr = 0; _jit_sr < ${cellRows}L; _jit_sr++) {`
         );
-        const dstIdx = `(${rowOff}L + _mtoc2_sr) + (${colOff}L + _mtoc2_sc) * ${totalRows}L`;
-        const srcIdx = `_mtoc2_sr + _mtoc2_sc * ${cellRows}L`;
-        lines.push(
-          `    _mtoc2_t.real[${dstIdx}] = ${cellStr}.real[${srcIdx}];`
-        );
+        const dstIdx = `(${rowOff}L + _jit_sr) + (${colOff}L + _jit_sc) * ${totalRows}L`;
+        const srcIdx = `_jit_sr + _jit_sc * ${cellRows}L`;
+        lines.push(`    _jit_t.real[${dstIdx}] = ${cellStr}.real[${srcIdx}];`);
         lines.push(`  }`);
         lines.push(`}`);
       }
@@ -109,7 +107,7 @@ function emitTensorConcatStatic(
     }
     rowOff += cellRows;
   }
-  lines.push(`_mtoc2_t;`);
+  lines.push(`_jit_t;`);
   return `({ ${lines.join(" ")} })`;
 }
 
@@ -146,7 +144,7 @@ function emitTensorConcatDynamic(
   // `.dims[0]` more than once per row.
   const rhLocals: string[] = [];
   for (let i = 0; i < e.cells.length; i++) {
-    const name = `_mtoc2_rh_${i}`;
+    const name = `_jit_rh_${i}`;
     rhLocals.push(name);
     // Pick the first cell's height as the witness — every cell in
     // the row is required to share it (validated statically at
@@ -155,24 +153,24 @@ function emitTensorConcatDynamic(
   }
   // Total height = sum of row heights.
   const trExpr = e.shape[0] !== null ? `${e.shape[0]}L` : rhLocals.join(" + ");
-  lines.push(`long _mtoc2_tr = ${trExpr};`);
+  lines.push(`long _jit_tr = ${trExpr};`);
   // Total width = first row's width = sum of its cells' cols.
   const widthExpr = (() => {
     if (e.shape[1] !== null) return `${e.shape[1]}L`;
     if (e.cells.length === 0) return "0L";
     return e.cells[0].map((_, j) => cellColsExpr(0, j)).join(" + ");
   })();
-  lines.push(`long _mtoc2_tc = ${widthExpr};`);
+  lines.push(`long _jit_tc = ${widthExpr};`);
   lines.push(
-    `mtoc2_tensor_t _mtoc2_t = mtoc2_tensor_alloc_nd(2, (long[]){_mtoc2_tr, _mtoc2_tc});`
+    `jit_tensor_t _jit_t = jit_tensor_alloc_nd(2, (long[]){_jit_tr, _jit_tc});`
   );
 
   // Track destination row offset as a running long. Cells inside a
   // row use their column-offset accumulator too.
-  lines.push(`long _mtoc2_row_off = 0;`);
+  lines.push(`long _jit_row_off = 0;`);
   for (let i = 0; i < e.cells.length; i++) {
     const row = e.cells[i];
-    lines.push(`long _mtoc2_col_off_${i} = 0;`);
+    lines.push(`long _jit_col_off_${i} = 0;`);
     for (let j = 0; j < row.length; j++) {
       const cell = row[j];
       const cellStr = cellStrs[i][j];
@@ -183,39 +181,37 @@ function emitTensorConcatDynamic(
       // interpreter's consistency error.
       if (j > 0) {
         useRuntimeInline(state, CONCAT_CHECK_SNIPPET);
-        lines.push(`mtoc2_concat_check(${rowsHere}, ${rhLocals[i]});`);
+        lines.push(`jit_concat_check(${rowsHere}, ${rhLocals[i]});`);
       }
       const isScalarCell =
         cell.ty.kind === "Numeric" &&
         (cell.ty.dims.length === 0 || isScalar(cell.ty));
       if (isScalarCell) {
-        const dstIdx = `_mtoc2_row_off + _mtoc2_col_off_${i} * _mtoc2_tr`;
-        lines.push(`_mtoc2_t.real[${dstIdx}] = ${cellStr};`);
-        lines.push(`_mtoc2_col_off_${i} += 1;`);
+        const dstIdx = `_jit_row_off + _jit_col_off_${i} * _jit_tr`;
+        lines.push(`_jit_t.real[${dstIdx}] = ${cellStr};`);
+        lines.push(`_jit_col_off_${i} += 1;`);
       } else {
-        const sc = `_mtoc2_sc_${i}_${j}`;
-        const sr = `_mtoc2_sr_${i}_${j}`;
-        const cw = `_mtoc2_cw_${i}_${j}`;
-        const ch = `_mtoc2_ch_${i}_${j}`;
+        const sc = `_jit_sc_${i}_${j}`;
+        const sr = `_jit_sr_${i}_${j}`;
+        const cw = `_jit_cw_${i}_${j}`;
+        const ch = `_jit_ch_${i}_${j}`;
         lines.push(`long ${cw} = ${colsHere};`);
         lines.push(`long ${ch} = ${rowsHere};`);
         lines.push(`for (long ${sc} = 0; ${sc} < ${cw}; ${sc}++) {`);
         lines.push(`  for (long ${sr} = 0; ${sr} < ${ch}; ${sr}++) {`);
-        const dstIdx = `(_mtoc2_row_off + ${sr}) + (_mtoc2_col_off_${i} + ${sc}) * _mtoc2_tr`;
+        const dstIdx = `(_jit_row_off + ${sr}) + (_jit_col_off_${i} + ${sc}) * _jit_tr`;
         const srcIdx = `${sr} + ${sc} * ${ch}`;
-        lines.push(
-          `    _mtoc2_t.real[${dstIdx}] = ${cellStr}.real[${srcIdx}];`
-        );
+        lines.push(`    _jit_t.real[${dstIdx}] = ${cellStr}.real[${srcIdx}];`);
         lines.push(`  }`);
         lines.push(`}`);
-        lines.push(`_mtoc2_col_off_${i} += ${cw};`);
+        lines.push(`_jit_col_off_${i} += ${cw};`);
       }
     }
     // Each row's total width must match the result width (set by row 0).
     useRuntimeInline(state, CONCAT_CHECK_SNIPPET);
-    lines.push(`mtoc2_concat_check(_mtoc2_col_off_${i}, _mtoc2_tc);`);
-    lines.push(`_mtoc2_row_off += ${rhLocals[i]};`);
+    lines.push(`jit_concat_check(_jit_col_off_${i}, _jit_tc);`);
+    lines.push(`_jit_row_off += ${rhLocals[i]};`);
   }
-  lines.push(`_mtoc2_t;`);
+  lines.push(`_jit_t;`);
   return `({ ${lines.join(" ")} })`;
 }

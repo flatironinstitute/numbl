@@ -6,5 +6,5 @@ export const cos = defineUnaryRealMath({
   cFnReal: "cos",
   jsFn: Math.cos,
   signRule: () => "unknown",
-  complex: { cFnComplex: "mtoc2_ccos", jsFnComplex: cCos },
+  complex: { cFnComplex: "jit_ccos", jsFnComplex: cCos },
 });

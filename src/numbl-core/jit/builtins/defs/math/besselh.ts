@@ -72,18 +72,18 @@ export const besselh: Builtin = {
     return [tensorComplexFromDims(xT.dims.slice())];
   },
   emitC({ argsC, argTypes, useRuntime }) {
-    useRuntime("mtoc2_tensor_besselh");
-    useRuntime("mtoc2_cscalar");
+    useRuntime("jit_tensor_besselh");
+    useRuntime("jit_cscalar");
     const nu = (argTypes[0] as NumericType).exact as number;
     const xT = argTypes[2] as NumericType;
     if (isMultiElement(xT)) {
       return nu === 0
-        ? `mtoc2_tensor_besselh0(${argsC[2]})`
-        : `mtoc2_tensor_besselh1(${argsC[2]})`;
+        ? `jit_tensor_besselh0(${argsC[2]})`
+        : `jit_tensor_besselh1(${argsC[2]})`;
     }
     return nu === 0
-      ? `mtoc2_besselh0_scalar(${argsC[2]})`
-      : `mtoc2_besselh1_scalar(${argsC[2]})`;
+      ? `jit_besselh0_scalar(${argsC[2]})`
+      : `jit_besselh1_scalar(${argsC[2]})`;
   },
   // A JS port is deliberately deferred — the C path leans on POSIX
   // `j0` / `j1` / `y0` / `y1` from `<math.h>`; JS has no equivalent

@@ -7,7 +7,7 @@
 % Also reproduces with computed: z = 40+1i; z = z - 1i; atan(z).
 %
 % DIVERGING MODE: opt1 (JS-JIT) vs opt0/opt2.
-% CAUSE: mtoc2_catan runs the complex-log formula even for a real input,
+% CAUSE: jit_catan runs the complex-log formula even for a real input,
 %   leaving a tiny imaginary residue; for huge real input the intermediate
 %   1+iz overflows -> NaN. The interpreter and C99 catan return a clean real.
 % JIT ENGAGEMENT: confirmed (catan in --dump-c).

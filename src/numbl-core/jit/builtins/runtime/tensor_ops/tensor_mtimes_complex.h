@@ -1,4 +1,4 @@
-/* mtoc2 runtime helper: 2-D matrix multiplication producing a complex
+/* JIT runtime helper: 2-D matrix multiplication producing a complex
  * result.
  *
  * Handles all three mixed cases (complex × complex, complex × real,
@@ -9,7 +9,7 @@
  *
  * The translate-time check enforces 2-D inputs with matching inner
  * dimension when shapes are known. Runtime aborts on mismatch
- * otherwise (no exception channel in mtoc2 today).
+ * otherwise (no exception channel in the JIT today).
  *
  * Allocates both real and imag lanes of the result. There is a
  * separate scalar-return variant for the 1×k * k×1 inner-product
@@ -21,21 +21,21 @@
 #include <stdlib.h>
 #include <complex.h>
 
-static double _Complex mtoc2_tensor_mtimes_complex_scalar(mtoc2_tensor_t a,
-                                                          mtoc2_tensor_t b) {
+static double _Complex jit_tensor_mtimes_complex_scalar(jit_tensor_t a,
+                                                          jit_tensor_t b) {
   if (a.ndim != 2 || b.ndim != 2) {
     fprintf(stderr,
-            "mtoc2_tensor_mtimes_complex_scalar: inputs must be 2-D\n");
+            "jit_tensor_mtimes_complex_scalar: inputs must be 2-D\n");
     abort();
   }
   if (a.dims[0] != 1 || b.dims[1] != 1) {
     fprintf(stderr,
-            "mtoc2_tensor_mtimes_complex_scalar: requires 1×k * k×1\n");
+            "jit_tensor_mtimes_complex_scalar: requires 1×k * k×1\n");
     abort();
   }
   if (a.dims[1] != b.dims[0]) {
     fprintf(stderr,
-            "mtoc2_tensor_mtimes_complex_scalar: inner-dim mismatch\n");
+            "jit_tensor_mtimes_complex_scalar: inner-dim mismatch\n");
     abort();
   }
   long k = a.dims[1];
@@ -54,11 +54,11 @@ static double _Complex mtoc2_tensor_mtimes_complex_scalar(mtoc2_tensor_t a,
   return accR + accI * I;
 }
 
-static mtoc2_tensor_t mtoc2_tensor_mtimes_complex(mtoc2_tensor_t a,
-                                                   mtoc2_tensor_t b) {
+static jit_tensor_t jit_tensor_mtimes_complex(jit_tensor_t a,
+                                                   jit_tensor_t b) {
   if (a.ndim != 2 || b.ndim != 2) {
     fprintf(stderr,
-            "mtoc2_tensor_mtimes_complex: inputs must be 2-D (got %d-D, %d-D)\n",
+            "jit_tensor_mtimes_complex: inputs must be 2-D (got %d-D, %d-D)\n",
             a.ndim, b.ndim);
     abort();
   }
@@ -68,13 +68,13 @@ static mtoc2_tensor_t mtoc2_tensor_mtimes_complex(mtoc2_tensor_t a,
   long n = b.dims[1];
   if (k != k2) {
     fprintf(stderr,
-            "mtoc2_tensor_mtimes_complex: inner-dim mismatch (%ld×%ld * %ld×%ld)\n",
+            "jit_tensor_mtimes_complex: inner-dim mismatch (%ld×%ld * %ld×%ld)\n",
             m, k, k2, n);
     abort();
   }
-  mtoc2_tensor_t r;
-  r.real = mtoc2_alloc((size_t)m * (size_t)n * sizeof(double));
-  r.imag = mtoc2_alloc((size_t)m * (size_t)n * sizeof(double));
+  jit_tensor_t r;
+  r.real = jit_alloc((size_t)m * (size_t)n * sizeof(double));
+  r.imag = jit_alloc((size_t)m * (size_t)n * sizeof(double));
   r.ndim = 2;
   r.dims[0] = m;
   r.dims[1] = n;

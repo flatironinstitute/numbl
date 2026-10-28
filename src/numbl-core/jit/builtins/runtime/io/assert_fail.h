@@ -1,4 +1,4 @@
-/* mtoc2 runtime helper: scalar `assert(cond, msg)`. Tests `cond` for
+/* JIT runtime helper: scalar `assert(cond, msg)`. Tests `cond` for
  * MATLAB truthiness (non-zero and not NaN); fires `abort()` after
  * printing the message to stderr if the test fails.
  *
@@ -14,7 +14,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-static void mtoc2_assert_scalar(double cond, const char *msg) {
+static void jit_assert_scalar(double cond, const char *msg) {
   /* `cond != cond` filters NaN — numbl's `isNaN(v)` check. */
   if (cond != 0.0 && cond == cond) return;
   fputs("C-JIT: assertion failed", stderr);

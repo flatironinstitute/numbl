@@ -2,9 +2,9 @@
 // tensor to an N-D shape. Same auto-infer / element-count rules as
 // the real reshape; both lanes are reinterpreted (no rearrangement).
 
-import { mtoc2_tensor_alloc_nd_complex } from "../tensor/tensor_alloc_nd_complex.js";
+import { jit_tensor_alloc_nd_complex } from "../tensor/tensor_alloc_nd_complex.js";
 
-export function mtoc2_reshape_nd_complex(input, ndim, dims) {
+export function jit_reshape_nd_complex(input, ndim, dims) {
   let inTotal = 1;
   for (const d of input.shape) inTotal *= d;
   let inferIdx = -1;
@@ -47,7 +47,7 @@ export function mtoc2_reshape_nd_complex(input, ndim, dims) {
       );
     }
   }
-  const out = mtoc2_tensor_alloc_nd_complex(ndim, resolved);
+  const out = jit_tensor_alloc_nd_complex(ndim, resolved);
   if (outTotal > 0) {
     out.data.set(input.data.subarray(0, outTotal));
     if (input.imag !== undefined) {

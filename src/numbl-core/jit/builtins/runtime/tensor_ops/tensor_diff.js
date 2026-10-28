@@ -3,9 +3,9 @@
 // (helpers/reduction/cumulative.ts). `dim === 0` selects the default
 // axis (row vector → dim 2, else first dim); `dim > 0` is explicit.
 
-import { mtoc2_tensor_alloc_nd } from "../tensor/tensor_alloc_nd.js";
+import { jit_tensor_alloc_nd } from "../tensor/tensor_alloc_nd.js";
 
-export function mtoc2_tensor_diff(a, dim) {
+export function jit_tensor_diff(a, dim) {
   const shape = a.shape;
   let opDim;
   if (dim > 0) {
@@ -22,12 +22,12 @@ export function mtoc2_tensor_diff(a, dim) {
     if (opDim < newDims.length) newDims[opDim] = 0;
     while (newDims.length > 2 && newDims[newDims.length - 1] === 1)
       newDims.pop();
-    return mtoc2_tensor_alloc_nd(newDims.length, newDims);
+    return jit_tensor_alloc_nd(newDims.length, newDims);
   }
 
   newDims[opDim] = dimSize - 1;
   while (newDims.length > 2 && newDims[newDims.length - 1] === 1) newDims.pop();
-  const out = mtoc2_tensor_alloc_nd(newDims.length, newDims);
+  const out = jit_tensor_alloc_nd(newDims.length, newDims);
 
   let innerCount = 1;
   for (let d = 0; d < opDim; d++) innerCount *= shape[d];

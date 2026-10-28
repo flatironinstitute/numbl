@@ -4,9 +4,9 @@
 // but we still want a structural deep copy so the source can be
 // mutated independently.
 
-export function mtoc2_tensor_copy_complex(t) {
+export function jit_tensor_copy_complex(t) {
   return {
-    mtoc2Tag: "tensor",
+    jitTag: "tensor",
     shape: t.shape.slice(),
     data: new Float64Array(t.data),
     imag:

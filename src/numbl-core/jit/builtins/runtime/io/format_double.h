@@ -13,7 +13,7 @@
 #include <string.h>
 #include <math.h>
 
-static int mtoc2_format_double(char *out, size_t cap, double x) {
+static int jit_format_double(char *out, size_t cap, double x) {
   if (isnan(x)) return snprintf(out, cap, "NaN");
   /* MATLAB spells these Inf / -Inf (matches the interpreter's formatNumber). */
   if (isinf(x)) return snprintf(out, cap, x > 0 ? "Inf" : "-Inf");

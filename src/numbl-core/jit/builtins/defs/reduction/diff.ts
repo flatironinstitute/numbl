@@ -147,13 +147,13 @@ export const diff: Builtin = {
     return [out];
   },
   emitC({ argsC, argTypes, useRuntime }) {
-    useRuntime("mtoc2_tensor_diff");
+    useRuntime("jit_tensor_diff");
     const { dim } = planDiff(argTypes);
-    return `mtoc2_tensor_diff(${argsC[0]}, ${dim ?? 0})`;
+    return `jit_tensor_diff(${argsC[0]}, ${dim ?? 0})`;
   },
   emitJs({ argsJs, argTypes, useRuntime }) {
-    useRuntime("mtoc2_tensor_diff");
+    useRuntime("jit_tensor_diff");
     const { dim } = planDiff(argTypes);
-    return `mtoc2_tensor_diff(${argsJs[0]}, ${dim ?? 0})`;
+    return `jit_tensor_diff(${argsJs[0]}, ${dim ?? 0})`;
   },
 };

@@ -1,5 +1,5 @@
 /**
- * mtoc2 intermediate representation.
+ * JIT intermediate representation.
  *
  * Every node carries a `Span` for error attribution. Every IRExpr
  * carries a `Type`.
@@ -46,7 +46,7 @@ export interface StringLit {
 }
 
 /** Runtime tensor construction for every tensor source-literal. Codegen
- *  emits `mtoc2_tensor_from_row` (1×N) or `mtoc2_tensor_from_matrix`
+ *  emits `jit_tensor_from_row` (1×N) or `jit_tensor_from_matrix`
  *  (rows×cols) with a C99 compound literal of the per-element
  *  expressions. The shape is statically known; the element values may
  *  be any IR expressions (NumLit for literal cells, Var/Binary/... for
@@ -104,8 +104,8 @@ export interface Unary {
  *     `getBuiltin(cName).codegenC(argsC, argTypes)` to synthesize the
  *     emitted C expression — there's no Standalone IRFunc.
  *  3. **Synthesized runtime call** — emitted by the lowerer for a
- *     handful of fixed runtime helpers (`mtoc2_toc_print`,
- *     `mtoc2_toc_handle_print`, the complex `'` rewrite to
+ *     handful of fixed runtime helpers (`jit_toc_print`,
+ *     `jit_toc_handle_print`, the complex `'` rewrite to
  *     `transpose(conj(z))`, etc.). The `name` field carries the
  *     source-facing identifier the lowerer wants in diagnostics; the
  *     pattern is the same as the builtin route — codegen treats them
@@ -131,8 +131,8 @@ export interface Call {
  *  `@(p1, ..., pN) <body>` (zero+ captures). `ty` is a `HandleType`
  *  whose `targetName`/`ast` identify the underlying user function and
  *  whose `captures` list shapes the C struct. The literal renders as a
- *  C compound literal: `(mtoc2_handle_empty_t){0}` for no captures, or
- *  `(mtoc2_handle__<hex>){.cap_<name> = <value>, ...}` per shape.
+ *  C compound literal: `(jit_handle_empty_t){0}` for no captures, or
+ *  `(jit_handle__<hex>){.cap_<name> = <value>, ...}` per shape.
  *
  *  Dispatch is static — every `h(args)` call site reads the handle
  *  variable's type, specializes against the target AST with
@@ -273,14 +273,14 @@ export interface EndRef {
  *    are vertically aligned). `null` means at least one cell on the
  *    row has a runtime-only row count — codegen queries the witness
  *    cell's `dims[0]` and trusts that all cells on the row match
- *    (`mtoc2_check_concat_*` validates at runtime when both sides
+ *    (`jit_check_concat_*` validates at runtime when both sides
  *    are uncertain).
  *  - `cellCols[i][j]` is the column count of cell `j` in row `i`
  *    (cells horizontally concatenate along the row). `null` mirrors
  *    `rowHeights`: runtime-only, queried from the cell's `dims[1]`.
  *  - The result's shape `[totalRows, totalCols]` may contain `null`
  *    for runtime-only axes; codegen computes the value from per-row
- *    / per-cell dim queries and feeds it to `mtoc2_tensor_alloc_nd`.
+ *    / per-cell dim queries and feeds it to `jit_tensor_alloc_nd`.
  *
  *  Empty cells (any cell whose shape contains a statically-known 0)
  *  are filtered out during lowering — they evaporate per numbl's
@@ -349,7 +349,7 @@ export interface CellIndexLoad {
 
 /** Range used as a value (outside index slots and for-loop bounds).
  *  Emits a freshly-allocated `1×N` row tensor at runtime via
- *  `mtoc2_tensor_make_range`. Owned producer; ANFs. The `step` may
+ *  `jit_tensor_make_range`. Owned producer; ANFs. The `step` may
  *  be any scalar real IR expression — unlike index-slot ranges,
  *  codegen routes through the runtime helper which takes the step
  *  at runtime. */
@@ -490,7 +490,7 @@ export interface TypeComment {
  *  Each entry of `outputs` is either a real binding (the slot's typed
  *  destination — driven through `recordAssignment` like any other
  *  Assign) or `null` for an ignored slot. Codegen wraps the call in a
- *  `{ … }` block and declares one inline `_mtoc2_discard_<callIdx>_<i>`
+ *  `{ … }` block and declares one inline `_jit_discard_<callIdx>_<i>`
  *  per `null` slot so those temporaries stay scoped to the call. */
 export interface MultiAssignCall {
   kind: "MultiAssignCall";
@@ -557,7 +557,7 @@ export interface IndexStore {
  *  `slot_<i>` field directly. Tuple-mode + non-exact index falls
  *  back to a runtime switch over the slot index. Uniform-mode
  *  writes through `base.slots[<offset>]` with a runtime bounds
- *  check (no auto-grow; mtoc2 rejects out-of-bounds writes —
+ *  check (no auto-grow; the JIT rejects out-of-bounds writes —
  *  see docs/cells_plan.md). */
 export interface CellIndexStore {
   kind: "CellIndexStore";
@@ -615,7 +615,7 @@ export interface IRFunc {
   paramTypes: Type[];
   /** Source output names. 0 outputs → C `void` return type; 1 output
    *  → classic return-by-value; N≥2 outputs → C `void` return + one
-   *  trailing `T_i *_mtoc2_o<i>` parameter per output. */
+   *  trailing `T_i *_jit_o<i>` parameter per output. */
   outputs: string[];
   /** C names for outputs (parallel to `outputs`). */
   cOutputs: string[];

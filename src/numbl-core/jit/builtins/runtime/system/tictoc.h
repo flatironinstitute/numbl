@@ -1,4 +1,4 @@
-/* mtoc2 runtime helper: tic / toc wall-clock timing.
+/* JIT runtime helper: tic / toc wall-clock timing.
  *
  * State is a single static double holding the most recent tic time
  * (seconds since the CLOCK_MONOTONIC epoch). MATLAB and numbl share
@@ -6,7 +6,7 @@
  * the delta. The tic-handle form (`t0 = tic; toc(t0)`) uses the
  * value `tic` returns directly: `tic` hands back the start time in
  * seconds, and `toc(t0)` computes `now - t0` without touching the
- * shared `mtoc2_tic_seconds` slot — so an outer `tic; ...; toc`
+ * shared `jit_tic_seconds` slot — so an outer `tic; ...; toc`
  * pair can wrap an inner handle measurement without interference.
  *
  * Wall-clock time uses POSIX clock_gettime(CLOCK_MONOTONIC), which
@@ -22,33 +22,33 @@
 #include <stdio.h>
 #include <time.h>
 
-static double mtoc2_tic_seconds = 0.0;
+static double jit_tic_seconds = 0.0;
 
-static double mtoc2_now_seconds(void) {
+static double jit_now_seconds(void) {
   struct timespec ts;
   clock_gettime(CLOCK_MONOTONIC, &ts);
   return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
 }
 
-static double mtoc2_tic(void) {
-  mtoc2_tic_seconds = mtoc2_now_seconds();
-  return mtoc2_tic_seconds;
+static double jit_tic(void) {
+  jit_tic_seconds = jit_now_seconds();
+  return jit_tic_seconds;
 }
 
-static double mtoc2_toc(void) {
-  return mtoc2_now_seconds() - mtoc2_tic_seconds;
+static double jit_toc(void) {
+  return jit_now_seconds() - jit_tic_seconds;
 }
 
-static double mtoc2_toc_handle(double start_seconds) {
-  return mtoc2_now_seconds() - start_seconds;
+static double jit_toc_handle(double start_seconds) {
+  return jit_now_seconds() - start_seconds;
 }
 
-static void mtoc2_toc_print(void) {
-  double elapsed = mtoc2_toc();
+static void jit_toc_print(void) {
+  double elapsed = jit_toc();
   printf("Elapsed time is %.6f seconds.\n", elapsed);
 }
 
-static void mtoc2_toc_handle_print(double start_seconds) {
-  double elapsed = mtoc2_now_seconds() - start_seconds;
+static void jit_toc_handle_print(double start_seconds) {
+  double elapsed = jit_now_seconds() - start_seconds;
   printf("Elapsed time is %.6f seconds.\n", elapsed);
 }

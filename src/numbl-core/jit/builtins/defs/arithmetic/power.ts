@@ -4,7 +4,7 @@
  *
  * Mirrors `mElemPow` in `src/numbl-core/helpers/arithmetic.ts`
  * (line 1075) modulo the complex-result paths. Numbl produces a
- * complex result for `(neg)^(non-integer)`; mtoc2 has no complex
+ * complex result for `(neg)^(non-integer)`; the JIT has no complex
  * type and rejects that combination at lowering time (same precedent
  * as `sqrt` / `log` rejecting out-of-domain real inputs).
  *
@@ -24,7 +24,7 @@
  * Domain rejection: when the base could be negative (i.e. its sign
  * isn't statically nonneg) AND the exponent isn't an exact integer
  * (or any exact value at all), reject with a clear span — that's the
- * "complex-result" case numbl handles but mtoc2 v1 doesn't.
+ * "complex-result" case numbl handles but the JIT doesn't.
  */
 
 import { TypeError, UnsupportedConstruct } from "../../../lowering/errors.js";
@@ -100,7 +100,7 @@ function powerSign(a: NumericType, b: NumericType): Sign {
 }
 
 /** Check the base/exponent pair for a possible complex-result case
- *  that mtoc2 v1 doesn't support. Returns null when accepted; an
+ *  that the JIT doesn't support. Returns null when accepted; an
  *  error message when rejected. */
 function checkDomain(a: NumericType, b: NumericType): string | null {
   // Easy accept: base is statically nonneg.
@@ -236,26 +236,26 @@ export const power: Builtin = {
     const bMulti = isMultiElement(bN);
     if (!aMulti && !bMulti) {
       if (aN.isComplex || bN.isComplex) {
-        useRuntime("mtoc2_cscalar");
-        return `mtoc2_cpow(${argsC[0]}, ${argsC[1]})`;
+        useRuntime("jit_cscalar");
+        return `jit_cpow(${argsC[0]}, ${argsC[1]})`;
       }
-      // `mtoc2_pow_real`, not bare C `pow`: the interpreter and JS-JIT use
+      // `jit_pow_real`, not bare C `pow`: the interpreter and JS-JIT use
       // `Math.pow`, which returns NaN for |base|==1 with a non-finite
       // exponent (C99 `pow` returns 1). Keeps `--opt 2` in agreement.
-      useRuntime("mtoc2_tensor_elemwise_real_fn");
-      return `mtoc2_pow_real(${argsC[0]}, ${argsC[1]})`;
+      useRuntime("jit_tensor_elemwise_real_fn");
+      return `jit_pow_real(${argsC[0]}, ${argsC[1]})`;
     }
-    useRuntime("mtoc2_tensor_elemwise_real_fn");
+    useRuntime("jit_tensor_elemwise_real_fn");
     if (aMulti && bMulti) {
       return needsBroadcast(aN, bN)
-        ? `mtoc2_tensor_power_bcast_tt(${argsC[0]}, ${argsC[1]})`
-        : `mtoc2_tensor_power_tt(${argsC[0]}, ${argsC[1]})`;
+        ? `jit_tensor_power_bcast_tt(${argsC[0]}, ${argsC[1]})`
+        : `jit_tensor_power_tt(${argsC[0]}, ${argsC[1]})`;
     }
     if (aMulti) {
-      return `mtoc2_tensor_power_ts(${argsC[0]}, ${argsC[1]})`;
+      return `jit_tensor_power_ts(${argsC[0]}, ${argsC[1]})`;
     }
     // scalar .^ tensor — not commutative.
-    return `mtoc2_tensor_power_st(${argsC[0]}, ${argsC[1]})`;
+    return `jit_tensor_power_st(${argsC[0]}, ${argsC[1]})`;
   },
   emitJs({ argsJs, argTypes, useRuntime }) {
     const aN = argTypes[0] as NumericType;
@@ -264,10 +264,10 @@ export const power: Builtin = {
     const bMulti = isMultiElement(bN);
     if (!aMulti && !bMulti) {
       if (aN.isComplex || bN.isComplex) {
-        useRuntime("mtoc2_cscalar");
+        useRuntime("jit_cscalar");
         const promote = (j: string, c: boolean) =>
-          c ? j : `mtoc2_cmake(${j}, 0.0)`;
-        return `mtoc2_cpow(${promote(argsJs[0], aN.isComplex)}, ${promote(argsJs[1], bN.isComplex)})`;
+          c ? j : `jit_cmake(${j}, 0.0)`;
+        return `jit_cpow(${promote(argsJs[0], aN.isComplex)}, ${promote(argsJs[1], bN.isComplex)})`;
       }
       return `Math.pow(${argsJs[0]}, ${argsJs[1]})`;
     }
@@ -276,17 +276,17 @@ export const power: Builtin = {
         `'power' complex-tensor emitJs not yet wired`
       );
     }
-    useRuntime("mtoc2_tensor_elemwise_real_fn");
+    useRuntime("jit_tensor_elemwise_real_fn");
     if (aMulti && bMulti) {
       return needsBroadcast(aN, bN)
-        ? `mtoc2_tensor_power_bcast_tt(${argsJs[0]}, ${argsJs[1]})`
-        : `mtoc2_tensor_power_tt(${argsJs[0]}, ${argsJs[1]})`;
+        ? `jit_tensor_power_bcast_tt(${argsJs[0]}, ${argsJs[1]})`
+        : `jit_tensor_power_tt(${argsJs[0]}, ${argsJs[1]})`;
     }
     if (aMulti) {
-      return `mtoc2_tensor_power_ts(${argsJs[0]}, ${argsJs[1]})`;
+      return `jit_tensor_power_ts(${argsJs[0]}, ${argsJs[1]})`;
     }
     // scalar .^ tensor — non-commutative.
-    return `mtoc2_tensor_power_st(${argsJs[0]}, ${argsJs[1]})`;
+    return `jit_tensor_power_st(${argsJs[0]}, ${argsJs[1]})`;
   },
   elementwise: true,
 };
