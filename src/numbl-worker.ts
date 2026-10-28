@@ -1,27 +1,7 @@
 /**
- * Unified Web Worker for both script execution and REPL.
- *
- * Supports two execution modes:
- *   - "run": Script execution (stateless by default, or persistent if flagged)
- *   - "execute": REPL execution (always uses persistent state)
- *
- * Protocol:
- *   Main -> Worker:  { type: "run", code, preamble?, options, workspaceFiles, mainFileName, searchPaths, vfsFiles, inputSAB, persistent?, cancelSAB? }
- *   Main -> Worker:  { type: "execute", code, cancelSAB? }
- *   Main -> Worker:  { type: "set_optimization", optimization }
- *   Main -> Worker:  { type: "set_wasm_bridge", url } (null/"" ⇒ uninstall)
- *   Main -> Worker:  { type: "update_workspace", workspaceFiles, vfsFiles, searchPaths? }
- *   Main -> Worker:  { type: "set_input_sab", inputSAB }
- *   Main -> Worker:  { type: "clear" }
- *
- *   Worker -> Main:  { type: "output", text }
- *   Worker -> Main:  { type: "preamble_done" } (preamble ran OK; main run starting)
- *   Worker -> Main:  { type: "preamble_error", text, message, errorType, file, line, snippet, callStack }
- *   Worker -> Main:  { type: "drawnow", plotInstructions }
- *   Worker -> Main:  { type: "done", generatedJS, outputCount, workspaceRep?, plotInstructions?, dispatchUnknownCounts?, vfsChanges? }
- *   Worker -> Main:  { type: "error", message, errorType, file, line, snippet, callStack?, generatedJS?, workspaceRep?, vfsChanges? }
- *   Worker -> Main:  { type: "result", success, output?, error?, plotInstructions?, vfsChanges? }
- *   Worker -> Main:  { type: "cleared" }
+ * Web Worker behind the web app: script runs ("run") and REPL commands
+ * ("execute"), which share state through an ExecSession. Message types are in
+ * numblWorkerProtocol.ts; the main-thread side is NumblWorkerClient.
  */
 
 import { executeCode } from "./numbl-core/executeCode.js";
@@ -30,6 +10,7 @@ import { parseMFile } from "./numbl-core/parser/index.js";
 import { CancellationError } from "./numbl-core/runtime/index.js";
 import type { RuntimeValue } from "./numbl-core/runtime/index.js";
 import type { WorkspaceFile } from "./numbl-core/workspace/index.js";
+import type { OptLevel } from "./numbl-core/executors/plugins.js";
 import { diagnoseErrors } from "./numbl-core/diagnostics";
 import { VirtualFileSystem } from "./vfs/VirtualFileSystem.js";
 import { BrowserFileIOAdapter } from "./vfs/BrowserFileIOAdapter.js";
@@ -41,6 +22,18 @@ import { ensureWasmLapackBridge } from "./numbl-core/native/wasm-lapack-browser.
 import { IdbWasmCache } from "./utils/wasmByteCache.js";
 import { startGpuHelper } from "./gpuHelper.js";
 import { setJsGpuHelper } from "./numbl-core/jsUserFunctions.js";
+import type {
+  FromNumblWorker,
+  RunMessage,
+  ToNumblWorker,
+  WorkerDiagnostic,
+  WorkerVfsFile,
+  WorkspaceRep,
+} from "./numblWorkerProtocol.js";
+
+function post(msg: FromNumblWorker): void {
+  self.postMessage(msg);
+}
 
 // Start loading the qhull Delaunay backend as soon as the worker spins up, so
 // it is installed well before any user-triggered run. Fire-and-forget: it
@@ -68,8 +61,7 @@ const MIP_SEARCH_PATH = "/system/mip/packages/gh/mip-org/core/mip/mip";
 // continue from here, so a bare `figure` opens a new figure.
 const session = new ExecSession();
 session.extraSearchPaths = [MIP_SEARCH_PATH];
-let optimizationLevel: import("./numbl-core/executors/plugins.js").OptLevel =
-  "1";
+let optimizationLevel: OptLevel = "1";
 let vfs: VirtualFileSystem | null = null;
 let inputSAB: SharedArrayBuffer | null = null;
 const systemAdapter = new BrowserSystemAdapter();
@@ -87,387 +79,257 @@ function onHtmlSourceEvent(
   name: string,
   dataJson: string
 ): void {
-  self.postMessage({ type: "html_source_event", compId, name, dataJson });
+  post({ type: "html_source_event", compId, name, dataJson });
 }
 
 // ── Script run helpers ──────────────────────────────────────────────────
 
-function postError(
-  message: string,
-  errorType: "syntax" | "semantic" | "runtime" | "unknown",
-  file: string | null,
-  line: number | null,
-  snippet: string | null,
-  callStack: unknown,
-  generatedJS: string | undefined,
-  workspaceRep?: unknown,
-  vfsChanges?: unknown
-): void {
-  self.postMessage({
-    type: "error",
-    message,
-    errorType,
-    file,
-    line,
-    snippet,
-    callStack,
-    generatedJS,
-    workspaceRep,
-    vfsChanges,
+function writeVfsFiles(vfs: VirtualFileSystem, files: WorkerVfsFile[]): void {
+  for (const f of files) vfs.writeFile(f.path, f.content);
+  vfs.clearChangeTracking();
+}
+
+function workspaceRepFor(code: string, fileName: string): WorkspaceRep {
+  let ast: unknown = null;
+  try {
+    ast = parseMFile(code, fileName);
+  } catch {
+    // parsing may fail for partial code; ignore
+  }
+  return {
+    mainFile: { name: fileName, ast, irProgram: null },
+    workspaceFiles: [],
+    fileSources: new Map<string, string>([[fileName, code]]),
+  };
+}
+
+/** "done" for a cancelled run: no output, no AST. */
+function postCancelled(adapter: BrowserFileIOAdapter): void {
+  post({
+    type: "done",
+    generatedJS: undefined,
+    outputCount: 0,
+    workspaceRep: null,
+    plotInstructions: [],
+    vfsChanges: adapter.getChanges(),
   });
 }
 
-// ── Worker message handler ──────────────────────────────────────────────
+function workerDiagnostics(
+  error: unknown,
+  code: string,
+  fileName: string,
+  wsFiles: WorkspaceFile[]
+): WorkerDiagnostic[] {
+  return diagnoseErrors(error, code, fileName, wsFiles).map(d => ({
+    message: d.message,
+    errorType: d.errorType,
+    file: d.file,
+    line: d.line,
+    snippet: d.snippet,
+    callStack: d.callStack ?? null,
+  }));
+}
 
-self.onmessage = (e: MessageEvent) => {
-  const { type } = e.data;
+// ── Script execution ("run") ────────────────────────────────────────────
 
-  // ── Configuration messages ──────────────────────────────────────────
+function handleRun(msg: RunMessage): void {
+  const {
+    code,
+    preamble,
+    options,
+    workspaceFiles: wsFiles,
+    mainFileName,
+    searchPaths,
+    vfsFiles,
+    persistent,
+    cancelSAB,
+  } = msg;
 
-  if (type === "clear") {
-    session.clearWorkspace();
-    vfs = null;
-    self.postMessage({ type: "cleared" });
-    return;
-  }
+  // A new run supersedes any armed uihtml session from a prior run.
+  session.disposeUihtmlSession();
 
-  // ── uihtml reverse channel: an iframe event re-enters the live runtime ──
-  if (type === "html_event") {
-    const liveUihtmlSession = session.uihtmlSession;
-    if (!liveUihtmlSession) return;
-    const { compId, kind, name, data } = e.data;
-    const eventType =
-      kind === "dataChanged" ? "DataChanged" : "HTMLEventReceived";
-    try {
-      liveUihtmlSession.dispatchEvent(compId, eventType, { name, data });
-    } catch (err) {
-      self.postMessage({
-        type: "output",
-        text: `Error in uihtml callback: ${
-          err instanceof Error ? err.message : String(err)
-        }\n`,
-      });
-    }
-    return;
-  }
+  // Choose VFS/adapter/variables based on persistent flag
+  let sysAdapter: BrowserSystemAdapter;
+  let runVfs: VirtualFileSystem;
+  let useVariableValues: Record<string, RuntimeValue>;
+  let useHoldState: boolean | undefined;
+  let useWorkspaceFiles: WorkspaceFile[];
+  let useSearchPaths: string[] | undefined;
 
-  if (type === "set_input_sab") {
-    inputSAB = e.data.inputSAB ?? null;
-    return;
-  }
-
-  if (type === "set_optimization") {
-    optimizationLevel = e.data.optimization ?? optimizationLevel;
-    return;
-  }
-
-  if (type === "set_wasm_bridge") {
-    // Best-effort: loads/instantiates off the message loop and installs the
-    // accelerator when ready. A null/empty url uninstalls it.
-    void ensureWasmLapackBridge(e.data.url ?? null, { cache: wasmBridgeCache });
-    return;
-  }
-
-  if (type === "update_workspace") {
-    session.workspaceFiles = e.data.workspaceFiles || [];
-    if (e.data.searchPaths !== undefined) {
-      session.searchPaths = e.data.searchPaths;
-    }
-    if (e.data.vfsFiles) {
+  if (persistent) {
+    // Persistent mode: share state with REPL
+    if (!vfs) {
       vfs = new VirtualFileSystem();
-      for (const f of e.data.vfsFiles as {
-        path: string;
-        content: Uint8Array;
-      }[]) {
-        vfs.writeFile(f.path, f.content);
-      }
-      vfs.clearChangeTracking();
       systemAdapter.setVfs(vfs);
     }
-    return;
+    // Merge in any vfsFiles provided with the run message
+    if (vfsFiles) writeVfsFiles(vfs, vfsFiles);
+    sysAdapter = systemAdapter;
+    runVfs = vfs;
+    useVariableValues = session.variableValues;
+    useHoldState = session.holdState;
+    useWorkspaceFiles = wsFiles.length > 0 ? wsFiles : session.workspaceFiles;
+    useSearchPaths = searchPaths ?? session.searchPaths;
+  } else {
+    // Non-persistent mode: fresh state
+    runVfs = new VirtualFileSystem();
+    if (vfsFiles) writeVfsFiles(runVfs, vfsFiles);
+    sysAdapter = new BrowserSystemAdapter(runVfs);
+    useVariableValues = {};
+    useHoldState = undefined;
+    useWorkspaceFiles = wsFiles;
+    useSearchPaths = searchPaths;
   }
+  const adapter = new BrowserFileIOAdapter(runVfs);
 
-  // ── Script execution ("run") ────────────────────────────────────────
+  // Treat the directory of the script being run as the current working
+  // directory, mirroring the CLI `run` command (which chdir's into
+  // dirname(filepath)). Project files were written relative to the VFS
+  // root, so resolving the script's project-relative name against the
+  // current cwd (the root at this point) yields its absolute path; chdir
+  // into its parent. A root-level script resolves to the root, leaving the
+  // cwd unchanged. The directory then becomes the first-priority implicit
+  // search path (see executeCode), so sibling functions and relative file
+  // I/O resolve against the script's folder.
+  const mainAbsPath = runVfs.normalizePath(mainFileName ?? "script.m");
+  const lastSlash = mainAbsPath.lastIndexOf("/");
+  runVfs.setCwd(lastSlash > 0 ? mainAbsPath.slice(0, lastSlash) : "/");
 
-  if (type === "run") {
-    const {
-      code,
-      preamble,
-      options,
-      workspaceFiles,
-      mainFileName,
-      searchPaths,
-      vfsFiles,
-      persistent,
-      cancelSAB,
-    } = e.data;
+  // Run under the script's absolute VFS path so `mfilename('fullpath')` and
+  // `fileparts(mfilename('fullpath'))` resolve to the project directory (e.g.
+  // /project/refine_demo). Otherwise a bare name yields an empty directory.
+  const activeFileName = mainAbsPath;
 
-    // A new run supersedes any armed uihtml session from a prior run.
-    session.disposeUihtmlSession();
+  const runInputSAB = msg.inputSAB ?? inputSAB;
 
-    const wsFiles: WorkspaceFile[] = workspaceFiles;
-    let activeFileName: string = mainFileName ?? "script.m";
-    let generatedJS: string | undefined;
-
-    // Choose VFS/adapter/variables based on persistent flag
-    let adapter: BrowserFileIOAdapter | undefined;
-    let sysAdapter: BrowserSystemAdapter;
-    let runVfs: VirtualFileSystem;
-    let useVariableValues: Record<string, RuntimeValue>;
-    let useHoldState: boolean | undefined;
-    let useWorkspaceFiles: WorkspaceFile[];
-    let useSearchPaths: string[] | undefined;
-
-    if (persistent) {
-      // Persistent mode: share state with REPL
-      if (!vfs) {
-        vfs = new VirtualFileSystem();
-        systemAdapter.setVfs(vfs);
-      }
-      // Merge in any vfsFiles provided with the run message
-      if (vfsFiles) {
-        for (const f of vfsFiles as {
-          path: string;
-          content: Uint8Array;
-        }[]) {
-          vfs.writeFile(f.path, f.content);
-        }
-        vfs.clearChangeTracking();
-      }
-      adapter = new BrowserFileIOAdapter(vfs);
-      sysAdapter = systemAdapter;
-      runVfs = vfs;
-      useVariableValues = session.variableValues;
-      useHoldState = session.holdState;
-      useWorkspaceFiles = wsFiles.length > 0 ? wsFiles : session.workspaceFiles;
-      useSearchPaths = searchPaths ?? session.searchPaths;
-    } else {
-      // Non-persistent mode: fresh state
-      const freshVfs = new VirtualFileSystem();
-      if (vfsFiles) {
-        for (const f of vfsFiles as {
-          path: string;
-          content: Uint8Array;
-        }[]) {
-          freshVfs.writeFile(f.path, f.content);
-        }
-        freshVfs.clearChangeTracking();
-      }
-      adapter = new BrowserFileIOAdapter(freshVfs);
-      sysAdapter = new BrowserSystemAdapter(freshVfs);
-      runVfs = freshVfs;
-      useVariableValues = {};
-      useHoldState = undefined;
-      useWorkspaceFiles = wsFiles;
-      useSearchPaths = searchPaths;
-    }
-
-    // Treat the directory of the script being run as the current working
-    // directory, mirroring the CLI `run` command (which chdir's into
-    // dirname(filepath)). Project files were written relative to the VFS
-    // root, so resolving the script's project-relative name against the
-    // current cwd (the root at this point) yields its absolute path; chdir
-    // into its parent. A root-level script resolves to the root, leaving the
-    // cwd unchanged. The directory then becomes the first-priority implicit
-    // search path (see executeCode), so sibling functions and relative file
-    // I/O resolve against the script's folder.
-    const mainAbsPath = runVfs.normalizePath(activeFileName);
-    const lastSlash = mainAbsPath.lastIndexOf("/");
-    runVfs.setCwd(lastSlash > 0 ? mainAbsPath.slice(0, lastSlash) : "/");
-
-    // Run under the script's absolute VFS path so `mfilename('fullpath')` and
-    // `fileparts(mfilename('fullpath'))` resolve to the project directory (e.g.
-    // /project/refine_demo). Otherwise a bare name yields an empty directory.
-    activeFileName = mainAbsPath;
-
-    const runInputSAB = e.data.inputSAB ?? inputSAB;
-
-    // ── Preamble phase ──────────────────────────────────────────────────
-    // Optional setup code (e.g. `mip load --install ...`) that runs before the
-    // visible script, sharing the SAME VFS so anything it installs is available
-    // to the main run. Its console output is captured (not forwarded) and is
-    // surfaced only if the preamble itself fails — the embed page shows a
-    // "Preparing…" message in the meantime. Threads the preamble's resulting
-    // variables / search paths / workspace files into the main run.
-    if (typeof preamble === "string" && preamble.trim()) {
-      const preambleOutput: string[] = [];
-      try {
-        const pre = executeCode(
-          preamble,
-          {
-            onOutput: (text: string) => {
-              preambleOutput.push(text);
-            },
-            onDrawnow: () => {},
-            displayResults: false,
-            maxIterations: options?.maxIterations ?? 10000000,
-            optimization: options?.optimization ?? optimizationLevel,
-            initialVariableValues: useVariableValues,
-            fileIO: adapter,
-            system: sysAdapter,
-            onInput: runInputSAB ? workerOnInput(runInputSAB) : undefined,
-            cancelSAB,
-          },
-          useWorkspaceFiles,
-          runVfs.normalizePath("preamble.m"),
-          [...(useSearchPaths ?? []), MIP_SEARCH_PATH]
-        );
-        // Thread the preamble's resulting state into the main run.
-        useVariableValues = pre.variableValues;
-        if (pre.searchPaths) useSearchPaths = pre.searchPaths;
-        if (pre.workspaceFiles) useWorkspaceFiles = pre.workspaceFiles;
-        // Note: change tracking is intentionally NOT cleared here — files the
-        // preamble installs under /system/ flow through to `done`'s vfsChanges
-        // so the host can persist them to the durable system directory.
-        self.postMessage({ type: "preamble_done" });
-      } catch (error: unknown) {
-        if (error instanceof CancellationError) {
-          self.postMessage({
-            type: "done",
-            generatedJS: undefined,
-            outputCount: 0,
-            workspaceRep: null,
-            plotInstructions: [],
-            vfsChanges: adapter?.getChanges(),
-          });
-          return;
-        }
-        const diags = diagnoseErrors(error, preamble, "preamble.m", wsFiles);
-        const first = diags[0];
-        self.postMessage({
-          type: "preamble_error",
-          text: preambleOutput.join(""),
-          message: first?.message ?? String(error),
-          errorType: first?.errorType ?? "unknown",
-          file: first?.file ?? null,
-          line: first?.line ?? null,
-          snippet: first?.snippet ?? null,
-          callStack: first?.callStack ?? null,
-        });
-        return;
-      }
-    }
-
+  // ── Preamble phase ──────────────────────────────────────────────────
+  // Optional setup code (e.g. `mip load --install ...`) that runs before the
+  // visible script, sharing the SAME VFS so anything it installs is available
+  // to the main run. Its console output is captured (not forwarded) and is
+  // surfaced only if the preamble itself fails — the embed page shows a
+  // "Preparing…" message in the meantime. Threads the preamble's resulting
+  // variables / search paths / workspace files into the main run.
+  if (typeof preamble === "string" && preamble.trim()) {
+    const preambleOutput: string[] = [];
     try {
-      const result = executeCode(
-        code,
+      const pre = executeCode(
+        preamble,
         {
           onOutput: (text: string) => {
-            self.postMessage({ type: "output", text });
+            preambleOutput.push(text);
           },
-          onDrawnow: plotInstructions => {
-            self.postMessage({ type: "drawnow", plotInstructions });
-          },
-          displayResults: options?.displayResults ?? true,
+          onDrawnow: () => {},
+          displayResults: false,
           maxIterations: options?.maxIterations ?? 10000000,
           optimization: options?.optimization ?? optimizationLevel,
           initialVariableValues: useVariableValues,
-          initialHoldState: useHoldState,
           fileIO: adapter,
           system: sysAdapter,
           onInput: runInputSAB ? workerOnInput(runInputSAB) : undefined,
-          onHtmlSourceEvent,
           cancelSAB,
         },
         useWorkspaceFiles,
-        activeFileName,
+        runVfs.normalizePath("preamble.m"),
         [...(useSearchPaths ?? []), MIP_SEARCH_PATH]
       );
-
-      // A persistent run carries its state into the REPL. Either way, keep
-      // the uihtml session alive if the run registered callbacks, so iframe
-      // events can re-enter the interpreter (see "html_event").
-      if (persistent) {
-        session.adopt(result);
-      } else {
-        session.uihtmlSession = result.uihtmlSession ?? null;
-        session.figureHandles = result.figureHandles;
-      }
-
-      // Build workspaceRep for AST display
-      let ast: unknown = null;
-      try {
-        ast = parseMFile(code, activeFileName);
-      } catch {
-        // parsing may fail for partial code; ignore
-      }
-      const workspaceRep = {
-        mainFile: { name: activeFileName, ast, irProgram: null },
-        workspaceFiles: [] as {
-          name: string;
-          ast: unknown;
-          irProgram: unknown;
-        }[],
-        fileSources: new Map<string, string>([[activeFileName, code]]),
-      };
-
-      const vfsChanges = adapter?.getChanges();
-      self.postMessage({
-        type: "done",
-        generatedJS: result.generatedJS,
-        outputCount: result.output.length,
-        workspaceRep,
-        plotInstructions: result.plotInstructions,
-        dispatchUnknownCounts: result.dispatchUnknownCounts,
-        vfsChanges,
-      });
+      // Thread the preamble's resulting state into the main run.
+      useVariableValues = pre.variableValues;
+      if (pre.searchPaths) useSearchPaths = pre.searchPaths;
+      if (pre.workspaceFiles) useWorkspaceFiles = pre.workspaceFiles;
+      // Note: change tracking is intentionally NOT cleared here — files the
+      // preamble installs under /system/ flow through to `done`'s vfsChanges
+      // so the host can persist them to the durable system directory.
+      post({ type: "preamble_done" });
     } catch (error: unknown) {
       if (error instanceof CancellationError) {
-        // Cancellation: report as done with no output
-        self.postMessage({
-          type: "done",
-          generatedJS: undefined,
-          outputCount: 0,
-          workspaceRep: null,
-          plotInstructions: [],
-          vfsChanges: adapter?.getChanges(),
-        });
+        postCancelled(adapter);
         return;
       }
-
-      const diags = diagnoseErrors(error, code, activeFileName, wsFiles);
-      const errObj = error as Record<string, unknown> | null;
-      const errGeneratedJS =
-        (errObj?.generatedJS as string | undefined) ?? generatedJS;
-      let errAst: unknown = null;
-      try {
-        errAst = parseMFile(code, activeFileName);
-      } catch {
-        // ignore parse errors here
-      }
-      const errWorkspaceRep = {
-        mainFile: { name: activeFileName, ast: errAst, irProgram: null },
-        workspaceFiles: [] as {
-          name: string;
-          ast: unknown;
-          irProgram: unknown;
-        }[],
-        fileSources: new Map<string, string>([[activeFileName, code]]),
-      };
-      const errVfsChanges = adapter?.getChanges();
-      for (const diag of diags) {
-        postError(
-          diag.message,
-          diag.errorType,
-          diag.file,
-          diag.line,
-          diag.snippet,
-          diag.callStack,
-          errGeneratedJS,
-          errWorkspaceRep,
-          errVfsChanges
-        );
-      }
+      const first = workerDiagnostics(
+        error,
+        preamble,
+        "preamble.m",
+        wsFiles
+      )[0];
+      post({
+        type: "preamble_error",
+        text: preambleOutput.join(""),
+        message: first?.message ?? String(error),
+        errorType: first?.errorType ?? "unknown",
+        file: first?.file ?? null,
+        line: first?.line ?? null,
+        snippet: first?.snippet ?? null,
+        callStack: first?.callStack ?? null,
+      });
+      return;
     }
-    return;
   }
 
-  // ── REPL execution ("execute") ──────────────────────────────────────
+  try {
+    const result = executeCode(
+      code,
+      {
+        onOutput: (text: string) => {
+          post({ type: "output", text });
+        },
+        onDrawnow: plotInstructions => {
+          post({ type: "drawnow", plotInstructions });
+        },
+        displayResults: options?.displayResults ?? true,
+        maxIterations: options?.maxIterations ?? 10000000,
+        optimization: options?.optimization ?? optimizationLevel,
+        initialVariableValues: useVariableValues,
+        initialHoldState: useHoldState,
+        fileIO: adapter,
+        system: sysAdapter,
+        onInput: runInputSAB ? workerOnInput(runInputSAB) : undefined,
+        onHtmlSourceEvent,
+        cancelSAB,
+      },
+      useWorkspaceFiles,
+      activeFileName,
+      [...(useSearchPaths ?? []), MIP_SEARCH_PATH]
+    );
 
-  if (type !== "execute") return;
+    // A persistent run carries its state into the REPL. Either way, keep
+    // the uihtml session alive if the run registered callbacks, so iframe
+    // events can re-enter the interpreter (see "html_event").
+    if (persistent) {
+      session.adopt(result);
+    } else {
+      session.uihtmlSession = result.uihtmlSession ?? null;
+      session.figureHandles = result.figureHandles;
+    }
 
-  const { code, cancelSAB } = e.data;
+    post({
+      type: "done",
+      generatedJS: result.generatedJS,
+      outputCount: result.output.length,
+      workspaceRep: workspaceRepFor(code, activeFileName),
+      plotInstructions: result.plotInstructions,
+      dispatchUnknownCounts: result.dispatchUnknownCounts,
+      vfsChanges: adapter.getChanges(),
+    });
+  } catch (error: unknown) {
+    if (error instanceof CancellationError) {
+      postCancelled(adapter);
+      return;
+    }
 
+    const diags = workerDiagnostics(error, code, activeFileName, wsFiles);
+    const generatedJS = (error as { generatedJS?: string } | null)?.generatedJS;
+    const workspaceRep = workspaceRepFor(code, activeFileName);
+    const vfsChanges = adapter.getChanges();
+    for (const diag of diags) {
+      post({ type: "error", ...diag, generatedJS, workspaceRep, vfsChanges });
+    }
+  }
+}
+
+// ── REPL execution ("execute") ──────────────────────────────────────────
+
+function handleExecute(code: string, cancelSAB?: SharedArrayBuffer): void {
   // Create adapter from persistent VFS
   if (!vfs) {
     vfs = new VirtualFileSystem();
@@ -480,10 +342,10 @@ self.onmessage = (e: MessageEvent) => {
     // command registered uihtml callbacks.
     const result = session.execute(code, {
       onOutput: (text: string) => {
-        self.postMessage({ type: "output", text });
+        post({ type: "output", text });
       },
       onDrawnow: plotInstructions => {
-        self.postMessage({ type: "drawnow", plotInstructions });
+        post({ type: "drawnow", plotInstructions });
       },
       displayResults: true,
       maxIterations: 10000000,
@@ -495,23 +357,88 @@ self.onmessage = (e: MessageEvent) => {
       cancelSAB,
     });
 
-    const vfsChanges = adapter.getChanges();
-    self.postMessage({
+    post({
       type: "result",
       success: true,
       output: result.output.join(""),
       plotInstructions: result.plotInstructions,
-      vfsChanges,
+      vfsChanges: adapter.getChanges(),
     });
   } catch (error: unknown) {
     // On error, variableValues remains unchanged
-    const errVfsChanges = adapter.getChanges();
     const { message } = formatExecuteError(error, code);
-    self.postMessage({
+    post({
       type: "result",
       success: false,
       error: message,
-      vfsChanges: errVfsChanges,
+      vfsChanges: adapter.getChanges(),
     });
+  }
+}
+
+// ── Worker message handler ──────────────────────────────────────────────
+
+self.onmessage = (e: MessageEvent<ToNumblWorker>) => {
+  const msg = e.data;
+  switch (msg.type) {
+    case "clear":
+      session.clearWorkspace();
+      vfs = null;
+      post({ type: "cleared" });
+      return;
+
+    // uihtml reverse channel: an iframe event re-enters the live runtime.
+    case "html_event": {
+      const liveUihtmlSession = session.uihtmlSession;
+      if (!liveUihtmlSession) return;
+      const eventType =
+        msg.kind === "dataChanged" ? "DataChanged" : "HTMLEventReceived";
+      try {
+        liveUihtmlSession.dispatchEvent(msg.compId, eventType, {
+          name: msg.name,
+          data: msg.data,
+        });
+      } catch (err) {
+        post({
+          type: "output",
+          text: `Error in uihtml callback: ${
+            err instanceof Error ? err.message : String(err)
+          }\n`,
+        });
+      }
+      return;
+    }
+
+    case "set_input_sab":
+      inputSAB = msg.inputSAB ?? null;
+      return;
+
+    case "set_optimization":
+      optimizationLevel = msg.optimization ?? optimizationLevel;
+      return;
+
+    case "set_wasm_bridge":
+      // Best-effort: loads/instantiates off the message loop and installs the
+      // accelerator when ready. A null/empty url uninstalls it.
+      void ensureWasmLapackBridge(msg.url ?? null, { cache: wasmBridgeCache });
+      return;
+
+    case "update_workspace":
+      session.workspaceFiles = msg.workspaceFiles || [];
+      if (msg.searchPaths !== undefined) session.searchPaths = msg.searchPaths;
+      if (msg.vfsFiles) {
+        vfs = new VirtualFileSystem();
+        writeVfsFiles(vfs, msg.vfsFiles);
+        systemAdapter.setVfs(vfs);
+      }
+      return;
+
+    case "run":
+      handleRun(msg);
+      return;
+
+    case "execute":
+      handleExecute(msg.code, msg.cancelSAB);
+      return;
   }
 };

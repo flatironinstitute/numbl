@@ -10,10 +10,12 @@ A React + Vite single-page app that lets users write and run `.m` scripts in the
 
 ## Worker protocol
 
-A message-passing contract between the main thread and the worker:
+A message-passing contract between the main thread and the worker (`src/numbl-worker.ts`), typed as discriminated unions in `src/numblWorkerProtocol.ts`:
 
-- main → worker: run source, set optimization level, update workspace files, clear state.
-- worker → main: output chunks, run completion with result, error, plot-draw events, workspace deltas.
+- main → worker: run a script (optionally after a hidden preamble, optionally sharing state with the REPL), execute a REPL command, set optimization level, update workspace files, clear state, forward a uihtml iframe event.
+- worker → main: output chunks, plot-draw events, input requests, uihtml events for an iframe, run completion (`done`) or one `error` per diagnostic, REPL completion (`result`), workspace (VFS) deltas.
+
+The main-thread side lives in `NumblWorkerClient` (`src/numblWorkerClient.ts`): it owns the `Worker`, the input and cancellation `SharedArrayBuffer`s, the uihtml relay (`src/graphics/uihtmlRelay.ts`) and the dispatch of incoming messages to host callbacks. React hosts (the IDE, embed, embed REPL, figure page and plot gallery) use it through `useNumblWorker`, which starts the worker on mount and terminates it on unmount; the benchmark page uses the class directly, one worker per benchmark. `buildWorkerFiles` (`src/buildWorkerFiles.ts`) assembles the VFS and workspace files sent with a run. The embedding API (`src/browser/`) has its own worker and protocol.
 
 The worker is the only thing that ever calls `executeCode`. The main thread never runs numbl-core logic directly.
 

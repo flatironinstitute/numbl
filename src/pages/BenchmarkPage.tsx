@@ -1,6 +1,7 @@
 import { Box, Typography, LinearProgress, Button, Link } from "@mui/material";
 import { useEffect, useRef, useState, useCallback } from "react";
 import { makeShareHash } from "../utils/shareUrl.js";
+import { NumblWorkerClient } from "../numblWorkerClient.js";
 
 const DEFAULT_BENCHMARKS_URL =
   "https://magland.github.io/numbl-benchmarks/benchmarks";
@@ -99,43 +100,40 @@ export function BenchmarkPage() {
         )
       );
 
-      const worker = new Worker(
-        new URL("../numbl-worker.ts", import.meta.url),
-        { type: "module" }
-      );
-
       let output = "";
-
-      worker.onmessage = e => {
-        const msg = e.data;
-        if (msg.type === "output") {
-          output += msg.text;
-        } else if (msg.type === "done") {
-          setResults(prev =>
-            prev.map((r, i) =>
-              i === index ? { ...r, output, status: "done" } : r
-            )
-          );
-          worker.terminate();
-          resolve();
-        } else if (msg.type === "error") {
-          setResults(prev =>
-            prev.map((r, i) =>
-              i === index ? { ...r, output: msg.message, status: "error" } : r
-            )
-          );
-          worker.terminate();
-          resolve();
-        }
-      };
-
-      worker.postMessage({
-        type: "run",
+      const worker = new NumblWorkerClient(
+        {
+          onOutput: text => {
+            output += text;
+          },
+          onDone: () => {
+            setResults(prev =>
+              prev.map((r, i) =>
+                i === index ? { ...r, output, status: "done" } : r
+              )
+            );
+            worker.terminate();
+            resolve();
+          },
+          onError: msg => {
+            setResults(prev =>
+              prev.map((r, i) =>
+                i === index ? { ...r, output: msg.message, status: "error" } : r
+              )
+            );
+            worker.terminate();
+            resolve();
+          },
+        },
+        { interactiveInput: false, uihtml: false }
+      );
+      worker.start();
+      worker.run({
         code: bench.code,
         options: {
           displayResults: false,
           maxIterations: 100000000,
-          optimization: 1,
+          optimization: "1",
         },
         workspaceFiles: [],
         mainFileName: "bench.m",

@@ -17,7 +17,6 @@ import {
   useRef,
   useState,
 } from "react";
-import { createInputSAB, mainThreadRespond } from "../syncInputChannel";
 import { useStaticProjectFiles } from "../hooks/useStaticProjectFiles";
 import type { FigureSpec } from "../hooks/useStaticProjectFiles";
 import { useSystemFiles } from "../hooks/useSystemFiles";
@@ -27,12 +26,13 @@ import {
 } from "../hooks/useMipCorePackage";
 import { syncSystemVfsChanges } from "../vfs/syncVfsChanges";
 import { formatDiagnostic } from "../numbl-core/diagnostics";
-import type { PlotInstruction } from "../numbl-core/plotting/types.js";
 import { FigureView } from "../graphics/FigureView.js";
 import {
   figuresReducer,
   initialFiguresState,
 } from "../numbl-core/plotting/figuresReducer.js";
+import { useNumblWorker } from "../hooks/useNumblWorker";
+import { buildWorkerFiles } from "../buildWorkerFiles";
 
 const NUMBL_ORIGIN = "https://numbl.org";
 
@@ -88,11 +88,7 @@ export function FigurePage({ figureId }: { figureId?: string }) {
     figuresReducer,
     initialFiguresState
   );
-  const workerRef = useRef<Worker | null>(null);
-  const inputSAB = useRef<SharedArrayBuffer | null>(createInputSAB());
   // Guard so the auto-run fires once per resolved figure, not on every render.
-  // Reset whenever the worker is (re)created so a fresh worker can re-run — e.g.
-  // under React StrictMode's dev mount/unmount/remount.
   const startedRef = useRef<string | null>(null);
 
   const figureLabel = spec?.name || title || "Figure";
@@ -110,114 +106,35 @@ export function FigurePage({ figureId }: { figureId?: string }) {
   }, [figuresState.figs]);
   const hasFigure = currentFig !== null;
 
-  const handlePlotInstruction = useCallback((instruction: PlotInstruction) => {
-    figuresDispatch(instruction);
-  }, []);
-
-  const setupWorkerHandler = useCallback(
-    (worker: Worker) => {
-      worker.onmessage = e => {
-        const msg = e.data;
-        if (msg.type === "request-input") {
-          const response = prompt(msg.prompt ?? "") ?? "";
-          if (inputSAB.current) mainThreadRespond(inputSAB.current, response);
-          return;
-        }
-        if (msg.type === "output") {
-          setOutput(prev => prev + msg.text);
-          return;
-        }
-        if (msg.type === "drawnow") {
-          if (msg.plotInstructions?.length) {
-            for (const instr of msg.plotInstructions)
-              handlePlotInstruction(instr);
-          }
-          return;
-        }
-        // uihtml reverse channel: MATLAB -> JS (sendEventToHTMLSource). Relay
-        // into the matching uihtml iframe rendered by FigureView; its bootstrap
-        // filters by compId and fires the page's addEventListener(name) hooks.
-        if (msg.type === "html_source_event") {
-          const frames = document.querySelectorAll<HTMLIFrameElement>(
-            `iframe[title="uihtml-${msg.compId}"]`
-          );
-          frames.forEach(f =>
-            f.contentWindow?.postMessage(
-              {
-                source: "numbl-host",
-                compId: msg.compId,
-                name: msg.name,
-                dataJson: msg.dataJson,
-              },
-              "*"
-            )
-          );
-          return;
-        }
-        if (msg.type === "done") {
-          setIsRunning(false);
-          // Persist anything the run installed under /system/ (e.g. a package a
-          // figure's `mip load --install` downloaded) for reuse on later runs.
-          if (msg.vfsChanges) {
-            void syncSystemVfsChanges(msg.vfsChanges).then(changed => {
-              if (changed) reloadSystemFiles();
-            });
-          }
-          if (msg.plotInstructions?.length) {
-            for (const instr of msg.plotInstructions)
-              handlePlotInstruction(instr);
-          }
-          return;
-        }
-        if (msg.type === "error") {
-          setIsRunning(false);
-          setRunError(true);
-          setShowOutput(true);
-          setOutput(prev => prev + `\n${formatDiagnostic(msg)}\n`);
-          return;
-        }
-      };
+  const worker = useNumblWorker({
+    onOutput: text => setOutput(prev => prev + text),
+    onPlotInstructions: instructions => {
+      for (const instr of instructions) figuresDispatch(instr);
     },
-    [handlePlotInstruction, reloadSystemFiles]
-  );
-
-  // Initialize the worker once.
-  useEffect(() => {
-    const worker = new Worker(new URL("../numbl-worker.ts", import.meta.url), {
-      type: "module",
-    });
-    workerRef.current = worker;
-    setupWorkerHandler(worker);
-    // A fresh worker has no run yet — allow the auto-run effect to fire again.
-    startedRef.current = null;
-    return () => {
-      worker.terminate();
-      workerRef.current = null;
-    };
-  }, [setupWorkerHandler]);
-
-  // uihtml forward channel: a uihtml iframe posts an event to the window
-  // (JS sendToMATLAB / Data setter). Forward it to the worker, which re-enters
-  // the live (persistent) interpreter and fires HTMLEventReceivedFcn.
-  useEffect(() => {
-    const onMessage = (e: MessageEvent) => {
-      const d = e.data;
-      if (!d || d.source !== "numbl-uihtml") return;
-      workerRef.current?.postMessage({
-        type: "html_event",
-        compId: d.compId,
-        kind: d.kind,
-        name: d.name,
-        data: d.data,
+    onDone: () => setIsRunning(false),
+    onError: msg => {
+      setIsRunning(false);
+      setRunError(true);
+      setShowOutput(true);
+      setOutput(prev => prev + `\n${formatDiagnostic(msg)}\n`);
+    },
+    // Persist anything the run installed under /system/ (e.g. a package a
+    // figure's `mip load --install` downloaded) for reuse on later runs.
+    onVfsChanges: changes => {
+      void syncSystemVfsChanges(changes).then(changed => {
+        if (changed) reloadSystemFiles();
       });
-    };
-    window.addEventListener("message", onMessage);
-    return () => window.removeEventListener("message", onMessage);
-  }, []);
+    },
+  });
+
+  // A fresh worker has no run yet, so let the auto-run fire again (e.g. under
+  // React StrictMode's dev mount/unmount/remount).
+  useEffect(() => {
+    startedRef.current = null;
+  }, [worker]);
 
   const runFigure = useCallback(async () => {
-    const worker = workerRef.current;
-    if (!worker || !spec) return;
+    if (!spec) return;
     const entryFile = files.find(f => f.name === spec.entry);
     if (!entryFile) {
       setRunError(true);
@@ -235,45 +152,24 @@ export function FigurePage({ figureId }: { figureId?: string }) {
     // Keep the persistent system directory alive while this view is in use.
     markSystemActivity();
 
-    const decoder = new TextDecoder("utf-8");
-    const [projectContents, systemVfs, systemWs] = await Promise.all([
-      loadAllContents(),
-      getSystemVfsFiles(),
-      getSystemWorkspaceFiles(),
-    ]);
-
-    const vfsFiles = [
-      ...files.map(f => ({
-        path: f.name,
-        content: projectContents.get(f.id) ?? new Uint8Array(0),
-      })),
-      ...systemVfs,
-    ];
-    // Only .m files are sent as text workspace files; other assets reach the
-    // worker via vfsFiles (mirrors IDEWorkspace.buildWorkerFiles).
-    const workspaceFiles = [
-      ...files
-        .filter(f => f.name.endsWith(".m"))
-        .map(f => ({
-          name: f.name,
-          source: decoder.decode(
-            projectContents.get(f.id) ?? new Uint8Array(0)
-          ),
-        })),
-      ...systemWs,
-    ];
-    const code = decoder.decode(
+    const { vfsFiles, workspaceFiles, projectContents } =
+      await buildWorkerFiles({
+        projectFiles: files,
+        loadAllContents,
+        getSystemVfsFiles,
+        getSystemWorkspaceFiles,
+      });
+    const code = new TextDecoder("utf-8").decode(
       projectContents.get(entryFile.id) ?? new Uint8Array(0)
     );
 
-    worker.postMessage({ type: "update_workspace", workspaceFiles, vfsFiles });
-    worker.postMessage({
-      type: "run",
+    worker.updateWorkspace(workspaceFiles, vfsFiles);
+    worker.run({
       code,
       options: {
         displayResults: true,
         maxIterations: 10000000,
-        optimization: 1,
+        optimization: "1",
       },
       workspaceFiles,
       vfsFiles,
@@ -281,9 +177,9 @@ export function FigurePage({ figureId }: { figureId?: string }) {
       // Persistent so the figure's uihtml callbacks keep re-entering after the
       // script's top-level run completes.
       persistent: true,
-      inputSAB: inputSAB.current ?? undefined,
     });
   }, [
+    worker,
     spec,
     files,
     loadAllContents,
@@ -295,7 +191,7 @@ export function FigurePage({ figureId }: { figureId?: string }) {
   // off the imperative worker run (which updates state) on becoming ready — the
   // intended "synchronize with an external system" use of an effect.
   useEffect(() => {
-    if (loading || !spec || !workerRef.current) return;
+    if (loading || !spec) return;
     if (startedRef.current === spec.id) return;
     startedRef.current = spec.id;
     // eslint-disable-next-line react-hooks/set-state-in-effect

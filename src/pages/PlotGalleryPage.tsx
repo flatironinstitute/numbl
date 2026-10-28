@@ -10,14 +10,14 @@ import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import ExpandLessIcon from "@mui/icons-material/ExpandLess";
 import { makeShareHash } from "../utils/shareUrl.js";
 import { usePageMeta } from "../hooks/usePageMeta";
-import { useEffect, useRef, useState, useCallback } from "react";
-import type { PlotInstruction } from "../numbl-core/plotting/types.js";
+import { useEffect, useState } from "react";
 import {
   figuresReducer,
   initialFiguresState,
   type FiguresState,
 } from "../numbl-core/plotting/figuresReducer.js";
 import { FigureView } from "../graphics/FigureView.js";
+import { useNumblWorker } from "../hooks/useNumblWorker.js";
 
 // Import all example .m files as raw text
 const exampleModules = import.meta.glob("../../examples/plots/*.m", {
@@ -45,61 +45,35 @@ function GalleryItem({ entry }: { entry: GalleryEntry }) {
     "pending" | "running" | "done" | "error"
   >("running");
   const [error, setError] = useState<string | null>(null);
-  const workerRef = useRef<Worker | null>(null);
-
-  // Use a ref-based reducer to collect plot instructions
-  const figuresRef = useRef<FiguresState>(initialFiguresState);
-  const dispatchRef = useCallback((action: PlotInstruction) => {
-    figuresRef.current = figuresReducer(figuresRef.current, action);
-  }, []);
-
-  useEffect(() => {
-    const worker = new Worker(new URL("../numbl-worker.ts", import.meta.url), {
-      type: "module",
-    });
-    workerRef.current = worker;
-
-    worker.onmessage = e => {
-      const msg = e.data;
-      if (msg.type === "drawnow") {
-        if (msg.plotInstructions?.length) {
-          for (const instr of msg.plotInstructions as PlotInstruction[]) {
-            dispatchRef(instr);
-          }
-          setFigures({ ...figuresRef.current });
-        }
-      } else if (msg.type === "done") {
-        if (msg.plotInstructions?.length) {
-          for (const instr of msg.plotInstructions as PlotInstruction[]) {
-            dispatchRef(instr);
-          }
-        }
-        setFigures({ ...figuresRef.current });
+  const worker = useNumblWorker(
+    {
+      onPlotInstructions: instructions =>
+        setFigures(prev => instructions.reduce(figuresReducer, prev)),
+      onDone: () => {
         setStatus("done");
         worker.terminate();
-      } else if (msg.type === "error") {
+      },
+      onError: msg => {
         setError(msg.message);
         setStatus("error");
         worker.terminate();
-      }
-    };
+      },
+    },
+    { interactiveInput: false, uihtml: false }
+  );
 
-    worker.postMessage({
-      type: "run",
+  useEffect(() => {
+    worker.run({
       code: entry.code,
       options: {
         displayResults: false,
         maxIterations: 10000000,
-        optimization: 1,
+        optimization: "1",
       },
       workspaceFiles: [],
       mainFileName: `${entry.name}.m`,
     });
-
-    return () => {
-      worker.terminate();
-    };
-  }, [entry, dispatchRef]);
+  }, [entry, worker]);
 
   const handles = Object.keys(figures.figs)
     .map(Number)

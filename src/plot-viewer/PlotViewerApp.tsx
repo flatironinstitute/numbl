@@ -9,6 +9,10 @@ import { restoreNaNs } from "../graphics/restoreNaNs.js";
 import { downloadFigureHdf5 } from "../graphics/exportFigureHdf5.js";
 import { buildFigureViewerLink } from "../graphics/openInFigureViewer.js";
 import { uploadFigureForViewer } from "../graphics/figureUpload.js";
+import {
+  listenForUihtmlEvents,
+  postToUihtmlFrames,
+} from "../graphics/uihtmlRelay.js";
 
 export function PlotViewerApp() {
   const [figures, dispatch] = useReducer(figuresReducer, initialFiguresState);
@@ -71,15 +75,7 @@ export function PlotViewerApp() {
         const { compId, name, dataJson } = JSON.parse(
           (event as MessageEvent).data
         );
-        const frames = document.querySelectorAll<HTMLIFrameElement>(
-          `iframe[title="uihtml-${compId}"]`
-        );
-        frames.forEach(f =>
-          f.contentWindow?.postMessage(
-            { source: "numbl-host", compId, name, dataJson },
-            "*"
-          )
-        );
+        postToUihtmlFrames(compId, name, dataJson);
       } catch {
         // ignore malformed event
       }
@@ -91,24 +87,17 @@ export function PlotViewerApp() {
   // uihtml reverse channel: a uihtml iframe posts events to the window
   // (JS sendEventToMATLAB / Data setter). POST them to the CLI, which re-enters
   // the interpreter and fires HTMLEventReceivedFcn / DataChangedFcn.
-  useEffect(() => {
-    const onMessage = (e: MessageEvent) => {
-      const d = e.data;
-      if (!d || d.source !== "numbl-uihtml") return;
-      fetch("/uihtml-event", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          compId: d.compId,
-          kind: d.kind,
-          name: d.name,
-          data: d.data,
-        }),
-      }).catch(() => {});
-    };
-    window.addEventListener("message", onMessage);
-    return () => window.removeEventListener("message", onMessage);
-  }, []);
+  useEffect(
+    () =>
+      listenForUihtmlEvents(ev => {
+        fetch("/uihtml-event", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(ev),
+        }).catch(() => {});
+      }),
+    []
+  );
 
   const handles = Object.keys(figures.figs)
     .map(Number)
