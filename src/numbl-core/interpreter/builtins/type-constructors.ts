@@ -736,45 +736,39 @@ defineBuiltin({
   cases: [
     {
       match: argTypes => {
-        // cell(), cell(n), cell(m,n), cell([m,n])
+        // cell(), cell(n), cell(m,n,...), cell([m,n,...])
         if (argTypes.length === 0) return [{ kind: "unknown" }];
-        if (argTypes.length <= 2) {
-          for (const a of argTypes) {
-            if (
-              a.kind !== "number" &&
-              a.kind !== "boolean" &&
-              a.kind !== "tensor"
-            )
-              return null;
-          }
-          return [{ kind: "unknown" }];
+        for (const a of argTypes) {
+          if (
+            a.kind !== "number" &&
+            a.kind !== "boolean" &&
+            a.kind !== "tensor"
+          )
+            return null;
         }
-        return null;
+        return [{ kind: "unknown" }];
       },
       apply: args => {
-        const empty = () => RTV.tensor(allocFloat64Array(0), [0, 0]);
         if (args.length === 0) return RTV.cell([], [0, 0]);
+        let dims: number[];
         if (args.length === 1) {
           const arg = args[0];
-          // Vector arg → dimensions
           if (isRuntimeTensor(arg) && arg.data.length > 1) {
-            const dims = Array.from(arg.data).map(d => Math.round(d));
-            const total = dims.reduce((a, b) => a * b, 1);
-            const data: RuntimeValue[] = new Array(total);
-            for (let i = 0; i < total; i++) data[i] = empty();
-            return RTV.cell(data, dims);
+            dims = Array.from(arg.data).map(d => Math.round(d));
+          } else {
+            const n = Math.round(toNumber(arg));
+            dims = [n, n];
           }
-          const n = Math.round(toNumber(arg));
-          const data: RuntimeValue[] = new Array(n * n);
-          for (let i = 0; i < n * n; i++) data[i] = empty();
-          return RTV.cell(data, [n, n]);
+        } else {
+          dims = args.map(a => Math.round(toNumber(a)));
         }
-        // cell(m, n)
-        const r = Math.round(toNumber(args[0]));
-        const c = Math.round(toNumber(args[1]));
-        const data: RuntimeValue[] = new Array(r * c);
-        for (let i = 0; i < r * c; i++) data[i] = empty();
-        return RTV.cell(data, [r, c]);
+        dims = dims.map(d => Math.max(d, 0));
+        while (dims.length > 2 && dims[dims.length - 1] === 1) dims.pop();
+        const total = dims.reduce((a, b) => a * b, 1);
+        const data: RuntimeValue[] = new Array(total);
+        for (let i = 0; i < total; i++)
+          data[i] = RTV.tensor(allocFloat64Array(0), [0, 0]);
+        return RTV.cell(data, dims);
       },
     },
   ],

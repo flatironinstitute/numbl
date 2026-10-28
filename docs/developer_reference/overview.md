@@ -43,6 +43,7 @@ A single entry point (the `executeCode` function) accepts source, options, and a
 - [jit/cjit.md](jit/cjit.md) — C-JIT (`--opt 2`): the C backend and how it shares the JS-JIT compiler.
 - [runtime/values-and-tensors.md](runtime/values-and-tensors.md) — `RuntimeValue`, tensors, memory layout.
 - [runtime/refcount.md](runtime/refcount.md) — refcount-driven pool reclamation, slot ownership, transient scopes.
+- [runtime/indexing.md](runtime/indexing.md) — the storage-independent index planner and per-container gather/scatter.
 - [runtime/native-addon.md](runtime/native-addon.md) — LAPACK/FFTW bindings and JS fallbacks.
 - [builtins.md](builtins.md) — the `IBuiltin` registry, resolution, JIT emission.
 - [stdlib.md](stdlib.md) — `.m`-defined standard library and bundle generation.
