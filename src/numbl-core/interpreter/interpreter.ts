@@ -7,56 +7,56 @@
  * Function and class lookup goes through the workspace's `CodeIndex` (and
  * the `FunctionIndex` built from it).
  *
- * The Interpreter class is defined here with all fields.
- * Methods are split across:
- *   - interpreterExec.ts   (statement + expression evaluation)
- *   - interpreterFunctions.ts (function call, resolution, class methods)
+ * The Interpreter class holds the interpreter's state (the running call
+ * frame, the runtime, JIT bookkeeping) and its public entry points. The
+ * evaluation code lives in modules whose functions take the interpreter
+ * explicitly:
+ *   - execStatements.ts   statements, control flow, loops
+ *   - evalExpressions.ts  expressions, operators, literals, member access
+ *   - indexing.ts         indexing reads and assignment targets
+ *   - handles.ts          anonymous functions and function handles
+ *   - calls.ts            calling what a name resolves to
+ *   - callConvention.ts   binding, running and returning from a user function
+ *   - oop.ts              classes, constructors, enumerations
+ *   - argumentsBlock.ts   `arguments` block defaults and name-value structs
+ *   - specialContext.ts   the special builtins' context, eval of text
  */
 
-import type { AbstractSyntaxTree } from "../parser/types.js";
+import type { AbstractSyntaxTree, Stmt } from "../parser/types.js";
 import type { Runtime } from "../runtime/runtime.js";
 import type { RuntimeValue } from "../runtime/types.js";
 import type { CodeIndex } from "../workspace/codeIndex.js";
 import type { FunctionIndex } from "../workspace/functionIndex.js";
 import {
-  Scope,
   resolveName,
   resolveFunction,
   resolutionArgType,
   resolveClassMethod,
   functionBodyFor,
-  type NameResolution,
-  type ResolvedTarget,
-  type FunctionBody,
 } from "../resolution/index.js";
 
-import { Environment, type FunctionDef, type ControlSignal } from "./types.js";
-import type { Stmt, Expr, LValue } from "../parser/types.js";
-import type { ClassInfo } from "../workspace/classInfo.js";
+import { Environment, type ControlSignal } from "./types.js";
+import { CallFrame } from "./callFrame.js";
 import { Registry } from "../executors/registry.js";
+import { execStmt } from "./execStatements.js";
+import { callResolved, declaredNargout, interpretTarget } from "./calls.js";
+import { callBody } from "./callConvention.js";
 
 // ── Interpreter ──────────────────────────────────────────────────────────
 
 export class Interpreter {
-  /** @internal */ env: Environment;
   public ans: RuntimeValue | undefined;
 
-  /** @internal */ code: CodeIndex;
-  /** @internal */ rt: Runtime;
+  /** @internal */ readonly code: CodeIndex;
+  /** @internal */ readonly rt: Runtime;
 
-  /** @internal */ currentFile: string;
-  /** @internal */ currentClassName: string | undefined;
-  /** @internal */ currentMethodName: string | undefined;
+  /** @internal The running call frame: its environment, file, class and
+   *  method, caller and input names. Replaced while a function body runs
+   *  (see `CallFrame`). */
+  frame: CallFrame;
 
-  /** @internal The main script (workspace) environment — for evalin/assignin('workspace', ...) */
-  workspaceEnv: Environment | undefined;
-  /** @internal The caller's environment — for evalin/assignin('caller', ...) */
-  callerEnv: Environment | undefined;
-
-  /** @internal Call-site variable names for the next user-function call, set
-   *  by `evalFuncCall` and consumed by `callUserFunction` to support
-   *  `inputname`. One-shot: cleared as soon as it is consumed. */
-  pendingInputNames: string[] | undefined;
+  /** @internal The base workspace's frame (`evalin('base')`). */
+  readonly baseFrame: CallFrame;
 
   /** @internal Stack of [base, dimIndex, numIndices] for resolving `end` keyword in indexing. */
   endContextStack: Array<{
@@ -152,14 +152,23 @@ export class Interpreter {
   ) {
     this.rt = rt;
     this.code = code;
-    this.currentFile = code.mainFileName;
-    this.env = new Environment();
-    this.env.rt = rt;
+    const env = new Environment();
+    env.rt = rt;
     if (initialVariableValues) {
       for (const [name, value] of Object.entries(initialVariableValues)) {
-        this.env.set(name, value);
+        env.set(name, value);
       }
     }
+    this.baseFrame = new CallFrame(
+      code,
+      code.mainFileName,
+      undefined,
+      undefined,
+      env,
+      undefined,
+      undefined
+    );
+    this.frame = this.baseFrame;
     // The AST interpreter is the dispatcher's hardcoded last-resort
     // fallback (see Registry.dispatch); no plugin registration needed
     // for it. Specialized plugins are registered by executeCode based
@@ -180,53 +189,40 @@ export class Interpreter {
     this.registry.clearCache();
   }
 
-  private lastScope: Scope | undefined;
-
-  /** @internal The scope names resolve from: the running file, class and
-   *  method, and the current environment. */
-  currentScope(): Scope {
-    const s = this.lastScope;
-    if (
-      s !== undefined &&
-      s.env === this.env &&
-      s.file === this.currentFile &&
-      s.className === this.currentClassName &&
-      s.methodName === this.currentMethodName &&
-      s.code === this.code
-    )
-      return s;
-    return (this.lastScope = new Scope(
-      this.code,
-      this.currentFile,
-      this.currentClassName,
-      this.currentMethodName,
-      this.env
-    ));
+  /** @internal Run `fn` with `frame` as the running frame. */
+  inFrame<T>(frame: CallFrame, fn: () => T): T {
+    const saved = this.frame;
+    this.frame = frame;
+    try {
+      return fn();
+    } finally {
+      this.frame = saved;
+    }
   }
 
   /** Wire up runtime callbacks so dispatch() routes through the interpreter. */
   installRuntimeCallbacks(): void {
     // A call by name from the runtime (feval, a handle without a closure,
-    // operator overloads) resolves from the running code's scope, without
-    // nested functions (as MATLAB's string-named calls).
+    // operator overloads) resolves from the running frame, without nested
+    // functions (as MATLAB's string-named calls).
     this.rt.resolveNamedCall = (name, args, targetClassName) => {
       if (targetClassName) {
         const target = resolveFunction(
           name,
           args.map(resolutionArgType),
-          { file: this.currentFile, targetClassName },
+          { file: this.frame.file, targetClassName },
           this.functionIndex
         );
         if (!target) return null;
-        return (nargout, ...a) => this.interpretTarget(target, a, nargout);
+        return (nargout, ...a) => interpretTarget(this, target, a, nargout);
       }
-      const r = resolveName(name, this.currentScope(), {
+      const r = resolveName(name, this.frame, {
         args,
         variables: false,
         nested: false,
       });
       if (r.kind === "builtin" || r.kind === "notFound") return null;
-      return (nargout, ...a) => this.callResolved(r, a, nargout);
+      return (nargout, ...a) => callResolved(this, r, a, nargout);
     };
 
     this.rt.resolveClassMethod = (className: string, methodName: string) => {
@@ -238,20 +234,17 @@ export class Interpreter {
       if (!found) return null;
       const { target, isStatic } = found;
       return (nargout: number, ...args: unknown[]) =>
-        this.interpretTarget(target, isStatic ? args.slice(1) : args, nargout);
+        interpretTarget(this, target, isStatic ? args.slice(1) : args, nargout);
     };
 
     this.rt.getClassAncestors = (className: string) =>
       this.code.classes.ancestors(className);
 
-    this.rt.declaredNargout = (name: string) => this.declaredNargout(name);
+    this.rt.declaredNargout = (name: string) => declaredNargout(this, name);
   }
 
   /** Run a complete AST (main script). */
   run(ast: AbstractSyntaxTree): void {
-    // Remember the workspace (main script) environment
-    this.workspaceEnv = this.env;
-
     // Execute non-function, non-classdef statements. The main file's local
     // functions were registered with the code index by executeCode.
     const nonFuncStmts = ast.body.filter(
@@ -265,7 +258,7 @@ export class Interpreter {
         name: firstFn,
         source: { from: "main" },
       })!;
-      this.callBody(body, [], 0);
+      callBody(this, body, [], 0);
     } else {
       // First, try to handle the entire script body as a unit (top-level
       // JIT). If a whole-scope executor takes it, the per-stmt loop is
@@ -280,156 +273,12 @@ export class Interpreter {
 
   /** Get variable values for ExecResult. */
   getVariableValues(): Record<string, RuntimeValue> {
-    return this.env.toRecord();
+    return this.frame.env.toRecord();
   }
 
-  // Methods added by interpreterExec.ts
-  declare execStmt: (stmt: Stmt) => ControlSignal | null;
-  declare execStmts: (stmts: Stmt[]) => ControlSignal | null;
-  declare execBlockStmts: (stmts: Stmt[]) => ControlSignal | null;
-  declare evalExpr: (expr: Expr) => unknown;
-  declare evalExprNargout: (expr: Expr, nargout: number) => unknown;
-  declare evalBinary: (expr: Extract<Expr, { type: "Binary" }>) => unknown;
-  declare evalCondition: (expr: Expr) => unknown;
-  declare evalUnary: (expr: Extract<Expr, { type: "Unary" }>) => unknown;
-  declare evalRange: (expr: Extract<Expr, { type: "Range" }>) => unknown;
-  declare evalFuncCall: (
-    expr: Extract<Expr, { type: "FuncCall" }>,
-    nargout: number
-  ) => unknown;
-  declare evalIndex: (expr: Extract<Expr, { type: "Index" }>) => unknown;
-  declare evalIndexCell: (
-    expr: Extract<Expr, { type: "IndexCell" }>
-  ) => unknown;
-  declare evalIndicesWithEnd: (base: unknown, indexExprs: Expr[]) => unknown[];
-  declare evalArgs: (argExprs: Expr[]) => unknown[];
-  declare evalMember: (
-    expr: Extract<Expr, { type: "Member" }>,
-    nargout: number
-  ) => unknown;
-  declare tryExtractDottedName: (expr: Expr) => string | null;
-  declare evalAnonFunc: (
-    expr: Extract<Expr, { type: "AnonFunc" }>
-  ) => RuntimeValue;
-  declare makeFuncHandle: (name: string) => RuntimeValue;
-  declare evalTensorLiteral: (
-    expr: Extract<Expr, { type: "Tensor" }>
-  ) => unknown;
-  declare evalCellLiteral: (expr: Extract<Expr, { type: "Cell" }>) => unknown;
-  declare assignLValue: (lv: LValue, value: RuntimeValue) => void;
-  declare writeLValueBase: (base: Expr, value: RuntimeValue) => void;
-  declare evalLValueBase: (base: Expr, defaultVal: RuntimeValue) => unknown;
-  declare switchMatch: (switchVal: unknown, caseVal: unknown) => boolean;
-  declare isOutputExpr: (expr: Expr) => boolean;
-
-  // Methods added by interpreterFunctions.ts
-  declare callFunction: (
-    name: string,
-    args: unknown[],
-    nargout: number
-  ) => unknown;
-  declare callByName: (
-    name: string,
-    args: unknown[],
-    nargout: number
-  ) => unknown;
-  declare callResolved: (
-    r: NameResolution,
-    args: unknown[],
-    nargout: number
-  ) => unknown;
-  declare callBody: (
-    body: FunctionBody,
-    args: unknown[],
-    nargout: number,
-    narginOverride?: number
-  ) => unknown;
-  declare declaredNargin: (name: string) => number | undefined;
-  declare declaredNargout: (name: string) => number | undefined;
-  declare interpretTarget: (
-    target: ResolvedTarget,
-    args: unknown[],
-    nargout: number
-  ) => unknown;
-  declare interpretWorkspaceFunction: (
-    target: Extract<ResolvedTarget, { kind: "workspaceFunction" }>,
-    args: unknown[],
-    nargout: number
-  ) => unknown;
-  declare interpretJsUserFunction: (
-    target: Extract<ResolvedTarget, { kind: "jsUserFunction" }>,
-    args: unknown[],
-    nargout: number
-  ) => unknown;
-  declare interpretClassMethod: (
-    target: Extract<ResolvedTarget, { kind: "classMethod" }>,
-    args: unknown[],
-    nargout: number
-  ) => unknown;
-  declare instantiateClass: (
-    className: string,
-    args: unknown[],
-    nargout: number
-  ) => unknown;
-  declare interpretConstructor: (
-    classInfo: ClassInfo,
-    args: unknown[],
-    nargout: number
-  ) => unknown;
-  declare interpretEnumMember: (
-    className: string,
-    memberName: string
-  ) => RuntimeValue | null;
-  declare convertToEnum: (
-    className: string,
-    classInfo: ClassInfo,
-    args: unknown[]
-  ) => RuntimeValue;
-  declare callUserFunction: (
-    fn: FunctionDef,
-    args: unknown[],
-    nargout: number,
-    narginOverride?: number
-  ) => unknown;
-  declare callNestedFunction: (
-    fn: FunctionDef,
-    parentEnv: Environment,
-    args: unknown[],
-    nargout: number
-  ) => unknown;
-  declare withFileContext: <T>(
-    file: string,
-    className: string | undefined,
-    methodName: string | undefined,
-    fn: () => T
-  ) => T;
-  declare collectClassProperties: (classInfo: ClassInfo) => {
-    propertyNames: string[];
-    propertyDefaults: Map<string, Expr>;
-  };
-  declare isHandleClass: (classInfo: ClassInfo) => boolean;
-  declare evalPropertyDefault: (
-    className: string,
-    propName: string,
-    defaultExpr: Expr
-  ) => RuntimeValue;
-  declare evalInLocalScope: (
-    codeArg: unknown,
-    fileName?: string,
-    nargout?: number
-  ) => unknown;
-  declare processArgumentsBlocks: (fn: FunctionDef, args: unknown[]) => void;
-}
-
-// ── Prototype augmentation ───────────────────────────────────────────────
-// Import method implementations from split files and assign to prototype.
-
-import * as Exec from "./interpreterExec.js";
-import * as Funcs from "./interpreterFunctions.js";
-
-const p = Interpreter.prototype as unknown as Record<string, unknown>;
-for (const mod of [Exec, Funcs]) {
-  for (const [key, val] of Object.entries(mod)) {
-    if (typeof val === "function") p[key] = val;
+  /** Execute one statement on the interpreter (the executor registry's
+   *  fallback). */
+  execStmt(stmt: Stmt): ControlSignal | null {
+    return execStmt(this, stmt);
   }
 }

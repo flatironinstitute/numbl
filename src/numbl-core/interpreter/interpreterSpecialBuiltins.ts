@@ -1,6 +1,7 @@
 /**
- * Interpreter special builtins: functions that need access to interpreter
- * context (env, callerEnv, etc.) and run before normal function resolution.
+ * Interpreter special builtins: functions that need access to the running
+ * call frame (its variables, caller, input names) and run before normal
+ * function resolution.
  */
 
 import { DEFAULT_TEXT_ENCODING } from "../helpers/textCodec.js";
@@ -29,21 +30,31 @@ import {
 import { toNumber, toString } from "../runtime/convert.js";
 import { getConstant } from "../helpers/constants.js";
 import type { Environment } from "./types.js";
+import type { CallFrame } from "./callFrame.js";
 import type { Runtime } from "../runtime/runtime.js";
 import type { NameResolution } from "../resolution/resolveName.js";
 
 // ── Types ────────────────────────────────────────────────────────────────
 
 export interface InterpreterContext {
-  env: Environment;
-  setEnv: (env: Environment) => void;
-  callerEnv: Environment | undefined;
-  workspaceEnv: Environment | undefined;
+  /** The running frame's variables. */
+  readonly env: Environment;
+  /** Call-site names of the running function's arguments (`inputname`). */
+  readonly inputNames: readonly string[] | undefined;
+  /** The frame the running function was called from; undefined at the top
+   *  level. */
+  readonly callerFrame: CallFrame | undefined;
+  /** The base workspace's frame. */
+  readonly baseFrame: CallFrame;
+  /** Run MATLAB text in the running frame (`fileName` sets the file it runs
+   *  from). */
   evalInLocalScope: (
     codeArg: unknown,
     fileName?: string,
     nargout?: number
   ) => unknown;
+  /** Run MATLAB text in another frame's workspace (`evalin`). */
+  evalInFrame: (frame: CallFrame, codeArg: unknown, nargout: number) => unknown;
   /** Call a function named by a string, from the caller's scope (no nested
    *  functions, as in MATLAB). */
   callByName: (name: string, args: unknown[], nargout: number) => unknown;
@@ -55,9 +66,9 @@ export interface InterpreterContext {
   /** Declared input count of the function `name` resolves to (negative
    *  with varargin), or undefined. */
   declaredNargin: (name: string) => number | undefined;
-  rt: Runtime;
+  readonly rt: Runtime;
   /** Optimization mode: "0" = no JIT, "1" = JS-JIT, "2" = C-JIT. */
-  optimization: import("../executors/plugins.js").OptLevel;
+  readonly optimization: import("../executors/plugins.js").OptLevel;
   /** Resolve a workspace function or class name to its source file,
    *  or undefined if no workspace file provides that name.
    *  `kind` distinguishes a regular .m function from a .numbl.js
@@ -122,18 +133,17 @@ register("eval", (ctx, args, nargout) => {
   throw new RuntimeError("eval requires 1 or 2 arguments");
 });
 
-/** The environment named by an evalin/assignin scope argument. `'workspace'`
- *  is accepted as a synonym for `'base'`. At the top level the caller is the
+/** The frame named by an evalin/assignin scope argument. `'workspace'` is
+ *  accepted as a synonym for `'base'`. At the top level the caller is the
  *  base workspace. */
-function scopeEnv(
+function scopeFrame(
   ctx: InterpreterContext,
   fn: string,
   arg: unknown
-): Environment {
+): CallFrame {
   const scope = toString(ensureRuntimeValue(arg));
-  if (scope === "caller") return ctx.callerEnv ?? ctx.workspaceEnv ?? ctx.env;
-  if (scope === "base" || scope === "workspace")
-    return ctx.workspaceEnv ?? ctx.env;
+  if (scope === "caller") return ctx.callerFrame ?? ctx.baseFrame;
+  if (scope === "base" || scope === "workspace") return ctx.baseFrame;
   throw new RuntimeError(`${fn}: first argument must be 'base' or 'caller'`);
 }
 
@@ -141,25 +151,19 @@ register("evalin", (ctx, args, nargout) => {
   if (args.length < 2)
     throw new RuntimeError("evalin requires at least 2 arguments");
   const scope = toString(ensureRuntimeValue(args[0]));
-  const targetEnv = scopeEnv(ctx, "evalin", args[0]);
+  const target = scopeFrame(ctx, "evalin", args[0]);
   const code = toString(ensureRuntimeValue(args[1]));
   // Simple variable name — just look it up
   if (/^[a-zA-Z_]\w*$/.test(code)) {
-    const val = targetEnv.get(code);
+    const val = target.env.get(code);
     if (val !== undefined) return val;
     if (args.length >= 3) return ensureRuntimeValue(args[2]);
     throw new RuntimeError(
       `Variable '${code}' does not exist in ${scope} scope`
     );
   }
-  // Otherwise evaluate as code in target scope
-  const savedEnv = ctx.env;
-  ctx.setEnv(targetEnv);
-  try {
-    return ctx.evalInLocalScope(args[1], undefined, nargout);
-  } finally {
-    ctx.setEnv(savedEnv);
-  }
+  // Otherwise evaluate as code in the target frame
+  return ctx.evalInFrame(target, args[1], nargout);
 });
 
 register("str2num", (ctx, args) => {
@@ -204,7 +208,7 @@ register("assignin", (ctx, args) => {
   if (args.length < 3) throw new RuntimeError("assignin requires 3 arguments");
   const varName = toString(ensureRuntimeValue(args[1]));
   const val = ensureRuntimeValue(args[2]);
-  scopeEnv(ctx, "assignin", args[0]).set(varName, val);
+  scopeFrame(ctx, "assignin", args[0]).env.set(varName, val);
   return undefined;
 });
 
@@ -623,7 +627,7 @@ register("inputname", (ctx, args) => {
       "Argument number exceeds number of function input arguments."
     );
   }
-  const names = ctx.env.inputArgNames;
+  const names = ctx.inputNames;
   const name = names && k <= names.length ? names[k - 1] : "";
   return RTV.char(name);
 });

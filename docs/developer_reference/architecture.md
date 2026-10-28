@@ -13,7 +13,7 @@ Numbl is organized as a platform-agnostic language core surrounded by thin platf
 1. **Lex** — source text to tokens.
 2. **Parse** — tokens to an AST.
 3. **Index** — the `Workspace` collects the visible files and registers them with its `CodeIndex`, which caches parsed ASTs, maps files to function and class names (search paths, `+pkg`, `@Class`, `private/`), holds the `ClassTable`, and builds the `FunctionIndex` that name resolution (`src/numbl-core/resolution/`) uses.
-4. **Interpret** — the `Interpreter` walks the AST against a `Runtime` and an `Environment` stack. Control flow is signalled by typed signal objects (break, continue, return) returned up the statement-execution stack — not thrown.
+4. **Interpret** — the `Interpreter` walks the AST against a `Runtime` and a chain of call frames (each holding an `Environment`). Control flow is signalled by typed signal objects (break, continue, return) returned up the statement-execution stack — not thrown.
 5. **JIT (optional)** — hot user functions, hot loops, and feasible top-level scripts are specialized. The JIT (in-tree, self-contained under `src/numbl-core/jit`) lowers AST to a typed IR, then emits JS (`--opt 1`, the default) or C compiled via `cc` + koffi (`--opt 2`, Node only). Both backends register executors that compete via the registry. Constructs the JIT can't lower are declined statically and run on the interpreter.
 6. **Runtime values** — results are `RuntimeValue`s (numbers, tensors, strings, structs, cells, class instances, etc.). Output, plot instructions, and workspace changes flow back through callbacks on `ExecOptions`.
 

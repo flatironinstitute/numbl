@@ -30,7 +30,8 @@ export function lowerCellLit(
   e: Extract<Expr, { type: "Cell" }>
 ): IRExpr {
   // Empty `{}` literal → 0×0 tuple cell with no slots. Matches numbl
-  // (`interpreterExec.ts:1070`: returns `RTV.cell([], [0, 0])`).
+  // (`evalCellLiteral` in `interpreter/evalExpressions.ts` returns
+  // `RTV.cell([], [0, 0])`).
   if (e.rows.length === 0) {
     const shape = [0, 0];
     const lit: CellLit = {

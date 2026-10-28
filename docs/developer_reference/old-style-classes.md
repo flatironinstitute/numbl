@@ -13,7 +13,7 @@ handles construction, dispatch, and indexing.
 Implemented across: the 2-arg `class(struct,'name')` constructor + `isobject`
 (`interpreter/builtins/introspection.ts`); old-style `@folder` registration
 (`workspace/classInfo.ts` `makeOldStyleClassInfo`, `workspace/codeIndex.ts`);
-the construction path (`interpreter/interpreterFunctions.ts` `instantiateClass`);
+the construction path (`interpreter/oop.ts` `instantiateClass`);
 object-array growth (`runtime/runtimeIndexing.ts` `indexStore`,
 `runtime/constructors.ts` `RTV.classInstanceArray`); JIT skip
 (`jit/workspace/workspace.ts`). Method dispatch, `subsref`/`subsasgn` overload
@@ -298,7 +298,7 @@ Concrete touch points for the implementer (paths relative to repo root):
   for the function-call form and **not** treating `obj.method(...)` as a call.
 - **`subsref`/`subsasgn` overload dispatch + `builtin` defaults** — the
   member-access and indexed-assignment evaluation in the interpreter
-  (`interpreterExec.ts` / `struct-access.ts` / `runtimeIndexing.ts`). Add: if the
+  (`interpreter/indexing.ts` / `struct-access.ts` / `runtimeIndexing.ts`). Add: if the
   base is an old-style `RuntimeClassInstance(Array)` and the class defines
   `subsref`/`subsasgn`, build the `S` struct array and dispatch; otherwise apply
   the default (field access only inside methods; `()` on arrays). Provide
@@ -306,7 +306,7 @@ Concrete touch points for the implementer (paths relative to repo root):
 - **Object-array growth from undefined LHS** — indexed-assignment lowering must
   seed an empty object array of the RHS class (§7).
 - **Recursion guard** — track "currently executing inside a method of class C"
-  (numbl already threads `methodScope`/`className` through `withFileContext`) so
+  (numbl already tracks the class and method in the interpreter's `CallFrame`) so
   default `.field` access inside methods bypasses the overload.
 
 ## 11. Suggested implementation phases

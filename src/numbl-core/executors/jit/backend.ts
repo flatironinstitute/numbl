@@ -169,12 +169,12 @@ export function runInEnv<A>(
   interp: Interpreter,
   where: string
 ): RunResult {
-  const values = inputs.map(n => interp.env.get(n));
+  const values = inputs.map(n => interp.frame.env.get(n));
   const outs = invokeUnit(backend, art, values, scope, interp, where);
   if (!Array.isArray(outs)) return outs;
   for (let i = 0; i < outputs.length; i++) {
     const v = outs[i];
-    if (v !== undefined) interp.env.set(outputs[i], v);
+    if (v !== undefined) interp.frame.env.set(outputs[i], v);
   }
   return { result: undefined };
 }

@@ -108,7 +108,7 @@ export function gatherTypedEnvInputs(
   const inputTypes: JitType[] = [];
   for (const name of candidates) {
     if (KNOWN_CONSTANTS.has(name)) continue;
-    const val = interp.env.get(name);
+    const val = interp.frame.env.get(name);
     if (val === undefined) continue;
     const t = inferJitType(val);
     if (t.kind === "unknown") return null;
@@ -166,14 +166,14 @@ export function classifyTopLevel(
   const typeKey = inputs
     .map((n, i) => `${n}:${jitTypeKey(inputTypes[i])}`)
     .join(",");
-  const cacheKey = `$top:${interp.currentFile}|${typeKey}`;
+  const cacheKey = `$top:${interp.frame.file}|${typeKey}`;
 
   return {
     stmts,
     inputs,
     inputTypes,
     outputs,
-    currentFile: interp.currentFile,
+    currentFile: interp.frame.file,
     hasReturn: analysis.hasReturn,
     assertsCJit: containsAssertJitC(stmts),
     cacheKey,
@@ -255,8 +255,8 @@ export function classifyLoop(
       !rawOutputs.has(name)
     ) {
       const expr = inlinableHandleExpr(
-        interp.env.get(name),
-        interp.currentFile,
+        interp.frame.env.get(name),
+        interp.frame.file,
         relocScopeNames
       );
       if (expr) {
@@ -302,14 +302,14 @@ export function classifyLoop(
   // Const-handle identities salt the key: a different handle bound to the
   // same variable (or a switch from inlinable to not) must recompile.
   const handleKey = constHandles.map(h => `${h.name}=${h.identity}`).join(",");
-  const cacheKey = `$loop:${interp.currentFile}@${lineLabel}|${typeKey}|out=${outputKey}|h=${handleKey}`;
+  const cacheKey = `$loop:${interp.frame.file}@${lineLabel}|${typeKey}|out=${outputKey}|h=${handleKey}`;
 
   return {
     stmt,
     inputs,
     inputTypes,
     outputs,
-    currentFile: interp.currentFile,
+    currentFile: interp.frame.file,
     hasReturn: analysis.hasReturn,
     assertsCJit: containsAssertJitC(stmt.body),
     constHandles,

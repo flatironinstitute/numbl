@@ -4,11 +4,38 @@ The interpreter is an AST walker. Given a parsed program and a `CodeIndex`, it e
 
 ## Key objects
 
-- **Interpreter** — holds the `Runtime` and the run's `CodeIndex`. Walks `Stmt` and `Expr` nodes.
-- **Environment** — one per activation (script, function call, class method). Resolves variable reads and writes. Routes `global` and `persistent` declarations through shared stores on the runtime so their values outlive the call.
-- **Runtime** — shared state across a single execution: global/persistent stores, output router, plot instruction accumulator, JIT caches. (RNG state is held in module-level variables in [`helpers/prng.ts`](../../../src/numbl-core/helpers/prng.ts), not on the `Runtime`.)
-- **CodeIndex** — owned by the `Workspace` (the visible file set, kept in sync with addpath/rmpath/cd). Caches parsed ASTs, maps workspace files to function names (`+pkg` namespaces, `private/` scopes, `.numbl.js` functions), holds the main file's local functions, and builds the `FunctionIndex` that `resolveFunction` consults. The interpreter and the JIT share the same instance.
-- **ClassTable** — part of the `CodeIndex`: `ClassInfo` for workspace and main-file classes, plus inheritance queries (lineage, ancestors, defining class, handle-ness).
+- **Interpreter** (`interpreter.ts`): the interpreter's state (the running call frame, the `Runtime`, the run's `CodeIndex`, the executor registry, JIT bookkeeping such as `loopDepth`) and its entry points (`run`, `execStmt`, `installRuntimeCallbacks`).
+- **CallFrame** (`callFrame.ts`): one activation, that is the base workspace, a function call or an anonymous-function call. It holds the activation's `Environment`, the file, class and method whose code runs, the frame it was called from (`caller`), and the call-site names of its arguments (`inputNames`, for `inputname`). A frame is the `Scope` names resolve from.
+- **Environment**: the variables of an activation. Resolves variable reads and writes, and routes `global` and `persistent` declarations through shared stores on the runtime so their values outlive the call.
+- **Runtime**: shared state across a single execution: global/persistent stores, output router, plot instruction accumulator, JIT caches. (RNG state is held in module-level variables in [`helpers/prng.ts`](../../../src/numbl-core/helpers/prng.ts), not on the `Runtime`.)
+- **CodeIndex**: owned by the `Workspace` (the visible file set, kept in sync with addpath/rmpath/cd). Caches parsed ASTs, maps workspace files to function names (`+pkg` namespaces, `private/` scopes, `.numbl.js` functions), holds the main file's local functions, and builds the `FunctionIndex` that `resolveFunction` consults. The interpreter and the JIT share the same instance.
+- **ClassTable**: part of the `CodeIndex`: `ClassInfo` for workspace and main-file classes, plus inheritance queries (lineage, ancestors, defining class, handle-ness).
+
+## Code layout
+
+The `Interpreter` class holds state only. The evaluation code is in modules of plain functions that take the interpreter as their first argument, under `src/numbl-core/interpreter/`:
+
+| File                 | Contents                                                                                   |
+| -------------------- | ------------------------------------------------------------------------------------------ |
+| `execStatements.ts`  | statements, control flow, `for`/`while` loops, `%!numbl:assert_jit`                        |
+| `evalExpressions.ts` | expressions, operators, call expressions, member access, tensor and cell literals          |
+| `indexing.ts`        | indexing reads, `end`, assignment targets (`a(i).f{j} = v`), the same-class subsref bypass |
+| `handles.ts`         | anonymous functions and `@name` handles                                                    |
+| `calls.ts`           | calling what a name resolves to (user functions, builtins, `.numbl.js`, scripts)           |
+| `callConvention.ts`  | binding inputs, running a body in a new frame, collecting outputs; nested functions        |
+| `oop.ts`             | instantiation, constructors, superclass calls, class methods, enumerations, introspection  |
+| `argumentsBlock.ts`  | `arguments` block defaults and name-value struct parameters                                |
+| `specialContext.ts`  | the context the special builtins see (`interpreterSpecialBuiltins.ts`), eval of text       |
+
+## Call frames
+
+`interp.frame` is the running frame. `callBody` (and `callNestedFunction`) build a new frame for a call, and `runFunctionBody` makes it the running frame for the body and restores the caller's on exit. An anonymous function call likewise runs in a frame of its own (in `handles.ts`), whose environment holds the parameters on top of the captured snapshot and whose caller is the frame that invoked it.
+
+Code that belongs to the running activation but comes from another file runs in a frame from `frame.at(site)`, which shares the environment, caller and input names and only changes the file, class and method: a script called by name, `run(file)`, a `.numbl.js` function, and a `@name` handle (which runs at the site where it was created). `evalin` runs text in `frame.inWorkspaceOf(target)`: the target's variables and input names, with the current site and caller, so that, as in MATLAB, a nested `evalin('caller')` reaches the same caller.
+
+A function handle keeps a detached frame (`frame.detach()`: the site and environment, without the caller chain or input names), not the running frame.
+
+`inputname` reads the frame's `inputNames`. A call expression `f(x, y)` sets the calling frame's `callSiteNames` for the duration of the call, and the callee's frame takes them as its `inputNames`. A function that a builtin calls back during that call (`cellfun(h, c)`) sees the builtin call's names, as in MATLAB.
 
 ## Control flow
 
@@ -16,9 +43,9 @@ Control-flow transfers (break, continue, return) are signalled by typed signal o
 
 ## Name resolution and calls
 
-A call expression or bare name is resolved by `resolveName` (see [function-resolution.md](function-resolution.md)) from the interpreter's current `Scope`: the running file, class and method, and the current `Environment`. The result says what the name is (variable, constant, nested, local, private or workspace function, class method or constructor, package function, builtin, ...), and `callResolved` runs it. A user function's `FunctionDef` comes from `functionBodyFor`, which also gives the file and class context to run it in. A workspace or stdlib `.m` shadows a builtin of the same name.
+A call expression or bare name is resolved by `resolveName` (see [function-resolution.md](function-resolution.md)) from the running frame: its file, class and method, and its `Environment`. The result says what the name is (variable, constant, nested, local, private or workspace function, class method or constructor, package function, builtin, ...), and `callResolved` runs it. A user function's `FunctionDef` comes from `functionBodyFor`, which also gives the file and class context to run it in. A workspace or stdlib `.m` shadows a builtin of the same name.
 
-Builtin calls go through the builtin's `resolve(argTypes, nargout)` to produce a specialized `apply` function, which the interpreter invokes. See [builtins.md](../builtins.md).
+Builtin calls go through `invokeBuiltin`, which checks the builtin's arity and runs its `apply`. See [builtins.md](../builtins.md). Special builtins that need the caller's frame (`eval`, `evalin`, `exist`, `nargin`, `inputname`, ...) are in `interpreterSpecialBuiltins.ts` and run first.
 
 ## JIT integration
 
@@ -28,7 +55,7 @@ The interpreter decides when to hand control to the JIT:
 - **`for` / `while` loops** are candidates when iteration counts look worthwhile.
 - **Top-level scripts** are compiled whole when feasible.
 
-If the JIT succeeds, the specialized function or loop runs in place of the interpreted version. A type mismatch at runtime throws a bail signal, the interpreter resumes, and the JIT cache is invalidated.
+If the JIT succeeds, the specialized function or loop runs in place of the interpreted version. A type mismatch at runtime throws a bail signal, the interpreter resumes, and the JIT cache is invalidated. A call the JIT runs does not create a call frame.
 
 ## What the interpreter does not do
 
