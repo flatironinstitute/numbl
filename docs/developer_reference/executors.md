@@ -125,7 +125,7 @@ The IDE's Stop sets word 0 of a `SharedArrayBuffer` (`ExecOptions.cancelSAB`, vi
 
 - **Where.** Every loop iteration, and the entry of every function that calls a spec (so recursion polls as well). A loop whose iterations do constant work (scalar statements only, no nested loop or user call; `jit/codegen/cancelPoll.ts`) is strip-mined instead: an outer loop polls around chunks of 1024 iterations that do not, since even one extra test per iteration costs 10% or more in a one-statement loop. The work between polls is thus bounded, except for a single long builtin call.
 - **JS.** The module's `$cancel` (`$h.cancel`: the runtime's flag, or a private zero word) is read through a function-local alias with a plain typed-array load; V8 does not eliminate such loads across iterations, so the other thread's store is seen. A loop tests the flag in its condition and raises after it exits, because a raise call inside the loop body, even one never taken, slows a tight V8 loop severalfold.
-- **C.** `JIT_POLL_CANCEL()`: a relaxed atomic load through `jit__cancel` and a never-taken branch to `jit_raise_cancel`, which raises through the raise channel, so the guard frees the call's allocations. The host installs the flag with the `.so`'s `jit_set_cancel` before a call when it changed; koffi passes a pointer to the `SharedArrayBuffer`'s backing store, which does not move.
+- **C.** `JIT_POLL_CANCEL()` raises a cancel through the raise channel, so the guard frees the call's allocations; see [cjit.md](jit/cjit.md#runtime-errors-the-raise-channel).
 
 On scalar loops of one to three statements the cost is within the run-to-run noise (about 5%) at `--opt 1` and `--opt 2`. The exception is a `while` loop whose body is a single scalar update (`while k < n, k = k + 1; end`, about one cycle per iteration), which runs about 40% slower at `--opt 1`: the chunk counter that strip-mining adds is a large share of such an iteration. Only a host with a cancel buffer can cancel: the IDE worker and embedders that pass `cancelSAB`. The CLI has none; Ctrl-C ends the process, compiled code included.
 
@@ -165,6 +165,7 @@ executors/
   plugins.ts        registerExecutorsForOpt (the --opt → executors switch)
   jit/
     backend.ts           JitBackend interface + shared shape helpers
+    raise.ts             JitRaise + handleRaise (raise channel → bail / error / RERUN / cancel)
     topLevelExecutor.ts  makeTopLevelExecutor(backend)
     loopExecutor.ts      makeLoopExecutor(backend)
     callExecutor.ts      makeCallExecutor(backend)

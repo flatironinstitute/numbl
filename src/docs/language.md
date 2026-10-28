@@ -27,7 +27,7 @@ numbl implements a substantial subset of the MATLAB language.
 | class instances | Supported (value and handle classes)     |
 | dictionary      | Supported (MATLAB R2022b+ feature)       |
 
-Integer types (`int8`, `uint16`, etc.) and single-precision are not supported.
+Integer types (`int8`, `uint16`, etc.) and single precision are not supported as distinct types; see [Differences from MATLAB](/docs/differences).
 
 ## Control Flow
 
@@ -120,7 +120,7 @@ classdef Point
 end
 ```
 
-Inheritance, abstract classes, enumerations, and both value and handle classes are supported.
+Inheritance, abstract classes, enumerations, both value and handle classes, events and listeners on handle classes, property validation and `arguments` blocks are supported. Old-style `@ClassName` folder classes also work.
 
 ## Matrix and Array Syntax
 
@@ -161,13 +161,4 @@ end
 
 ## Not Supported
 
-Notable MATLAB features not yet implemented:
-
-- Single-precision and integer numeric types
-- Parallel computing (`parfor`, `spmd`)
-- GPU arrays
-- MEX interface
-- Simulink and toolboxes
-- Java / .NET integration
-- App Designer / GUI
-- Metaclasses and advanced class introspection
+See [Differences from MATLAB](/docs/differences) for unsupported features and known behavioral differences.

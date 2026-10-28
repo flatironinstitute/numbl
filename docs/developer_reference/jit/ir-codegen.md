@@ -1,18 +1,18 @@
 # JIT IR and Codegen
 
-The JIT compiler is the in-tree subsystem under `src/numbl-core/jit`. It lowers the parser AST to a typed intermediate representation, then emits target code — JavaScript (`--opt 1`) or C (`--opt 2`) — from the same IR.
+The JIT compiler is the in-tree subsystem under `src/numbl-core/jit`. It lowers the parser AST to a typed intermediate representation, then emits JavaScript (`--opt 1`) or C (`--opt 2`) from the same IR.
 
 ## IR
 
-`jit/lowering/ir.ts` defines the IR: discriminated-union expression and statement nodes, each carrying its resolved `Type` (`jit/lowering/types.ts`). Expression kinds include numeric / imaginary / string literals, variables, binary/unary ops, calls (user-function specialization, builtin, runtime helper), tensor build, index load / slice, member load, and cell / struct / handle nodes. Statement kinds include assign, indexed / sliced / member / cell stores, `if` / `while` / `for`, multi-assign, and control flow. Types are fixed at lowering time — codegen never re-decides what an operation means.
+`jit/lowering/ir.ts` defines the IR: discriminated-union expression and statement nodes, each carrying its resolved `Type` (`jit/lowering/types.ts`). Expression kinds include numeric / imaginary / string literals, variables, binary/unary ops, calls (user-function specialization, builtin, runtime helper), tensor build, index load / slice, member load, and cell / struct / handle nodes. Statement kinds include assign, indexed / sliced / member / cell stores, `if` / `while` / `for`, multi-assign, and control flow. Types are fixed at lowering time: codegen never re-decides what an operation means.
 
 ## Lowering
 
-`jit/lowering/lower.ts` (the `Lowerer`) walks the AST top-down, tracking variable types per scope and resolving callees through the workspace (`jit/workspace/workspace.ts`, which delegates to numbl's `resolveFunction`). `specialize.ts` produces one `IRFunc` per `(function, arg-type signature, nargout)` and caches it in `Lowerer.specializations`, so repeated calls with the same signature reuse the lowering. A construct the IR can't represent throws `UnsupportedConstruct` / `TypeError` (`jit/lowering/errors.ts`); the executor catches it and declines to the interpreter.
+`jit/lowering/lower.ts` (the `Lowerer`) walks the AST top-down, tracking variable types per scope and resolving callees through the workspace (`jit/workspace/workspace.ts`, which delegates to numbl's `resolveFunction`). `specialize.ts` produces one `IRFunc` per `(function, arg-type signature, nargout)` and caches it in `Lowerer.specializations`, so repeated calls with the same signature reuse the lowering. A construct the IR can't represent throws `UnsupportedConstruct` / `TypeError` (`jit/lowering/errors.ts`; re-exported as `JitTypeError` from `jit/index.ts`); the executor catches it and declines to the interpreter.
 
 ## Backends
 
-Both backends walk the same IR program — `compileSpec` → `jit/codegen/emitJs.ts` for JS; `compileSpecC` → `jit/codegen/emit.ts` for C:
+Both backends walk the same IR program: `compileSpec` → `jit/codegen/emitJs.ts` for JS; `compileSpecC` → `jit/codegen/emit.ts` for C:
 
 - **JS** emits an ES module string returning `($h) => specFn`, materialized with `new Function(...)`. `$h` carries the host hooks (output sink, plot dispatch).
 - **C** emits C source compiled to a `.so` with `cc` and called via koffi; multi-output specs use out-pointer params (see `executors/jit/typeAdapterC.ts`).

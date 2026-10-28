@@ -1,6 +1,6 @@
 # Built-in Functions
 
-numbl includes more than 400 built-in functions. Run `numbl list-builtins` on the command line for the full list.
+numbl includes more than 600 built-in functions. Run `numbl list-builtins` on the command line for the full list.
 
 ## Trigonometric
 
@@ -40,7 +40,7 @@ sum, prod, mean, median, std, var, min, max, all, any, cumsum, cumprod, cummax, 
 
 ## Linear Algebra
 
-inv, pinv, det, trace, rank, cond, norm, eig, svd, lu, qr, qz, chol, linsolve, mldivide, mrdivide
+inv, pinv, det, trace, rank, cond, norm, eig, svd, lu, qr, qz, chol, expm, kron, linsolve, mldivide, mrdivide, decomposition, isIllConditioned, istriu, istril, isbanded, bandwidth
 
 ## FFT
 
@@ -76,7 +76,7 @@ mustBeNumeric, mustBeFinite, mustBeInteger, mustBePositive, mustBeNonempty, must
 
 ## Sparse Matrices
 
-sparse, speye, spdiags, spconvert, full, nnz, nonzeros
+sparse, speye, spdiags, spconvert, spalloc, full, nnz, nonzeros, sprand, sprandn, sprandsym, symrcm, amd, colamd. `chol`, `lu`, `kron`, `inv` and `\` work directly on sparse matrices (see [Differences from MATLAB](/docs/differences)).
 
 ## Struct & Cell
 

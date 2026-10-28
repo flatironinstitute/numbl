@@ -7,7 +7,7 @@ The interpreter is an AST walker. Given a parsed program and a `CodeIndex`, it e
 - **Interpreter** (`interpreter.ts`): the interpreter's state (the running call frame, the `Runtime`, the run's `CodeIndex`, the executor registry, JIT bookkeeping such as `loopDepth`) and its entry points (`run`, `execStmt`, `installRuntimeCallbacks`).
 - **CallFrame** (`callFrame.ts`): one activation, that is the base workspace, a function call or an anonymous-function call. It holds the activation's `Environment`, the file, class and method whose code runs, the frame it was called from (`caller`), and the call-site names of its arguments (`inputNames`, for `inputname`). A frame is the `Scope` names resolve from.
 - **Environment**: the variables of an activation. Resolves variable reads and writes, and routes `global` and `persistent` declarations through shared stores on the runtime so their values outlive the call.
-- **Runtime**: shared state across a single execution: global/persistent stores, output router, plot instruction accumulator, JIT caches. (RNG state is held in module-level variables in [`helpers/prng.ts`](../../../src/numbl-core/helpers/prng.ts), not on the `Runtime`.)
+- **Runtime**: shared state across a single execution: global/persistent stores, output router (with the JIT output capture), plot instruction accumulator, cancel flag. The JIT compile cache is on the interpreter's executor registry, and RNG state in module-level variables in [`helpers/prng.ts`](../../../src/numbl-core/helpers/prng.ts).
 - **CodeIndex**: owned by the `Workspace` (the visible file set, kept in sync with addpath/rmpath/cd). Caches parsed ASTs, maps workspace files to function names (`+pkg` namespaces, `private/` scopes, `.numbl.js` functions), holds the main file's local functions, and builds the `FunctionIndex` that `resolveFunction` consults. The interpreter and the JIT share the same instance.
 - **ClassTable**: part of the `CodeIndex`: `ClassInfo` for workspace and main-file classes (with per-property and per-method attributes), plus inheritance and member queries (lineage, ancestors, defining class, handle-ness, `findProperty`/`findMethod`, access). See [classes.md](classes.md).
 
@@ -61,16 +61,16 @@ A call used as a statement requests no outputs (nargout 0), also when the callee
 
 ## JIT integration
 
-The interpreter decides when to hand control to the JIT:
+The interpreter offers three kinds of unit to the executor registry (see [executors.md](../executors.md)), with no hotness or iteration-count threshold:
 
-- **User function calls** are trial-compiled on first hot-enough call.
-- **`for` / `while` loops** are candidates when iteration counts look worthwhile.
-- **Top-level scripts** are compiled whole when feasible.
+- **Top-level scripts**, whole, once at script start (`tryRunWholeScope`).
+- **`for` / `while` loops**, per statement (`dispatch`).
+- **User function calls**, from `callBody` (`dispatchCall`).
 
-If the JIT succeeds, the specialized function or loop runs in place of the interpreted version. A type mismatch at runtime throws a bail signal, the interpreter resumes, and the JIT cache is invalidated. A call the JIT runs does not create a call frame.
+If an executor takes the unit, the compiled code runs in place of the interpreted version. If it declines or bails, the interpreter runs the unit itself, and a bail is cached so the unit is not compiled again for the same input types. A call the JIT runs does not create a call frame.
 
 ## What the interpreter does not do
 
 - It does not type-specialize. Every operation goes through generic `RuntimeValue` dispatch unless a JIT path takes over.
 - It does not do parse-time name resolution for user functions; calls are resolved on demand (and cached per function index).
-- It does not manage platform I/O directly — all file, stdout/stderr, and plot output flows through callbacks on `ExecOptions`.
+- It does not manage platform I/O directly: output and plots go through callbacks on `ExecOptions` (`onOutput`, `onDrawnow`, ...), and files and system access through its `fileIO` and `system` adapters.

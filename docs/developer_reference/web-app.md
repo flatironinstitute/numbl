@@ -4,15 +4,15 @@ A React + Vite single-page app that lets users write and run `.m` scripts in the
 
 ## Three-layer structure
 
-- **Main thread (UI)** — React components for the editor, console, plot view, workspace, file tree. Owns the virtual file system visible to the user and orchestrates the worker. The IDE is `IDEWorkspace`, which holds run state and layout and composes the panels in `src/components/ide/` (editor and run controls, output, figures, compact-layout output, file browser, execution settings).
-- **Worker (runtime)** — imports numbl-core and calls `executeCode`. Holds persistent REPL state (variables, hold state, opt level, worker-side VFS mirror).
-- **Numbl-core** — the same TypeScript that runs under the CLI. The browser-specific adapters plug it in.
+- **Main thread (UI)**: React components for the editor, console, plot view, workspace, file tree. Owns the virtual file system visible to the user and orchestrates the worker. The IDE is `IDEWorkspace`, which holds run state and layout and composes the panels in `src/components/ide/` (editor and run controls, output, figures, compact-layout output, file browser, execution settings).
+- **Worker (runtime)**: imports numbl-core and calls `executeCode`. Holds persistent REPL state (variables, hold state, opt level, worker-side VFS mirror).
+- **Numbl-core**: the same TypeScript that runs under the CLI. The browser-specific adapters plug it in.
 
 ## Worker protocol
 
 A message-passing contract between the main thread and the worker (`src/numbl-worker.ts`), typed as discriminated unions in `src/numblWorkerProtocol.ts`:
 
-- main → worker: run a script (optionally after a hidden preamble, optionally sharing state with the REPL), execute a REPL command, set optimization level, update workspace files, clear state, forward a uihtml iframe event.
+- main → worker: run a script (optionally after a hidden preamble, optionally sharing state with the REPL), execute a REPL command, set optimization level, install the optional WASM LAPACK accelerator (`set_wasm_bridge`), set the input channel, update workspace files, clear state, forward a uihtml iframe event.
 - worker → main: output chunks, plot-draw events, input requests, uihtml events for an iframe, run completion (`done`) or one `error` per diagnostic (the final one flagged `last`), REPL completion (`result`), workspace (VFS) deltas.
 
 The main-thread side lives in `NumblWorkerClient` (`src/numblWorkerClient.ts`): it owns the `Worker`, the input and cancellation `SharedArrayBuffer`s, the uihtml relay (`src/graphics/uihtmlRelay.ts`) and the dispatch of incoming messages to host callbacks. React hosts (embed, embed REPL, figure page and plot gallery) use it through `useNumblWorker`, which starts the worker on mount and terminates it on unmount, and the IDE through its worker execution backend (below); the benchmark page uses the class directly, one worker per benchmark. `buildWorkerFiles` (`src/buildWorkerFiles.ts`) assembles the VFS and workspace files sent with a run. The embedding API (`src/browser/`) has its own worker and protocol.
@@ -30,7 +30,7 @@ The IDE runs scripts through an `ExecutionBackend` (`src/execution/ExecutionBack
 
 An in-memory filesystem (`VirtualFileSystem`) on the main thread provides the user's files. A companion adapter (`BrowserFileIOAdapter`) wraps it to implement the core's `FileIOAdapter` interface inside the worker. Changes the running script makes (via `writematrix`, `save`, etc.) are captured as a delta and replayed back to the main thread after each run so the UI stays consistent.
 
-When the worker runs a script, it first sets the VFS cwd to the directory of that script — mirroring the CLI `run` command, which chdir's into `dirname(filepath)`. The script's folder thus becomes the first-priority implicit search path (see `executeCode`'s cwd-as-search-path handling), so a driver script in a subdirectory resolves sibling functions and relative file I/O against its own folder rather than the project root.
+When the worker runs a script, it first sets the VFS cwd to the directory of that script, mirroring the CLI `run` command, which chdir's into `dirname(filepath)`. The script's folder thus becomes the first-priority implicit search path (see `executeCode`'s cwd-as-search-path handling), so a driver script in a subdirectory resolves sibling functions and relative file I/O against its own folder rather than the project root.
 
 ## Synchronous input in an async world
 
@@ -42,35 +42,15 @@ Figures render in-page with `FigureView` (`src/graphics/`), which the web app im
 
 ## Static site viewer
 
-A second Vite entry (`src/site-viewer/`, built to `dist-site-viewer/` via
-`vite.site-viewer.config.ts`) packages the same `IDEWorkspace` as a standalone,
-deployable app. Instead of IndexedDB or the URL hash, it loads files from a
-baked-in `project.zip` through the `useStaticProjectFiles` hook. It and
-`useShareProjectFiles` (the URL-hash share page) both wrap
-`useInMemoryProjectFiles`, so edits live in memory and reset on reload; the
-static hook is binary-safe because it never round-trips content through text.
-It uses a relative asset base (`base: "./"`) so it works under any deploy
-subpath.
+A second Vite entry (`src/site-viewer/`, built to `dist-site-viewer/` via `vite.site-viewer.config.ts`) packages the same `IDEWorkspace` as a standalone, deployable app. Instead of IndexedDB or the URL hash, it loads files from a baked-in `project.zip` through the `useStaticProjectFiles` hook. It and `useShareProjectFiles` (the URL-hash share page) both wrap `useInMemoryProjectFiles`, so edits live in memory and reset on reload; the static hook is binary-safe because it never round-trips content through text. It uses a relative asset base (`base: "./"`) so it works under any deploy subpath.
 
-The `numbl build-site` CLI command copies this bundle into an output directory,
-zips a project tree into `project.zip` (honoring `.numblignore`), writes an
-optional `numbl-project.json` manifest (title + entry file), and injects the
-deploy base. A reusable GitHub Action (`.github/actions/build-site/`) and a
-starter template (`examples/numbl-project-template/`) wire it to GitHub Pages.
-Markdown files render via the shared `MarkdownView` component (also used by the
-docs page), with a rendered/source toggle in the editor pane.
+The `numbl build-site` CLI command (`src/cli-build-site.ts`) copies this bundle into an output directory, zips a project tree into `project.zip` (honoring `.numblignore`), writes a `numbl-project.json` manifest (title, entry file, repository URL, initial output-panel height; flags override an existing manifest), and injects the deploy base. A reusable GitHub Action (`.github/actions/build-site/`) and a starter template (`examples/numbl-project-template/`) wire it to GitHub Pages. Markdown files render via the shared `MarkdownView` component (also used by the docs page), with a rendered/source toggle in the editor pane.
 
-The base the Action passes is the one `actions/configure-pages` reports rather
-than a guess from the repository name, so a site served anywhere other than
-`<owner>.github.io/<repo>/` (a custom domain, or a host such as a git vault
-that serves pages under its own path) is built for where it will actually
-live. Should the base be wrong regardless, `useStaticProjectFiles` retries
-`project.zip` relative to the document, so a mismatch costs one 404 rather
-than an unusable site.
+The base the Action passes is the one `actions/configure-pages` reports rather than a guess from the repository name, so a site served anywhere other than `<owner>.github.io/<repo>/` (a custom domain, or a host such as a git vault that serves pages under its own path) is built for where it will actually live. Should the base be wrong regardless, `useStaticProjectFiles` retries `project.zip` relative to the document, so a mismatch costs one 404 rather than an unusable site.
 
 ## Environment differences from the CLI
 
-- No access to the native addon; LAPACK and FFT use the in-tree JS fallbacks.
+- No access to the native addon; LAPACK and FFT use the in-tree JS fallbacks, optionally accelerated by a WASM LAPACK bridge (`set_wasm_bridge`).
 - No C-JIT (no C compiler); `--opt 2` is unavailable in the browser.
 - File I/O is VFS-only; scripts cannot reach the real disk.
 - `input()` is interactive through the UI, not `stdin`.

@@ -1,6 +1,6 @@
 # Numbl
 
-A numerical computing environment compatible with MATLAB syntax, featuring 400+ built-in functions. Runs in your browser or on the command line.
+A numerical computing environment compatible with MATLAB syntax, featuring 600+ built-in functions. Runs in your browser or on the command line.
 
 [![numbl REPL](docs/repl-preview.svg)](https://numbl.org/embed-repl)
 
@@ -41,7 +41,7 @@ Full documentation is available at **[numbl.org/docs](https://numbl.org/docs)**,
 
 - [Getting Started](https://numbl.org/docs/getting-started) -- installation, CLI options, native addon
 - [Language Features](https://numbl.org/docs/language) -- operators, data types, control flow, classes
-- [Built-in Functions](https://numbl.org/docs/builtins) -- 400+ functions by category
+- [Built-in Functions](https://numbl.org/docs/builtins) -- 600+ functions by category
 - [Plotting](https://numbl.org/docs/plotting) -- 2-D/3-D plots, examples, CLI plot server
 - [Library Usage](https://numbl.org/docs/library) -- using numbl as an npm package
 - [Differences from MATLAB](https://numbl.org/docs/differences) -- behavioral differences and limitations

@@ -37,7 +37,7 @@ builtin({
 });
 ```
 
-The help is stored on the registered `IBuiltin` (`runtime/builtinRegistry.ts`).
+The help is stored on the registered `IBuiltin` (`src/numbl-core/runtime/builtinRegistry.ts`).
 
 ### Existing builtins (bulk)
 
@@ -50,13 +50,13 @@ myFunc: {
 },
 ```
 
-This file uses `registerBuiltinHelp()` to populate a separate help registry that is checked as a fallback when the builtin itself has no inline `help` field.
+This file calls `registerBuiltinHelp()` to fill a separate help registry, which `getIBuiltinHelp()` consults when the builtin has no inline `help`.
 
 ## Writing good help text
 
 ### Signatures
 
-- List every supported calling form. Check the implementation (`nargin` and `apply`, or `match` for legacy builtins) -- don't guess.
+- List every supported calling form. Check the implementation (`nargin` and `apply`); don't guess.
 - Use the conventional output variable names: `Y` for general output, `TF` for logical, `[M, I]` for value+index, etc.
 - Include multi-output forms: `[U, S, V] = svd(A)`.
 - Include optional arguments as separate signatures rather than brackets: write two lines `sort(A)` and `sort(A, DIM)` instead of `sort(A [, DIM])`.
@@ -73,11 +73,11 @@ This file uses `registerBuiltinHelp()` to populate a separate help registry that
 
 Before submitting, verify each entry against the source:
 
-1. Read the `nargin` metadata and `apply` (or the legacy `match` functions) to confirm which argument patterns are accepted.
+1. Read the `nargin` metadata and `apply` to confirm which argument patterns are accepted.
 2. Read the `apply` function to confirm behavior (return types, special cases).
 3. Test with `npx tsx src/cli.ts eval "help myFunc"` to check formatting.
 
 ### What NOT to document
 
 - Don't document argument patterns that aren't implemented, even if the corresponding external tool supports them.
-- Don't list every type the function accepts (number, tensor, sparse, etc.) -- the signatures should show the calling forms, not the type dispatch.
+- Don't list every type the function accepts (number, tensor, sparse, etc.); the signatures should show the calling forms, not the type dispatch.

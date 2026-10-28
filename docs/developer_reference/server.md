@@ -10,7 +10,7 @@ An optional standalone HTTP service that runs numbl scripts on behalf of remote 
 - Enforces per-request limits: concurrency, execution timeout, memory cap.
 - Gates access behind a shared-secret passkey header.
 
-It is not part of the library surface — it is a separate deployable.
+It is not part of the library surface: it is a separate deployable.
 
 ## Why it exists
 

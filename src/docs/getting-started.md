@@ -40,6 +40,8 @@ xlabel('x'); ylabel('y');
 
 ## CLI Options
 
+An abridged summary; run `numbl --help` for the full list, including developer options. `build-site` options are described in [Deploying Projects](/docs/deploying).
+
 ```
 Usage: numbl <command> [options]
 
@@ -51,6 +53,7 @@ Commands:
   build-site <dir>   Build a static, browser-runnable site for a numbl project
   info               Print machine-readable info (JSON)
   list-builtins      List available built-in functions
+  serve              Start local execution server for the browser IDE
   (no command)       Start interactive REPL
 
 Global options:
@@ -76,9 +79,11 @@ Options (for run and eval):
                        2  C-JIT: native kernels (Node only; falls back to JS-JIT)
   --fast-math        Build/load the native addon with -ffast-math: faster, but
                      FP results drift across --opt levels. Off by default.
+  --no-native        Do not load the native addon; use the pure-JS fallbacks
 
 Environment variables:
   NUMBL_PATH         Extra workspace directories (separated by :)
+  NUMBL_NO_NATIVE    If set, do not load the native addon
 ```
 
 ## Native Addon
@@ -89,7 +94,7 @@ For better performance with linear algebra and FFT, build the optional native ad
 numbl build-addon
 ```
 
-This requires LAPACK and FFTW development libraries on your system. The addon provides native implementations for operations like matrix decompositions, eigenvalue problems, and FFT.
+This requires a C++ compiler and the OpenBLAS (LAPACK) and FFTW development libraries, for example `libopenblas-dev` and `libfftw3-dev` on Debian/Ubuntu. Rebuild it after upgrading numbl. The addon provides native implementations for operations like matrix decompositions, eigenvalue problems, and FFT.
 
 ## Disclaimer
 

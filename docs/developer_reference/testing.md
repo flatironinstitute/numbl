@@ -4,7 +4,7 @@ Two test suites, one runner. Both produce a unified coverage report.
 
 ## Unit tests
 
-Vitest specs sitting next to `numbl-core`. Best for:
+Vitest specs in `src/__tests__/`. Best for:
 
 - lexer and parser edge cases;
 - individual builtin branches and error paths;
@@ -16,14 +16,14 @@ Unit tests are fast and should be the default choice for anything that does not 
 
 ## Integration test scripts
 
-`.m` scripts under the test scripts tree, organized by category. Each script must end with `disp('SUCCESS')` on the last line when all assertions pass — the runner keys on that exact string.
+`.m` scripts under `numbl_test_scripts/`, organized by category. Each script must end with `disp('SUCCESS')` when all assertions pass; the runner checks that the last line of output is exactly `SUCCESS`.
 
 These are the canonical place to encode MATLAB compatibility behavior:
 
 - A script that fails in numbl but passes in real MATLAB documents a known divergence.
 - A script that passes in both is a contract that numbl promises to keep.
 
-Integration scripts are wrapped by a Vitest spec so they participate in the same test run and coverage report as the unit tests.
+Integration scripts are wrapped by a Vitest spec (`src/__tests__/test-scripts.test.ts`) so they participate in the same test run and coverage report as the unit tests.
 
 `npm run test:scripts` runs the same scripts through the CLI at `--opt 0` and `--opt 1`; the Vitest wrapper runs them once on the default path. `npm run test:scripts:c` runs them at `--opt 2` (needs a C compiler), which is also what enforces the `%!numbl:assert_jit c` directives.
 
@@ -33,11 +33,11 @@ Integration scripts are wrapped by a Vitest spec so they participate in the same
 
 ## Continuous integration
 
-The `test` job runs Vitest; `test-browser` runs Playwright. The `test-lapack` job builds the native addon and then runs the addon parity tests, `npm run test:scripts`, `npm run test:scripts:c`, and `npm run jit-parity` (including `--opt 2`, which needs a C compiler).
+The `lint` job checks formatting, ESLint, `tsc -b` and that the committed generated files are in sync (see [Generated files](../../CONTRIBUTING.md#generated-files)). The `test` job builds everything and runs Vitest; `test-browser` runs Playwright. The `test-lapack` job builds the native addon and then runs the addon parity tests, `npm run test:scripts`, `npm run test:scripts:c`, and `npm run jit-parity` (including `--opt 2`, which needs a C compiler).
 
 ## Running tests in both environments
 
-An integration test is only meaningful if it is also checked against the MATLAB reference. Running `matlab -batch "run('path/to/test.m')"` on the same file verifies that the expected behavior is actually MATLAB's behavior. A numbl-only pass is not sufficient — it is easy to assert the wrong thing if you have not confirmed what MATLAB does.
+An integration test is only meaningful if it is also checked against the MATLAB reference. Running `matlab -batch "run('path/to/test.m')"` on the same file verifies that the expected behavior is actually MATLAB's behavior. A numbl-only pass is not sufficient: it is easy to assert the wrong thing if you have not confirmed what MATLAB does.
 
 MATLAB may segfault on exit. This is a known MATLAB issue unrelated to the test; the `SUCCESS` line printed before the crash is what matters.
 
@@ -47,6 +47,6 @@ Both suites run under Vitest in the coverage command, so coverage numbers reflec
 
 ## Browser tests
 
-Playwright specs cover the web-app flows that can only be checked end to end (worker protocol, rendering). They are separate from the core test suites and run against a built web app.
+Playwright specs (`tests-browser/`, `npm run test:browser`) cover flows that can only be checked end to end: the IDE, the `numbl/browser` session, the plot gallery and the in-browser test runner. They are separate from the core test suites and run against a built web app (`npm run build`, plus `npm run build:browser`).
 
 See `CONTRIBUTING.md` for the current commands and workflow.
