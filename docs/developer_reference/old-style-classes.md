@@ -293,8 +293,7 @@ Concrete touch points for the implementer (paths relative to repo root):
   `src/numbl-core/workspace/classInfo.ts`.
 - **Function-call method dispatch on the leftmost object arg** — the resolution
   path used by `dispatch()` in `src/numbl-core/runtime/runtimeDispatch.ts` and
-  `resolveClassMethod` in `src/numbl-core/interpreter/interpreter.ts` /
-  `functionResolve.ts`. Old-style classes dispatch the same way classdef external
+  `resolveClassMethod` / `resolveFunction` in `src/numbl-core/resolution/`. Old-style classes dispatch the same way classdef external
   methods already do; the new part is choosing the method by _argument class_
   for the function-call form and **not** treating `obj.method(...)` as a call.
 - **`subsref`/`subsasgn` overload dispatch + `builtin` defaults** — the

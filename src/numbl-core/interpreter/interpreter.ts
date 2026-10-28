@@ -16,11 +16,19 @@
 import type { AbstractSyntaxTree } from "../parser/types.js";
 import type { Runtime } from "../runtime/runtime.js";
 import type { RuntimeValue } from "../runtime/types.js";
-import type { CallSite } from "../runtime/runtimeHelpers.js";
 import type { CodeIndex } from "../workspace/codeIndex.js";
 import type { FunctionIndex } from "../workspace/functionIndex.js";
-import { resolveFunction, type ResolvedTarget } from "../functionResolve.js";
-import type { ItemType } from "../itemTypes.js";
+import {
+  Scope,
+  resolveName,
+  resolveFunction,
+  resolutionArgType,
+  resolveClassMethod,
+  functionBodyFor,
+  type NameResolution,
+  type ResolvedTarget,
+  type FunctionBody,
+} from "../resolution/index.js";
 
 import { Environment, type FunctionDef, type ControlSignal } from "./types.js";
 import type { Stmt, Expr, LValue } from "../parser/types.js";
@@ -93,17 +101,11 @@ export class Interpreter {
    *  compiled C exits the process, so it can't be caught. */
   tryDepth: number = 0;
 
-  /** @internal */
-  functionDefCache = new Map<string, FunctionDef>();
-
   /** @internal Pre-built line break tables for offset→line lookup per file. */
   lineTableCache = new Map<string, number[]>();
 
   /** @internal file→source mapping for line number computation */
   fileSources = new Map<string, string>();
-
-  /** @internal Guard against infinite recursion in compileSpecialized */
-  compileInProgress = new Set<string>();
 
   /**
    * Optimization mode:
@@ -170,79 +172,73 @@ export class Interpreter {
     return this.code.functionIndex;
   }
 
-  /** Clear all JIT and function resolution caches. Called after addpath/rmpath. */
+  /** Clear all JIT and function resolution caches. Called after addpath/rmpath.
+   *  (Resolution and function-body caches are per function index, which is
+   *  rebuilt.) */
   clearAllCaches(): void {
-    this.functionDefCache.clear();
-    this.compileInProgress.clear();
     this.rt.classMethodCache.clear();
     this.registry.clearCache();
   }
 
+  private lastScope: Scope | undefined;
+
+  /** @internal The scope names resolve from: the running file, class and
+   *  method, and the current environment. */
+  currentScope(): Scope {
+    const s = this.lastScope;
+    if (
+      s !== undefined &&
+      s.env === this.env &&
+      s.file === this.currentFile &&
+      s.className === this.currentClassName &&
+      s.methodName === this.currentMethodName &&
+      s.code === this.code
+    )
+      return s;
+    return (this.lastScope = new Scope(
+      this.code,
+      this.currentFile,
+      this.currentClassName,
+      this.currentMethodName,
+      this.env
+    ));
+  }
+
   /** Wire up runtime callbacks so dispatch() routes through the interpreter. */
   installRuntimeCallbacks(): void {
-    this.rt.compileSpecialized = (
-      name: string,
-      argTypes: ItemType[],
-      callSite: CallSite
-    ) => {
-      const guardKey = JSON.stringify([name, callSite]);
-      if (this.compileInProgress.has(guardKey)) return null;
-      this.compileInProgress.add(guardKey);
-      try {
+    // A call by name from the runtime (feval, a handle without a closure,
+    // operator overloads) resolves from the running code's scope, without
+    // nested functions (as MATLAB's string-named calls).
+    this.rt.resolveNamedCall = (name, args, targetClassName) => {
+      if (targetClassName) {
         const target = resolveFunction(
           name,
-          argTypes,
-          callSite,
+          args.map(resolutionArgType),
+          { file: this.currentFile, targetClassName },
           this.functionIndex
         );
-        if (!target || target.kind === "builtin") return null;
-        return (nargout: number, ...args: unknown[]) => {
-          return this.interpretTarget(target, args, nargout);
-        };
-      } finally {
-        this.compileInProgress.delete(guardKey);
+        if (!target) return null;
+        return (nargout, ...a) => this.interpretTarget(target, a, nargout);
       }
+      const r = resolveName(name, this.currentScope(), {
+        args,
+        variables: false,
+        nested: false,
+      });
+      if (r.kind === "builtin" || r.kind === "notFound") return null;
+      return (nargout, ...a) => this.callResolved(r, a, nargout);
     };
 
     this.rt.resolveClassMethod = (className: string, methodName: string) => {
-      // Check if the method actually exists before returning a wrapper
-      if (
-        !this.code.classes.hasMethod(className, methodName) &&
-        !this.code.classes.hasStaticMethod(className, methodName)
-      ) {
-        // Check if it's a constructor
-        const classInfo = this.code.classes.get(className);
-        if (!classInfo || classInfo.constructorName !== methodName) {
-          // Check external method files
-          const found =
-            !!classInfo &&
-            this.code.classes
-              .lineage(classInfo)
-              .some(c => c.externalMethodFiles.has(methodName));
-          if (!found) return null;
-        }
-      }
-
-      const definingClass = this.code.classes.findDefiningClass(
+      const found = resolveClassMethod(
+        this.code.classes,
         className,
         methodName
       );
-      const isStatic = this.code.classes.hasStaticMethod(
-        definingClass,
-        methodName
-      );
-      return (nargout: number, ...args: unknown[]) => {
-        const target: ResolvedTarget = {
-          kind: "classMethod",
-          className: definingClass,
-          methodName,
-          stripInstance: false,
-        };
-        if (isStatic) {
-          return this.interpretTarget(target, args.slice(1), nargout);
-        }
-        return this.interpretTarget(target, args, nargout);
-      };
+      if (!found) return null;
+      const { target, isStatic } = found;
+      return (nargout: number, ...args: unknown[]) =>
+        this.interpretTarget(target, isStatic ? args.slice(1) : args, nargout);
     };
 
     this.rt.getClassAncestors = (className: string) =>
@@ -262,7 +258,12 @@ export class Interpreter {
     const firstFn = this.code.mainLocalFunctions.keys().next().value;
     if (nonFuncStmts.length === 0 && firstFn !== undefined) {
       // Function file: call the first function with 0 args
-      this.callUserFunction(this.findMainLocalFunction(firstFn)!, [], 0);
+      const body = functionBodyFor(this.code, {
+        kind: "localFunction",
+        name: firstFn,
+        source: { from: "main" },
+      })!;
+      this.callBody(body, [], 0);
     } else {
       // First, try to handle the entire script body as a unit (top-level
       // JIT). If a whole-scope executor takes it, the per-stmt loop is
@@ -325,14 +326,25 @@ export class Interpreter {
     args: unknown[],
     nargout: number
   ) => unknown;
-  declare declaredNargin: (name: string) => number | undefined;
-  declare interpretTarget: (
-    target: ResolvedTarget,
+  declare callByName: (
+    name: string,
     args: unknown[],
     nargout: number
   ) => unknown;
-  declare interpretLocalFunction: (
-    target: Extract<ResolvedTarget, { kind: "localFunction" }>,
+  declare callResolved: (
+    r: NameResolution,
+    args: unknown[],
+    nargout: number
+  ) => unknown;
+  declare callBody: (
+    body: FunctionBody,
+    args: unknown[],
+    nargout: number,
+    narginOverride?: number
+  ) => unknown;
+  declare declaredNargin: (name: string) => number | undefined;
+  declare interpretTarget: (
+    target: ResolvedTarget,
     args: unknown[],
     nargout: number
   ) => unknown;
@@ -348,11 +360,6 @@ export class Interpreter {
   ) => unknown;
   declare interpretClassMethod: (
     target: Extract<ResolvedTarget, { kind: "classMethod" }>,
-    args: unknown[],
-    nargout: number
-  ) => unknown;
-  declare interpretPrivateFunction: (
-    target: Extract<ResolvedTarget, { kind: "privateFunction" }>,
     args: unknown[],
     nargout: number
   ) => unknown;
@@ -393,26 +400,6 @@ export class Interpreter {
     methodName: string | undefined,
     fn: () => T
   ) => T;
-  declare getWorkspaceFileName: (funcName: string) => string;
-  declare getClassFileName: (className: string) => string;
-  declare findMainLocalFunction: (funcName: string) => FunctionDef | null;
-  declare findFunctionInWorkspaceFile: (
-    wsName: string,
-    funcName: string
-  ) => FunctionDef | null;
-  declare findFunctionInClassFile: (
-    className: string,
-    funcName: string,
-    methodScope?: string
-  ) => FunctionDef | null;
-  declare findMethodInClass: (
-    classInfo: ClassInfo,
-    methodName: string
-  ) => FunctionDef | null;
-  declare findExternalMethod: (
-    classInfo: ClassInfo,
-    methodName: string
-  ) => FunctionDef | null;
   declare collectClassProperties: (classInfo: ClassInfo) => {
     propertyNames: string[];
     propertyDefaults: Map<string, Expr>;

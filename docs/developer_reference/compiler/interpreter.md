@@ -14,14 +14,9 @@ The interpreter is an AST walker. Given a parsed program and a `CodeIndex`, it e
 
 Control-flow transfers (break, continue, return) are signalled by typed signal objects (`BreakSignal` / `ContinueSignal` / `ReturnSignal`, none of which extend `Error`) that `execStmt` **returns** (its type is `ControlSignal | null`); the enclosing loop or function body inspects the return value with `instanceof` and propagates it upward. They are not thrown. Regular runtime errors, by contrast, flow as normal exceptions and end up in the diagnostics layer.
 
-## Builtin dispatch
+## Name resolution and calls
 
-When the interpreter encounters a call expression, name resolution (`resolveFunctionImpl` in [`functionResolve.ts`](../../../src/numbl-core/functionResolve.ts)) tries, in order:
-
-1. The local workspace — user-defined functions. **The stdlib bundle is part of this tier**: bundled stdlib `.m` files are registered as workspace functions, so a stdlib function (and any user `.m` of the same name) is found here, _before_ the builtin registry. This means a workspace/stdlib `.m` shadows a builtin of the same name.
-2. JS user functions and workspace classes.
-3. The `IBuiltin` registry (and the runtime's built-in table).
-4. Otherwise, error.
+A call expression or bare name is resolved by `resolveName` (see [function-resolution.md](function-resolution.md)) from the interpreter's current `Scope`: the running file, class and method, and the current `Environment`. The result says what the name is (variable, constant, nested, local, private or workspace function, class method or constructor, package function, builtin, ...), and `callResolved` runs it. A user function's `FunctionDef` comes from `functionBodyFor`, which also gives the file and class context to run it in. A workspace or stdlib `.m` shadows a builtin of the same name.
 
 Builtin calls go through the builtin's `resolve(argTypes, nargout)` to produce a specialized `apply` function, which the interpreter invokes. See [builtins.md](../builtins.md).
 
@@ -38,5 +33,5 @@ If the JIT succeeds, the specialized function or loop runs in place of the inter
 ## What the interpreter does not do
 
 - It does not type-specialize. Every operation goes through generic `RuntimeValue` dispatch unless a JIT path takes over.
-- It does not do parse-time name resolution for user functions; calls are resolved on demand against the `FunctionIndex`.
+- It does not do parse-time name resolution for user functions; calls are resolved on demand (and cached per function index).
 - It does not manage platform I/O directly — all file, stdout/stderr, and plot output flows through callbacks on `ExecOptions`.

@@ -16,14 +16,20 @@ import {
 import { RTV } from "../runtime/constructors.js";
 import { ensureRuntimeValue } from "../runtime/runtimeHelpers.js";
 import { RuntimeError } from "../runtime/error.js";
-import { getIBuiltin, getIBuiltinHelp } from "./builtins/index.js";
+import {
+  getIBuiltin,
+  getIBuiltinHelp,
+  getIBuiltinNargin,
+} from "./builtins/index.js";
 import {
   getAllBuiltinNames,
   registerExtraBuiltinNames,
 } from "../helpers/registry.js";
 import { toNumber, toString } from "../runtime/convert.js";
+import { getConstant } from "../helpers/constants.js";
 import type { Environment } from "./types.js";
 import type { Runtime } from "../runtime/runtime.js";
+import type { NameResolution } from "../resolution/resolveName.js";
 
 // ── Types ────────────────────────────────────────────────────────────────
 
@@ -37,7 +43,17 @@ export interface InterpreterContext {
     fileName?: string,
     nargout?: number
   ) => unknown;
-  callFunction: (name: string, args: unknown[], nargout: number) => unknown;
+  /** Call a function named by a string, from the caller's scope (no nested
+   *  functions, as in MATLAB). */
+  callByName: (name: string, args: unknown[], nargout: number) => unknown;
+  /** What `name` means in the caller's scope, and the file defining it. */
+  lookupName: (name: string) => {
+    resolution: NameResolution;
+    file: string | undefined;
+  };
+  /** Declared input count of the function `name` resolves to (negative
+   *  with varargin), or undefined. */
+  declaredNargin: (name: string) => number | undefined;
   rt: Runtime;
   /** Optimization mode: "0" = no JIT, "1" = JS-JIT, "2" = C-JIT. */
   optimization: import("../executors/plugins.js").OptLevel;
@@ -328,7 +344,7 @@ register("feval", (ctx, args, nargout) => {
     return FALL_THROUGH;
   }
   const funcName = toString(first);
-  return ctx.callFunction(funcName, args.slice(1), nargout);
+  return ctx.callByName(funcName, args.slice(1), nargout);
 });
 
 register("exist", (ctx, args) => {
@@ -337,7 +353,18 @@ register("exist", (ctx, args) => {
   const typeArg = args.length >= 2 ? toString(ensureRuntimeValue(args[1])) : "";
 
   const fio = ctx.rt.fileIO;
-  const isBuiltin = (): boolean => !!getIBuiltin(nameArg);
+  const isBuiltin = (): boolean =>
+    !!getIBuiltin(nameArg) ||
+    registry.has(nameArg) ||
+    getConstant(nameArg) !== undefined;
+  const resolution = ctx.lookupName(nameArg).resolution;
+  // Nested, local and private functions visible from the caller are files
+  // (2), checked before the search path.
+  const scopedFunction =
+    resolution.kind === "nested" ||
+    resolution.kind === "mainLocal" ||
+    resolution.kind === "fileLocal" ||
+    resolution.kind === "private";
 
   // Map a file path to a MATLAB type ID:
   // .numbl.js → 3 (MEX), everything else → 2.
@@ -359,7 +386,7 @@ register("exist", (ctx, args) => {
   // Per-directory precedence:
   //   folder > .m / .mlx / .mlapp > .numbl.js (MEX) > literal name.
   // Note: .m beats .numbl.js to mirror numbl's function-call resolution
-  // (`functionResolve.ts`), which intentionally diverges from MATLAB's
+  // (`resolution/resolveFunction.ts`), which intentionally diverges from MATLAB's
   // MEX-wins precedence so that scripted code shadows the JS user function.
   // Across directories the first hit wins.  An absolute or rooted path
   // bypasses the search path and is checked directly.
@@ -380,11 +407,8 @@ register("exist", (ctx, args) => {
       if (!nameHasKnownExt) {
         for (const ext of [".m", ".mlx", ".mlapp"]) {
           const t = fio.existsPath(joinPath(dir, nameArg + ext));
-          if (t === "file") {
-            // .m can be a class file — promote to 8 if so
-            const ws = ctx.lookupWorkspaceFile(nameArg);
-            return ws?.kind === "class" ? 8 : 2;
-          }
+          // A classdef file is a file too (MATLAB: exist('MyClass') is 2).
+          if (t === "file") return 2;
         }
         const numblJs = fio.existsPath(joinPath(dir, nameArg + ".numbl.js"));
         if (numblJs === "file") return 3;
@@ -396,18 +420,20 @@ register("exist", (ctx, args) => {
     return 0;
   };
 
-  // Workspace registry fallback: covers @-folder class definitions and any
-  // host environment that doesn't expose existsPath (e.g. browser VFS).
-  const workspaceTypeId = (): number => {
-    const ws = ctx.lookupWorkspaceFile(nameArg);
-    if (!ws) return 0;
-    switch (ws.kind) {
-      case "function":
+  // Name-resolution fallback: covers @-folder classes, package classes and
+  // any host environment that doesn't expose existsPath (e.g. browser VFS).
+  // MATLAB reports a class by its file (2) unless it lives in a package (8),
+  // and a package function or a class method not at all (0).
+  const resolvedTypeId = (): number => {
+    switch (resolution.kind) {
+      case "workspaceFunction":
         return 2;
-      case "jsfunction":
+      case "jsUserFunction":
         return 3;
-      case "class":
-        return 8;
+      case "classConstructor":
+        return resolution.target.className.includes(".") ? 8 : 2;
+      default:
+        return 0;
     }
   };
 
@@ -419,25 +445,31 @@ register("exist", (ctx, args) => {
   }
   if (typeArg === "class") {
     const ws = ctx.lookupWorkspaceFile(nameArg);
-    return ws?.kind === "class" ? 8 : 0;
+    return ws?.kind === "class" || resolution.kind === "classConstructor"
+      ? 8
+      : 0;
   }
   if (typeArg === "dir") {
     return walkSearchPath(true) === 7 ? 7 : 0;
   }
   if (typeArg === "file") {
     // 'file' searchType returns 2, 3, 4, 6, 7, 0 — folders are valid here.
+    if (scopedFunction) return 2;
     const t = walkSearchPath(true);
     if (t) return t;
-    return workspaceTypeId();
+    const r = resolvedTypeId();
+    return r === 8 ? 0 : r;
   }
   if (typeArg === "") {
     // No type specified — full MATLAB precedence:
-    //   variable > built-in > folder > files (per-dir order, first hit wins)
+    //   variable > local/private function > built-in > folder > files
+    //   (per-dir order, first hit wins)
     if (ctx.env.has(nameArg)) return 1;
+    if (scopedFunction) return 2;
     if (isBuiltin()) return 5;
     const t = walkSearchPath(true);
     if (t) return t;
-    return workspaceTypeId();
+    return resolvedTypeId();
   }
   return FALL_THROUGH;
 });
@@ -445,22 +477,31 @@ register("exist", (ctx, args) => {
 register("which", (ctx, args) => {
   if (args.length < 1) return FALL_THROUGH;
   const nameArg = toString(ensureRuntimeValue(args[0]));
+  const all = args
+    .slice(1)
+    .some(a => toString(ensureRuntimeValue(a)) === "-all");
 
-  // Variable in current workspace — MATLAB returns the literal "variable".
-  if (ctx.env.has(nameArg)) return RTV.char("variable");
+  // What the name means in the caller's scope: a variable (MATLAB returns
+  // the literal "variable"), a function or class file (its path), or a
+  // builtin ("built-in (<path>)" in MATLAB; numbl has no source path).
+  const { resolution: r, file } = ctx.lookupName(nameArg);
+  let found = "";
+  if (r.kind === "variable") found = "variable";
+  else if (file !== undefined) found = file;
+  else if (
+    r.kind === "builtin" ||
+    r.kind === "special" ||
+    r.kind === "constant"
+  )
+    found = "built-in";
+  else found = ctx.lookupWorkspaceFile(nameArg)?.path ?? "";
 
-  // Workspace function or class file — return the absolute file path.
-  const ws = ctx.lookupWorkspaceFile(nameArg);
-  if (ws) return RTV.char(ws.path);
-
-  // Builtin — MATLAB returns "built-in (<path>)".  We don't track the
-  // source path for numbl builtins, so return just "built-in".
-  if (getIBuiltin(nameArg)) {
-    return RTV.char("built-in");
-  }
-
+  // `which(name, '-all')` returns a cell array of the matches; numbl lists
+  // only the one that takes precedence.
+  if (all)
+    return found ? RTV.cell([RTV.char(found)], [1, 1]) : RTV.cell([], [0, 0]);
   // Not found — MATLAB returns '' (empty char array).
-  return RTV.char("");
+  return RTV.char(found);
 });
 
 register("isfolder", (ctx, args) => {
@@ -540,9 +581,19 @@ register("__inferred_type_str", (_ctx, args) => {
 });
 
 register("nargin", (ctx, args) => {
-  if (args.length !== 0) return FALL_THROUGH;
-  const v = ctx.env.get("$nargin");
-  return v !== undefined ? v : 0;
+  if (args.length === 0) {
+    const v = ctx.env.get("$nargin");
+    return v !== undefined ? v : 0;
+  }
+  // nargin('name'): the declared input count of the function `name` names
+  // in the caller's scope. (nargin(@f) is handled by the builtin.)
+  const v = args.length === 1 ? ensureRuntimeValue(args[0]) : undefined;
+  if (v !== undefined && (isRuntimeChar(v) || isRuntimeString(v))) {
+    const name = toString(v);
+    const n = ctx.declaredNargin(name) ?? getIBuiltinNargin(name);
+    if (n !== undefined) return n;
+  }
+  return FALL_THROUGH;
 });
 
 register("nargout", (ctx, args) => {

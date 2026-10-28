@@ -41,8 +41,6 @@ import {
   type RuntimeComplexNumber,
   type RuntimeClassInstance,
 } from "../runtime/types.js";
-import { getItemTypeFromRuntimeValue } from "../runtime/constructors.js";
-import { type ItemType } from "../itemTypes.js";
 import { BinaryOperation } from "../parser/index.js";
 import { getConstant } from "../helpers/constants.js";
 import { globToRegExp } from "../helpers/glob.js";
@@ -51,7 +49,7 @@ import type { PlotInstruction } from "../plotting/types.js";
 import type { ExecOptions } from "../executeCode.js";
 import type { FileIOAdapter } from "../fileIOAdapter.js";
 import type { SystemAdapter } from "../systemAdapter.js";
-import { ensureRuntimeValue, type CallSite } from "./runtimeHelpers.js";
+import { ensureRuntimeValue } from "./runtimeHelpers.js";
 import {
   uplus as _uplus,
   uminus as _uminus,
@@ -281,25 +279,20 @@ export class Runtime {
     (nargout: number, args: unknown[]) => unknown
   > = {};
 
-  // Function resolution callback: resolves a name to a callable user
-  // function. Set by Interpreter.installRuntimeCallbacks(). The callback handles the full resolution chain (local → class method →
-  // workspace) internally, using callSite for context. Returns the callable
-  // function or null if nothing was found.
-  public compileSpecialized:
+  // Resolves a function called by name (`dispatch`) from the running code's
+  // scope; with `targetClassName`, the method of that class. Set by
+  // Interpreter.installRuntimeCallbacks(). Returns a callable taking
+  // (nargout, ...args), or null for a builtin or an unknown name.
+  public resolveNamedCall:
     | ((
         name: string,
-        argTypes: ItemType[],
-        callSite: CallSite
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      ) => ((...args: any[]) => any) | null)
+        args: unknown[],
+        targetClassName?: string
+      ) => ((nargout: number, ...args: unknown[]) => unknown) | null)
     | null = null;
 
   // Per-function JIT-compiled code for debugging: jsId → generated JS
   public jitFunctionCode = new Map<string, string>();
-
-  // Cache for JIT-compiled functions: cacheKey → JS function
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private dispatchUnknownCache = new Map<string, (...args: any[]) => any>();
 
   // Always-on counter: how many times dispatchUnknown was called per function name
   public dispatchUnknownCounts = new Map<string, number>();
@@ -1182,64 +1175,6 @@ export class Runtime {
     args: unknown[]
   ): unknown {
     return _callClassMethod(this, className, methodName, nargout, args);
-  }
-
-  /**
-   * JIT dispatch for function calls where argument types were unknown at
-   * compile time. Inspects runtime values to infer types, asks the compiler
-   * to JIT-compile a specialized version, then calls it. The compiler
-   * handles the full resolution chain (local → class method → workspace)
-   * internally using the callSite for context.
-   */
-  public dispatchUnknown(
-    name: string,
-    nargout: number,
-    args: unknown[],
-    callSite: CallSite
-  ): unknown {
-    this.dispatchUnknownCounts.set(
-      name,
-      (this.dispatchUnknownCounts.get(name) ?? 0) + 1
-    );
-    // 1. Infer types from runtime values
-    const argTypes: ItemType[] = args.map(a =>
-      getItemTypeFromRuntimeValue(ensureRuntimeValue(a))
-    );
-
-    // 2. Cache check
-    const cacheKey = JSON.stringify({ name, callSite, argTypes });
-    let fn = this.dispatchUnknownCache.get(cacheKey);
-    if (fn) {
-      if (this.profilingEnabled) {
-        this.profileEnter("dispatch:" + name);
-        const result = fn(nargout, ...args);
-        this.profileLeave();
-        return result;
-      }
-      return fn(nargout, ...args);
-    }
-
-    // 3. JIT compile — the callback handles the full resolution chain
-    if (this.compileSpecialized) {
-      if (this.profilingEnabled) this.profileEnter("jit");
-      const compiled = this.compileSpecialized(name, argTypes, callSite);
-      if (compiled) {
-        fn = compiled;
-        this.dispatchUnknownCache.set(cacheKey, fn);
-        if (this.profilingEnabled) {
-          this.profileLeave(); // leave jit
-          this.profileEnter("dispatch:" + name);
-          const result = fn(nargout, ...args);
-          this.profileLeave(); // leave dispatch
-          return result;
-        }
-        return fn(nargout, ...args);
-      }
-      if (this.profilingEnabled) this.profileLeave(); // leave jit
-    }
-
-    // 4. Builtin fallback
-    return this.callBuiltin(name, nargout, args);
   }
 
   // ── Indexing ────────────────────────────────────────────────────────

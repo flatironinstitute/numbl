@@ -249,7 +249,7 @@ export function executeCode(
       : `// No ${label} generated`;
   if (options.onJitBail) interpreter.onJitBail = options.onJitBail;
 
-  // Wire up compileSpecialized so runtime dispatch routes through interpreter
+  // Wire up the runtime hooks so dispatch by name routes through the interpreter
   interpreter.installRuntimeCallbacks();
 
   // Expose search paths reference on the runtime (for path() builtin)
