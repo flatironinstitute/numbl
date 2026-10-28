@@ -88,6 +88,8 @@
     "test:scripts:c": "tsx src/cli.ts run-tests numbl_test_scripts --opt 2",
     "prejit-parity": "npm run bundle:stdlib --silent",
     "jit-parity": "node jit_parity/run.mjs",
+    "prebench": "npm run bundle:stdlib --silent",
+    "bench": "tsx benchmarks/bench.ts",
     "test:browser": "playwright test",
     "build:wasm": "bash numbl_test_scripts/build_wasm.sh",
     "bump": "tsx scripts/bump-version.ts",

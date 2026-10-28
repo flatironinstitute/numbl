@@ -3,9 +3,8 @@
  */
 
 import type { Stmt, ArgumentsBlock } from "../parser/types.js";
-import type { Runtime } from "../runtime/runtime.js";
 import type { RuntimeValue } from "../runtime/types.js";
-import { incref, decref } from "../runtime/refcount.js";
+import { incref, decref, type RefcountRuntime } from "../runtime/refcount.js";
 
 // ── Control flow signals ─────────────────────────────────────────────────
 
@@ -59,8 +58,9 @@ export class Environment {
   }
   /** Function ID for persistent variable storage */
   persistentFuncId: string | undefined;
-  /** Back-reference to the runtime (needed for global/persistent access) */
-  rt: Runtime | null = null;
+  /** Back-reference to the runtime (needed for global/persistent access).
+   *  Typed narrowly so this module does not import runtime.ts. */
+  rt: (RefcountRuntime & { $g: Record<string, RuntimeValue> }) | null = null;
   /** Set when a `@nestedFn` handle has been created that captures this env
    *  (or an ancestor). Tells the function-exit cleanup that clearing this
    *  env would strand the handle's closure, so locals must be left alive. */
@@ -128,9 +128,7 @@ export class Environment {
 
   /** Remove a variable from this scope's local map.
    *  Returns true if the name was present locally. Does not touch
-   *  the parent scope, globals, or persistent registrations — those
-   *  are removed via `clear global` / `clear functions` (not yet
-   *  implemented). */
+   *  the parent scope, globals, or persistent registrations. */
   delete(name: string): boolean {
     if (!this.vars.has(name)) return false;
     const old = this.vars.get(name)!;
@@ -146,6 +144,20 @@ export class Environment {
       for (const v of this.vars.values()) decref(this.rt, v);
     }
     this.vars.clear();
+  }
+
+  /** `clear name`: remove a variable of this scope or its link to a
+   *  global (the global itself stays). */
+  clearVariable(name: string): void {
+    this._globalNames?.delete(name);
+    this.delete(name);
+  }
+
+  /** `clear`: remove every variable of this scope, links to globals
+   *  included. */
+  clearVariables(): void {
+    this._globalNames?.clear();
+    this.clearLocals();
   }
 
   has(name: string): boolean {

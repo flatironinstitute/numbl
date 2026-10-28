@@ -1,11 +1,13 @@
 /**
- * Per-run JIT session state shared between the JIT executors (both
- * backends). One JIT `Workspace` (wrapping the interpreter's `CodeIndex`)
- * and one `Lowerer` per execution session, so the `Lowerer.specializations`
- * cache persists across whole-scope + per-call dispatches.
+ * Per-run JIT state shared between the JIT executors (both backends). One
+ * JIT `Workspace` (wrapping the interpreter's `CodeIndex`) and one
+ * `Lowerer` per run, so the `Lowerer.specializations` cache persists
+ * across whole-scope + per-call dispatches.
  *
- * The session is keyed on the CodeIndex object — WeakMap-cleared
- * automatically when it goes out of scope.
+ * Keyed on the run's CodeIndex (WeakMap-cleared with it), not on the
+ * `SessionState`: each run of a session parses its files afresh, and the
+ * compiled artifacts bind that run's Runtime (host helpers), so neither
+ * this nor the registry's compile cache can carry over to the next run.
  */
 
 import type { Interpreter } from "../../interpreter/interpreter.js";

@@ -68,4 +68,3 @@ export type {
   ScopedBuiltinContext,
   Arity,
 } from "./builtin.js";
-export { resetAppdataStore } from "./misc.js";

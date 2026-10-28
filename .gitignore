@@ -5,6 +5,7 @@ coverage
 /coverage-*/
 .nyc_output
 build
+benchmarks/results/local/
 numbl-vscode
 
 CLAUDE.*.md

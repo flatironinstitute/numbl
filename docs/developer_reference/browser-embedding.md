@@ -22,7 +22,7 @@ const out = await session.readFile("result.json"); // back out of the VFS
 await session.dispatchHtmlEvent(compId, "go", payload); // host -> script
 ```
 
-Sessions also run incrementally: `mainFile` is optional, and `session.execute(code)` runs code against a persistent workspace (REPL semantics: variables and hold state carry across calls, expression results auto-display). Each call resolves with an `ExecuteResult` (`{ ok, output, plotInstructions, error?, aborted? }`); numbl errors resolve with `ok: false` and a formatted message rather than rejecting. This is the path notebook-style hosts use (e.g. the JupyterLite kernel).
+Sessions also run incrementally: `mainFile` is optional, and `session.execute(code)` runs code against a persistent workspace (REPL semantics: variables, globals, persistents, warning and PRNG state, and hold state carry across calls, also past a failed call, and expression results auto-display). Each call resolves with an `ExecuteResult` (`{ ok, output, plotInstructions, error?, aborted? }`); numbl errors resolve with `ok: false` and a formatted message rather than rejecting. This is the path notebook-style hosts use (e.g. the JupyterLite kernel).
 
 ```ts
 const session = await createNumblSession({ onOutput: console.log });
@@ -43,4 +43,4 @@ Not available in sessions: qhull-backed builtins (delaunay/convhull; the WASM is
 
 ## Raw primitives: the root export
 
-For hosts that want their own worker: `executeCode` (synchronous, platform-agnostic), `ExecSession` (REPL-style state carried across `executeCode` calls), `VirtualFileSystem` (with change tracking), `BrowserFileIOAdapter` (sync-XHR `websave`/`webread` with GitHub-release CORS proxying, and `unzip`), `BrowserSystemAdapter`, and the `UihtmlSession` type. `executeCode` scans `searchPaths` directories for workspace files the same way a runtime `addpath` does.
+For hosts that want their own worker: `executeCode` (synchronous, platform-agnostic), `ExecSession` (REPL-style state carried across `executeCode` calls), `SessionState` (the state one passes as `ExecOptions.session` to share it between `executeCode` calls), `VirtualFileSystem` (with change tracking), `BrowserFileIOAdapter` (sync-XHR `websave`/`webread` with GitHub-release CORS proxying, and `unzip`), `BrowserSystemAdapter`, and the `UihtmlSession` type. `executeCode` scans `searchPaths` directories for workspace files the same way a runtime `addpath` does.

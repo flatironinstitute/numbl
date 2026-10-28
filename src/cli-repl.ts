@@ -100,7 +100,7 @@ export async function runRepl(
     }
   };
 
-  /** Execute one REPL input; errors are reported and leave the state as is. */
+  /** Execute one REPL input; errors are reported. */
   const runCode = (code: string) => {
     try {
       const result = session.execute(code, {

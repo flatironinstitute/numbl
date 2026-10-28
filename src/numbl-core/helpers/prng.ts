@@ -6,21 +6,25 @@ import { RuntimeValue, RTV, toNumber, RuntimeError } from "../runtime/index.js";
 import { isRuntimeTensor } from "../runtime/types.js";
 import { getLapackBridge } from "../native/lapack-bridge.js";
 import { allocFloat64Array } from "../runtime/alloc.js";
+import { currentSession, type RngState } from "../sessionState.js";
 
 // ── Seedable PRNG (xoshiro128**) ────────────────────────────────────────
+//
+// The generator state is per session (`SessionState.rng`), so `rng` in one
+// session does not move another's stream, and the state carries across a
+// session's runs.
 
-let _rngState: Uint32Array | null = null; // null = use Math.random()
-let _rngSeed: number = 0; // track current seed for rng() output
-let _bmSpare: number | null = null; // cached spare from Box-Muller
+const rng = (): RngState => currentSession().rng;
 
 export function setRngShuffle(): void {
-  _rngState = null;
-  _rngSeed = 0;
-  _bmSpare = null;
+  const r = rng();
+  r.state = null;
+  r.seed = 0;
+  r.spare = null;
 }
 
 export function setRngSeed(seed: number): void {
-  _rngSeed = seed;
+  rng().seed = seed;
 }
 
 function splitmix32(seed: number): () => number {
@@ -35,22 +39,18 @@ function splitmix32(seed: number): () => number {
 }
 
 export function seedRng(seed: number): void {
-  _bmSpare = null;
+  const r = rng();
+  r.spare = null;
   const sm = splitmix32(seed);
-  _rngState = new Uint32Array([sm(), sm(), sm(), sm()]);
+  const state = new Uint32Array([sm(), sm(), sm(), sm()]);
   // Ensure state is non-zero
-  if (
-    _rngState[0] === 0 &&
-    _rngState[1] === 0 &&
-    _rngState[2] === 0 &&
-    _rngState[3] === 0
-  ) {
-    _rngState[0] = 1;
+  if (state[0] === 0 && state[1] === 0 && state[2] === 0 && state[3] === 0) {
+    state[0] = 1;
   }
+  r.state = state;
 }
 
-function xoshiro128ss(): number {
-  const s = _rngState!;
+function xoshiro128ss(s: Uint32Array): number {
   const result = Math.imul(rotl(Math.imul(s[1], 5), 7), 9) >>> 0;
   const t = s[1] << 9;
   s[2] ^= s[0];
@@ -78,62 +78,73 @@ export interface RngSnapshot {
  *  re-run by the interpreter. The unseeded (`Math.random`) stream cannot be
  *  rewound; only seeded state is restored exactly. */
 export function snapshotRng(): RngSnapshot {
-  return {
-    state: _rngState && _rngState.slice(),
-    seed: _rngSeed,
-    spare: _bmSpare,
-  };
+  const r = rng();
+  return { state: r.state && r.state.slice(), seed: r.seed, spare: r.spare };
 }
 
 /** Restore a state taken by `snapshotRng`. */
 export function restoreRng(s: RngSnapshot): void {
-  _rngState = s.state && s.state.slice();
-  _rngSeed = s.seed;
-  _bmSpare = s.spare;
+  const r = rng();
+  r.state = s.state && s.state.slice();
+  r.seed = s.seed;
+  r.spare = s.spare;
+}
+
+/** A random float in [0, 1) from `r`. */
+function nextUniform(r: RngState): number {
+  if (r.state === null) return Math.random();
+  return (xoshiro128ss(r.state) >>> 0) / 0x100000000;
 }
 
 /** Return a random float in [0, 1) using seeded or unseeded PRNG */
 export function rngRandom(): number {
-  if (_rngState === null) return Math.random();
-  return (xoshiro128ss() >>> 0) / 0x100000000;
+  return nextUniform(rng());
+}
+
+/** Fill a typed array with uniform values in [0, 1). */
+export function fillRand(data: Float64Array): void {
+  const r = rng();
+  for (let i = 0; i < data.length; i++) data[i] = nextUniform(r);
 }
 
 // Marsaglia polar method — generates pairs without trig functions.
 // Uses rejection sampling (~78.5% acceptance) but avoids cos/sin entirely.
 
 export function boxMullerRandom(): number {
-  if (_bmSpare !== null) {
-    const s = _bmSpare;
-    _bmSpare = null;
+  const r = rng();
+  if (r.spare !== null) {
+    const s = r.spare;
+    r.spare = null;
     return s;
   }
   let u: number, v: number, s: number;
   do {
-    u = 2.0 * rngRandom() - 1.0;
-    v = 2.0 * rngRandom() - 1.0;
+    u = 2.0 * nextUniform(r) - 1.0;
+    v = 2.0 * nextUniform(r) - 1.0;
     s = u * u + v * v;
   } while (s >= 1.0 || s === 0.0);
   const mul = Math.sqrt((-2.0 * Math.log(s)) / s);
-  _bmSpare = v * mul;
+  r.spare = v * mul;
   return u * mul;
 }
 
 /** Fill a typed array with normal random values (bulk polar method) */
 export function fillRandn(data: Float64Array): void {
+  const r = rng();
   // Native fast path: seeded PRNG + addon available
-  if (_rngState !== null) {
+  if (r.state !== null) {
     const bridge = getLapackBridge();
     if (bridge.fillRandn) {
-      const r = bridge.fillRandn(
-        _rngState,
+      const res = bridge.fillRandn(
+        r.state,
         data.length,
-        _bmSpare ?? 0,
-        _bmSpare !== null
+        r.spare ?? 0,
+        r.spare !== null
       );
       // State was mutated in-place by the addon. Update spare.
-      _bmSpare = r.hasSpare ? r.spare : null;
+      r.spare = res.hasSpare ? res.spare : null;
       // Copy result into caller's typed array
-      data.set(r.data);
+      data.set(res.data);
       return;
     }
   }
@@ -141,15 +152,15 @@ export function fillRandn(data: Float64Array): void {
   // JS fallback
   const n = data.length;
   let i = 0;
-  if (_bmSpare !== null && i < n) {
-    data[i++] = _bmSpare;
-    _bmSpare = null;
+  if (r.spare !== null && i < n) {
+    data[i++] = r.spare;
+    r.spare = null;
   }
   for (; i + 1 < n; i += 2) {
     let u: number, v: number, s: number;
     do {
-      u = 2.0 * rngRandom() - 1.0;
-      v = 2.0 * rngRandom() - 1.0;
+      u = 2.0 * nextUniform(r) - 1.0;
+      v = 2.0 * nextUniform(r) - 1.0;
       s = u * u + v * v;
     } while (s >= 1.0 || s === 0.0);
     const mul = Math.sqrt((-2.0 * Math.log(s)) / s);
@@ -163,12 +174,13 @@ export function fillRandn(data: Float64Array): void {
 
 /** Return the current RNG state as a struct {Type, Seed, State} */
 export function getRngStateStruct(): RuntimeValue {
-  const stateArray = _rngState
-    ? RTV.tensor(allocFloat64Array(Array.from(_rngState).map(v => v)), [4, 1])
+  const r = rng();
+  const stateArray = r.state
+    ? RTV.tensor(allocFloat64Array(Array.from(r.state)), [4, 1])
     : RTV.tensor(allocFloat64Array(0), [0, 1]);
   return RTV.struct({
     Type: RTV.char("twister"),
-    Seed: RTV.num(_rngSeed),
+    Seed: RTV.num(r.seed),
     State: stateArray,
   });
 }
@@ -183,12 +195,14 @@ export function restoreRngState(s: {
   if (seedField === undefined || stateField === undefined) {
     throw new RuntimeError("rng: invalid state structure");
   }
-  _rngSeed = Math.round(toNumber(seedField));
+  const r = rng();
+  r.seed = Math.round(toNumber(seedField));
   if (isRuntimeTensor(stateField) && stateField.data.length === 4) {
-    _rngState = new Uint32Array(4);
-    for (let i = 0; i < 4; i++) _rngState[i] = stateField.data[i] >>> 0;
+    const state = new Uint32Array(4);
+    for (let i = 0; i < 4; i++) state[i] = stateField.data[i] >>> 0;
+    r.state = state;
   } else {
     // Empty state means unseeded
-    _rngState = null;
+    r.state = null;
   }
 }

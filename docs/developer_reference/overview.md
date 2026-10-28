@@ -24,7 +24,7 @@ source .m ──► Lexer ──► Parser ──► AST
                               RuntimeValue
 ```
 
-A single entry point (the `executeCode` function) accepts source, options, and adapters (file I/O, system, output callbacks) and drives this pipeline. Every surface (CLI, web worker, execution server) goes through it. Interactive surfaces (the REPL and the browser workers) call it through an `ExecSession`, which carries variables and figure state between runs.
+A single entry point (the `executeCode` function) accepts source, options, and adapters (file I/O, system, output callbacks) and drives this pipeline. Every surface (CLI, web worker, execution server) goes through it. Interactive surfaces (the REPL and the browser workers) call it through an `ExecSession`, whose `SessionState` (base workspace, globals, persistents, warning and PRNG state, ...) every run shares, and which carries figure state between runs.
 
 ## Topic guide
 

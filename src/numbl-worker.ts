@@ -6,9 +6,9 @@
 
 import { executeCode } from "./numbl-core/executeCode.js";
 import { ExecSession } from "./numbl-core/execSession.js";
+import { SessionState } from "./numbl-core/sessionState.js";
 import { parseMFile } from "./numbl-core/parser/index.js";
 import { CancellationError } from "./numbl-core/runtime/index.js";
-import type { RuntimeValue } from "./numbl-core/runtime/index.js";
 import type { WorkspaceFile } from "./numbl-core/workspace/index.js";
 import type { OptLevel } from "./numbl-core/executors/plugins.js";
 import { diagnoseErrors } from "./numbl-core/diagnostics";
@@ -150,10 +150,10 @@ function handleRun(msg: RunMessage): void {
   // A new run supersedes any armed uihtml session from a prior run.
   session.disposeUihtmlSession();
 
-  // Choose VFS/adapter/variables based on persistent flag
+  // Choose VFS/adapter/session state based on persistent flag
   let sysAdapter: BrowserSystemAdapter;
   let runVfs: VirtualFileSystem;
-  let useVariableValues: Record<string, RuntimeValue>;
+  let runState: SessionState;
   let useHoldState: boolean | undefined;
   let useWorkspaceFiles: WorkspaceFile[];
   let useSearchPaths: string[] | undefined;
@@ -168,7 +168,7 @@ function handleRun(msg: RunMessage): void {
     if (vfsFiles) writeVfsFiles(vfs, vfsFiles);
     sysAdapter = systemAdapter;
     runVfs = vfs;
-    useVariableValues = session.variableValues;
+    runState = session.state;
     useHoldState = session.holdState;
     useWorkspaceFiles = wsFiles.length > 0 ? wsFiles : session.workspaceFiles;
     useSearchPaths = searchPaths ?? session.searchPaths;
@@ -177,7 +177,7 @@ function handleRun(msg: RunMessage): void {
     runVfs = new VirtualFileSystem();
     if (vfsFiles) writeVfsFiles(runVfs, vfsFiles);
     sysAdapter = new BrowserSystemAdapter(runVfs);
-    useVariableValues = {};
+    runState = new SessionState();
     useHoldState = undefined;
     useWorkspaceFiles = wsFiles;
     useSearchPaths = searchPaths;
@@ -209,8 +209,8 @@ function handleRun(msg: RunMessage): void {
   // visible script, sharing the SAME VFS so anything it installs is available
   // to the main run. Its console output is captured (not forwarded) and is
   // surfaced only if the preamble itself fails — the embed page shows a
-  // "Preparing…" message in the meantime. Threads the preamble's resulting
-  // variables / search paths / workspace files into the main run.
+  // "Preparing…" message in the meantime. Shares the main run's session
+  // state, and threads its search paths / workspace files into the main run.
   if (typeof preamble === "string" && preamble.trim()) {
     const preambleOutput: string[] = [];
     try {
@@ -224,7 +224,7 @@ function handleRun(msg: RunMessage): void {
           displayResults: false,
           maxIterations: options?.maxIterations ?? 10000000,
           optimization: options?.optimization ?? optimizationLevel,
-          initialVariableValues: useVariableValues,
+          session: runState,
           fileIO: adapter,
           system: sysAdapter,
           onInput: runInputSAB ? workerOnInput(runInputSAB) : undefined,
@@ -234,8 +234,7 @@ function handleRun(msg: RunMessage): void {
         runVfs.normalizePath("preamble.m"),
         [...(useSearchPaths ?? []), MIP_SEARCH_PATH]
       );
-      // Thread the preamble's resulting state into the main run.
-      useVariableValues = pre.variableValues;
+      // Thread the preamble's resulting paths into the main run.
       if (pre.searchPaths) useSearchPaths = pre.searchPaths;
       if (pre.workspaceFiles) useWorkspaceFiles = pre.workspaceFiles;
       // Note: change tracking is intentionally NOT cleared here — files the
@@ -280,7 +279,7 @@ function handleRun(msg: RunMessage): void {
         displayResults: options?.displayResults ?? true,
         maxIterations: options?.maxIterations ?? 10000000,
         optimization: options?.optimization ?? optimizationLevel,
-        initialVariableValues: useVariableValues,
+        session: runState,
         initialHoldState: useHoldState,
         fileIO: adapter,
         system: sysAdapter,
@@ -374,7 +373,7 @@ function handleExecute(code: string, cancelSAB?: SharedArrayBuffer): void {
       vfsChanges: adapter.getChanges(),
     });
   } catch (error: unknown) {
-    // On error, variableValues remains unchanged
+    // On error, what the command did before failing stays (MATLAB)
     const { message } = formatExecuteError(error, code);
     post({
       type: "result",

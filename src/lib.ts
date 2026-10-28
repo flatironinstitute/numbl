@@ -16,6 +16,9 @@ export { executeCode } from "./numbl-core/executeCode.js";
 // carried from one call to the next), as used by the CLI REPL and the IDE.
 export { ExecSession } from "./numbl-core/execSession.js";
 export type { ExecSessionInit } from "./numbl-core/execSession.js";
+// State that outlives a run (base workspace, globals, persistents, ...);
+// pass one as ExecOptions.session to share it between executeCode calls.
+export { SessionState } from "./numbl-core/sessionState.js";
 
 // Delaunay triangulation (delaunay/delaunayn) is backed by the qhull WASM
 // module, which loads asynchronously. Call loadDelaunayBackend() once before

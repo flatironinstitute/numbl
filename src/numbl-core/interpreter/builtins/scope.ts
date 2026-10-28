@@ -24,6 +24,8 @@ import type { CallFrame } from "../callFrame.js";
 import type { CallerScope } from "../callerScope.js";
 import { builtin } from "./builtin.js";
 import { builtinError } from "./args.js";
+import { isText } from "./text-args.js";
+import type { Runtime } from "../../runtime/runtime.js";
 
 // ── eval, evalin, assignin ───────────────────────────────────────────────
 
@@ -206,42 +208,79 @@ builtin({
 
 // ── clear, who, whos ─────────────────────────────────────────────────────
 
-/** `clear` options numbl does not implement; a call naming one is a no-op. */
-const CLEAR_OPTIONS = new Set([
-  "all",
-  "global",
-  "functions",
-  "classes",
-  "import",
-  "java",
-  "mex",
-  "variables",
-  "-regexp",
-  "-except",
-]);
+/** `clear` item types that numbl has nothing to clear for; a call naming
+ *  one (or `-regexp`, not implemented) is a no-op. */
+const CLEAR_NOOP_OPTIONS = new Set(["import", "java", "mex", "-regexp"]);
+
+/** Whether a function file defines `name` (`pkg.fn` is `+pkg/fn.m`). */
+function definesFunction(file: string, name: string): boolean {
+  const parts = name.split(".");
+  const rel =
+    parts.map((p, i) => (i < parts.length - 1 ? "+" + p : p)).join("/") + ".m";
+  return file === rel || file.endsWith("/" + rel);
+}
 
 builtin({
   name: "clear",
   nargout: 0,
   scope: true,
-  apply: (args, _nargout, { scope }) => {
-    // `clear`: remove all variables of the calling scope; `clear a b`: the
-    // named ones.
-    if (args.length === 0) {
-      scope.env.clearLocals();
+  apply: (args, _nargout, { rt, scope }) => {
+    // What MATLAB clears, by form: `clear` / `clear variables` the calling
+    // scope's variables (a global keeps its value, only the link goes);
+    // `clear global [names]` the globals; `clear functions` every
+    // function's persistents; `clear all` / `clear classes` all three.
+    // `clear name ...` removes the variables and the persistents of the
+    // functions with those names.
+    const env = scope.env;
+    const session = rt.session;
+    const names = args.map(a => toString(a));
+    if (names.length === 0) {
+      env.clearVariables();
       return;
     }
-    for (const arg of args) {
-      const name = toString(arg);
-      if (CLEAR_OPTIONS.has(name)) return;
-      scope.env.delete(name);
+    switch (names[0]) {
+      case "variables":
+        env.clearVariables();
+        return;
+      case "all":
+      case "classes":
+        env.clearVariables();
+        session.clearGlobals();
+        session.clearPersistents();
+        return;
+      case "functions":
+        session.clearPersistents();
+        return;
+      case "global": {
+        const globals = names.length > 1 ? names.slice(1) : undefined;
+        for (const name of globals ?? [...env.globalNames]) {
+          env.clearVariable(name);
+        }
+        session.clearGlobals(globals);
+        return;
+      }
+    }
+    if (CLEAR_NOOP_OPTIONS.has(names[0])) return;
+    for (const name of names) {
+      env.clearVariable(name);
+      session.clearPersistents(file => definesFunction(file, name));
     }
   },
 });
 
-/** Getters for the calling scope's variables, for who/whos. */
-function variableGetters(scope: CallerScope): Record<string, () => unknown> {
+/** Getters for the variables who/whos list: the calling scope's, or with
+ *  a leading 'global' argument (removed from `args`) the globals. */
+function variableGetters(
+  rt: Runtime,
+  scope: CallerScope,
+  args: RuntimeValue[]
+): Record<string, () => unknown> {
   const getters: Record<string, () => unknown> = {};
+  if (args.length > 0 && isText(args[0]) && toString(args[0]) === "global") {
+    args.shift();
+    for (const name of Object.keys(rt.$g)) getters[name] = () => rt.$g[name];
+    return getters;
+  }
   for (const name of scope.env.localNames()) {
     if (name.startsWith("$")) continue;
     getters[name] = () => scope.env.get(name);
@@ -252,15 +291,27 @@ function variableGetters(scope: CallerScope): Record<string, () => unknown> {
 builtin({
   name: "who",
   scope: true,
-  apply: (args, nargout, { rt, scope }) =>
-    rt.who(nargout, variableGetters(scope), args) as RuntimeValue,
+  apply: (args, nargout, { rt, scope }) => {
+    const rest = [...args];
+    return rt.who(
+      nargout,
+      variableGetters(rt, scope, rest),
+      rest
+    ) as RuntimeValue;
+  },
 });
 
 builtin({
   name: "whos",
   scope: true,
-  apply: (args, nargout, { rt, scope }) =>
-    rt.whos(nargout, variableGetters(scope), args) as RuntimeValue,
+  apply: (args, nargout, { rt, scope }) => {
+    const rest = [...args];
+    return rt.whos(
+      nargout,
+      variableGetters(rt, scope, rest),
+      rest
+    ) as RuntimeValue;
+  },
 });
 
 // ── exist, which ─────────────────────────────────────────────────────────

@@ -27,13 +27,22 @@ Numbl is organized as a platform-agnostic language core surrounded by thin platf
 | CodeIndex        | AST cache; function/class name registry; builds the `FunctionIndex`; owns the `ClassTable` (class info, inheritance).      |
 | Interpreter      | AST walker; drives builtin dispatch and JIT triggers.                                                                      |
 | Resolution       | What a name means in a scope (variable, local/private/package function, class member, builtin); target to function body.   |
-| Runtime          | Value constructors, global/persistent stores, plot accumulator, output router.                                             |
+| Runtime          | Value constructors, plot accumulator, output router; per-run, with the session's state in `rt.session`.                    |
+| SessionState     | What outlives a run: base workspace, globals, persistents, warning and PRNG state, tic, appdata, listeners.                |
 | JIT              | Type-specializes hot code to JS (`--opt 1`) and to C (`--opt 2`).                                                          |
 | Builtin registry | `IBuiltin` lookup by name, with arity and help; the JIT keeps its own builtin set with type rules and JS/C emitters.       |
 | Ops layer        | Dispatches tensor kernels to the native addon or JS fallbacks.                                                             |
 | Stdlib bundle    | `.m` files loaded into every run's workspace.                                                                              |
 | FileTable        | MATLAB fid semantics (fopen modes, positions, EOF, encodings, write-back) over the adapter's byte primitives.              |
 | Platform adapter | Implements file I/O, system info, and output/plot callbacks for one environment.                                           |
+
+## Sessions
+
+Each `executeCode` call builds a fresh `Runtime` and `Interpreter`. What MATLAB keeps between commands at the prompt lives in a `SessionState` (`numbl-core/sessionState.ts`), passed as `ExecOptions.session` and held by the runtime as `rt.session`: the base workspace `Environment` (reused as every run's base frame, so variables and the base workspace's `global` links carry over, also past an error), globals (`rt.$g`), persistents (`rt.persistentStore`), the warning on/off state, the PRNG state, the `tic` time, `spparms`, appdata, event listeners and the last JIT decline reason. An `ExecSession` owns one; a one-shot run (CLI `run`/`eval`) gets a fresh one, so two sessions in one process share none of it. Helpers without a runtime handle (the PRNG, `emitWarning`, the JIT decline log) reach it through `currentSession()`, which reads the active runtime and falls back to a detached session outside any run (unit tests). Host capabilities that belong to the session rather than a run, such as a device context, belong there too.
+
+`clear` follows MATLAB: `clear` and `clear variables` remove the calling scope's variables and global links (globals keep their values), `clear global` the globals, `clear functions` (or `clear name` for a function file) the persistents, and `clear all` all three. Persistents of a function whose file changed since they were made are cleared at the start of the next run. The PRNG stream, warning state and appdata survive `clear all`, as in MATLAB.
+
+The JIT's compile caches stay per run: each run parses its files afresh and a compiled unit binds the run's `Runtime`. A unit that raises an error in a run whose base workspace persists is re-run by the interpreter (`Interpreter.baseWorkspacePersists`), so the assignments it made before the error are kept, as at opt 0.
 
 ## File I/O
 
