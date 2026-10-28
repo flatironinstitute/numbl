@@ -55,8 +55,8 @@ function encodeArg(v) {
 }
 
 export function mtoc2_plot_dispatch(name, ...args) {
-  if (typeof globalThis.$plotDispatch === "function") {
-    globalThis.$plotDispatch(name, args);
+  if (typeof $plotDispatch === "function") {
+    $plotDispatch(name, args);
     return;
   }
   const record = { call: name, args: args.map(encodeArg) };

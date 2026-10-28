@@ -1,7 +1,7 @@
 // JS sibling of `disp_double.h` — disp(x) for a real-scalar double.
 // Mirrors numbl's `formatNumber` via `mtoc2_format_double` and adds
 // the trailing newline. References `$write` as a free variable
-// resolved to `globalThis.$write` at call time.
+// bound by the emitted module (see `emitJs.ts`).
 //
 // The import keeps the source loadable as a real ES module (the
 // interpreter resolves it that way). The build script strips this

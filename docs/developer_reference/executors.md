@@ -51,7 +51,8 @@ runFirst(executors, lowered, owner):
     if compiled is missing: compiled = cache.set(..., executor.compile(data))
     result = executor.run(compiled, data)   // output captured
     if result is null:                      // bail
-      discard captured output; cache.markBailed(executor, owner, key)
+      discard captured output, plots, PRNG draws
+      cache.markBailed(executor, owner, key)
       continue
     commit captured output; return result
   return null                               // caller falls back to the interpreter
@@ -63,7 +64,7 @@ runFirst(executors, lowered, owner):
 
 There is no cost model: the order is fixed by registration (`executors/plugins.ts`), C-JIT before JS-JIT. A C executor declines what it cannot marshal across the koffi ABI, so JS-JIT picks that up, and the interpreter takes whatever both decline.
 
-A compiler rejection (`UnsupportedConstruct` / `JitTypeError`) makes `compile` return null; `run` then bails, and the bail is cached, so the unit is not recompiled on every later dispatch. Runtime bails are cached the same way. Output produced during a run that bails is discarded so the interpreter's re-run does not duplicate it.
+A compiler rejection (`UnsupportedConstruct` / `JitTypeError`) makes `compile` return null; `run` then bails, and the bail is cached, so the unit is not recompiled on every later dispatch. Runtime bails are cached the same way. Side effects of a run that bails are rolled back so the interpreter's re-run does not duplicate them: captured output is discarded, plot instructions and plot state are restored (`Runtime.discardOutputCapture`), and the PRNG is rewound (`snapshotRng` / `restoreRng`).
 
 ## Lowering
 

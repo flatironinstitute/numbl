@@ -1,10 +1,12 @@
 // Ambient declarations for host hooks that runtime .js snippets
-// reference as free variables. The host (CLI, browser, codegen-
-// emitted `run($h)`) assigns these on `globalThis` before any
-// snippet function runs.
+// reference as free variables. `$write`, `$plotDispatch`, `$rand` and
+// `$elemwise` are module-scoped bindings in the emitted JS module,
+// assigned from `$h` by its factory (see `codegen/emitJs.ts`), so each
+// compiled module talks to its own host. `$matmulAccel` is a genuine
+// global installed by the browser worker's WASM LAPACK bridge.
 //
-// Adding a hook: declare it here, assign it in every host's
-// bootstrap, and let snippets reference it by bare name.
+// Adding a per-host hook: declare it here, add it to the `let` and the
+// factory in `emitJs.ts`, and let snippets reference it by bare name.
 
 declare global {
   /** Optional host element-wise kernels for real tensors (the numbl JIT
@@ -33,6 +35,13 @@ declare global {
 
   /** Append text to stdout. No implicit newline. */
   var $write: (s: string) => void;
+
+  /** Optional host plot hook; without it plot calls are written to
+   *  `$write` as records. */
+  var $plotDispatch: ((name: string, args: unknown[]) => void) | undefined;
+
+  /** One uniform double in [0, 1) from the host PRNG. */
+  var $rand: () => number;
 
   /** Optional accelerated real matrix multiply, installed by the host when
    *  a WASM LAPACK bridge is loaded (browser worker). Given column-major

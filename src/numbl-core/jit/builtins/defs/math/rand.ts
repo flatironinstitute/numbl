@@ -2,16 +2,16 @@
  * rand — uniform random scalar in [0, 1).
  *
  * Only the scalar form `rand()` (zero args) is JIT-compiled. It emits a call
- * to the host helper `$h.rand` (bound to `globalThis.$rand` by the emit
- * wrapper), which draws from numbl's process-global PRNG — the same stream the
+ * to the host helper `$h.rand` (bound to the module-scoped `$rand` by the
+ * emit wrapper), which draws from numbl's process-global PRNG — the same stream the
  * interpreter's `rand` uses, so `rng(seed)` controls both and a function that
  * mixes JIT'd and interpreted `rand` stays on one sequence.
  *
  * Matrix forms (`rand(n)`, `rand(m,n)`, `rand([m n])`) and multi-output are
  * declined with `UnsupportedConstruct`, so the enclosing unit falls back to the
- * interpreter (which handles every form). There is no `emitC`: under C-JIT
- * (`--opt 2`) there is no JS host to call, so a `rand`-containing unit falls
- * through to JS-JIT, which this enables.
+ * interpreter (which handles every form). Under C-JIT (`--opt 2`) there is no
+ * JS host to call, so `emitC` declines and a `rand`-containing unit falls
+ * through to JS-JIT.
  */
 import { UnsupportedConstruct } from "../../../lowering/errors.js";
 import { scalarDouble } from "../../../lowering/types.js";
@@ -38,5 +38,10 @@ export const rand: Builtin = {
   emitJs() {
     // `$rand` is bound to the host PRNG helper by the emit wrapper.
     return "$rand()";
+  },
+  emitC() {
+    throw new UnsupportedConstruct(
+      `C-JIT 'rand' has no host PRNG to call; the unit runs on JS-JIT`
+    );
   },
 };

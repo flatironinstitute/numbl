@@ -57,7 +57,7 @@ the diagnosis and the divergence observed at discovery time.
   A few were interpreter bugs the JITs got right (`repmat` 0-rep crash,
   `cat(dim>=3, …, [])`).
 - **B** — whole-scope/loop JIT runs side effects, then bails, and the interpreter
-  re-runs → duplicated output.
+  re-runs → duplicated output, or (B03) `rand` draws the re-run cannot repeat.
 - **C** — interpreter used the native `-ffast-math` LAPACK addon while the JITs
   use their own kernels → different float results / NaN handling. Resolved by
   defaulting the addon build to **no-fast-math** (deterministic reductions and
