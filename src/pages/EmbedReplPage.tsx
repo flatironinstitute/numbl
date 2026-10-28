@@ -14,12 +14,12 @@ import {
   figuresReducer,
   initialFiguresState,
 } from "../numbl-core/plotting/figuresReducer.js";
-import type { PlotInstruction } from "../numbl-core/plotting/types.js";
-import { createInputSAB, mainThreadRespond } from "../syncInputChannel";
 import { useSystemFiles } from "../hooks/useSystemFiles.js";
 import { useMipCorePackage } from "../hooks/useMipCorePackage.js";
 import { syncSystemVfsChanges } from "../vfs/syncVfsChanges.js";
-import type { VfsChanges } from "../vfs/VirtualFileSystem.js";
+import { useNumblWorker } from "../hooks/useNumblWorker.js";
+import { buildWorkerFiles } from "../buildWorkerFiles.js";
+import { isOptLevel, type OptLevel } from "../numbl-core/executors/plugins.js";
 
 interface TerminalMethods {
   writeOutput: (text: string, isError?: boolean) => void;
@@ -28,13 +28,13 @@ interface TerminalMethods {
   fit: () => void;
 }
 
-function useOptimizationParam(): number {
-  const params = new URLSearchParams(window.location.search);
-  return parseInt(params.get("opt") ?? "1", 10);
+function getOptimizationParam(): OptLevel {
+  const opt = new URLSearchParams(window.location.search).get("opt") ?? "1";
+  return isOptLevel(opt) ? opt : "1";
 }
 
 export function EmbedReplPage() {
-  const optimization = useOptimizationParam();
+  const optimization = getOptimizationParam();
   const {
     systemFiles,
     reloadSystemFiles,
@@ -50,12 +50,6 @@ export function EmbedReplPage() {
     initialFiguresState
   );
   const replTerminalRef = useRef<TerminalMethods | null>(null);
-  const replWorkerRef = useRef<Worker | null>(null);
-  const inputSAB = useRef<SharedArrayBuffer | null>(createInputSAB());
-
-  const handlePlotInstruction = useCallback((instruction: PlotInstruction) => {
-    figuresDispatch(instruction);
-  }, []);
 
   const currentFig = useMemo(() => {
     const handles = Object.keys(figures.figs)
@@ -68,97 +62,34 @@ export function EmbedReplPage() {
 
   const hasFigures = currentFig !== null;
 
-  /** Sync system VFS changes to IndexedDB, then reload system files. */
-  const handleVfsChanges = useCallback(
-    async (changes: VfsChanges | undefined) => {
-      if (!changes) return;
-      const changed = await syncSystemVfsChanges(changes);
-      if (changed) {
-        reloadSystemFiles();
-      }
+  const worker = useNumblWorker(
+    {
+      onOutput: text => replTerminalRef.current?.writeOutput(text, false),
+      onPlotInstructions: instructions => {
+        for (const instr of instructions) figuresDispatch(instr);
+      },
+      onResult: msg => {
+        const term = replTerminalRef.current;
+        if (!msg.success && msg.error) term?.writeOutput(msg.error, true);
+        term?.writePrompt();
+        setIsReplExecuting(false);
+      },
+      // Sync system VFS changes to IndexedDB, then reload system files.
+      onVfsChanges: changes => {
+        void syncSystemVfsChanges(changes).then(changed => {
+          if (changed) reloadSystemFiles();
+        });
+      },
+      onWorkerError: e => {
+        replTerminalRef.current?.writeOutput(
+          `Worker error: ${e.message}`,
+          true
+        );
+        setIsReplExecuting(false);
+      },
     },
-    [reloadSystemFiles]
+    { optimization }
   );
-
-  // Initialize REPL worker
-  useEffect(() => {
-    const worker = new Worker(new URL("../numbl-worker.ts", import.meta.url), {
-      type: "module",
-    });
-    replWorkerRef.current = worker;
-
-    if (inputSAB.current) {
-      worker.postMessage({
-        type: "set_input_sab",
-        inputSAB: inputSAB.current,
-      });
-    }
-
-    worker.postMessage({
-      type: "set_optimization",
-      optimization,
-    });
-
-    worker.onmessage = e => {
-      const msg = e.data;
-      const term = replTerminalRef.current;
-
-      if (msg.type === "request-input") {
-        const response = prompt(msg.prompt ?? "") ?? "";
-        const sab = inputSAB.current;
-        if (sab) mainThreadRespond(sab, response);
-        return;
-      }
-
-      switch (msg.type) {
-        case "output":
-          if (term?.writeOutput) {
-            term.writeOutput(msg.text, false);
-          }
-          break;
-
-        case "drawnow":
-          if (msg.plotInstructions?.length) {
-            for (const instr of msg.plotInstructions as PlotInstruction[]) {
-              handlePlotInstruction(instr);
-            }
-          }
-          break;
-
-        case "result":
-          if (msg.success) {
-            if (msg.plotInstructions?.length) {
-              for (const instr of msg.plotInstructions as PlotInstruction[]) {
-                handlePlotInstruction(instr);
-              }
-            }
-          } else if (msg.error && term?.writeOutput) {
-            term.writeOutput(msg.error, true);
-          }
-          handleVfsChanges(msg.vfsChanges);
-          if (term?.writePrompt) {
-            term.writePrompt();
-          }
-          setIsReplExecuting(false);
-          break;
-
-        case "cleared":
-          break;
-      }
-    };
-
-    worker.onerror = (e: ErrorEvent) => {
-      const term = replTerminalRef.current;
-      if (term?.writeOutput) {
-        term.writeOutput(`Worker error: ${e.message}`, true);
-      }
-      setIsReplExecuting(false);
-    };
-
-    return () => {
-      worker.terminate();
-    };
-  }, [handlePlotInstruction, handleVfsChanges, optimization]);
 
   // Track that workspace needs updating when system files change
   const workspaceStale = useRef(true);
@@ -177,31 +108,30 @@ export function EmbedReplPage() {
       setIsReplExecuting(true);
 
       // Send latest workspace files if stale
-      if (workspaceStale.current && replWorkerRef.current) {
-        const [wsFiles, vfsFiles] = await Promise.all([
-          getSystemWorkspaceFiles(),
-          getSystemVfsFiles(),
-        ]);
-        replWorkerRef.current.postMessage({
-          type: "update_workspace",
-          workspaceFiles: wsFiles,
-          vfsFiles,
+      if (workspaceStale.current) {
+        const { workspaceFiles, vfsFiles } = await buildWorkerFiles({
+          getSystemVfsFiles,
+          getSystemWorkspaceFiles,
         });
+        worker.updateWorkspace(workspaceFiles, vfsFiles);
         workspaceStale.current = false;
       }
 
-      replWorkerRef.current?.postMessage({
-        type: "execute",
-        code: command,
-      });
+      worker.execute(command);
     },
-    [isReplExecuting, getSystemWorkspaceFiles, getSystemVfsFiles, navigate]
+    [
+      isReplExecuting,
+      getSystemWorkspaceFiles,
+      getSystemVfsFiles,
+      navigate,
+      worker,
+    ]
   );
 
   const handleReplClear = useCallback(() => {
     if (isReplExecuting) return;
-    replWorkerRef.current?.postMessage({ type: "clear" });
-  }, [isReplExecuting]);
+    worker.clear();
+  }, [isReplExecuting, worker]);
 
   const handleTerminalReady = useCallback((methods: TerminalMethods) => {
     replTerminalRef.current = methods;

@@ -1,4 +1,3 @@
-import { createInputSAB, mainThreadRespond } from "../syncInputChannel";
 import Editor, { OnMount } from "@monaco-editor/react";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
 import StopIcon from "@mui/icons-material/Stop";
@@ -11,14 +10,7 @@ import {
   Tabs,
   Typography,
 } from "@mui/material";
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useReducer,
-  useRef,
-  useState,
-} from "react";
+import { useCallback, useMemo, useReducer, useState } from "react";
 import {
   numblLanguageConfig,
   createNumblTokensProvider,
@@ -30,6 +22,8 @@ import {
   markSystemActivity,
 } from "../hooks/useMipCorePackage.js";
 import { syncSystemVfsChanges } from "../vfs/syncVfsChanges.js";
+import { useNumblWorker } from "../hooks/useNumblWorker.js";
+import { buildWorkerFiles } from "../buildWorkerFiles.js";
 import type { PlotInstruction } from "../numbl-core/plotting/types.js";
 import { FigureView } from "../graphics/FigureView.js";
 import {
@@ -116,8 +110,6 @@ export function EmbedPage() {
   // or the visible main script ("Running…"). null when idle.
   const [runPhase, setRunPhase] = useState<"preamble" | "main" | null>(null);
   const [outputTab, setOutputTab] = useState(0); // 0=Console, 1=Figure
-  const workerRef = useRef<Worker | null>(null);
-  const inputSAB = useRef<SharedArrayBuffer | null>(createInputSAB());
   const [figures, figuresDispatch] = useReducer(
     figuresReducer,
     initialFiguresState
@@ -154,78 +146,44 @@ export function EmbedPage() {
 
   const hasFigures = currentFig !== null;
 
-  const setupWorkerHandler = useCallback(
-    (worker: Worker) => {
-      worker.onmessage = e => {
-        const msg = e.data;
-        if (msg.type === "request-input") {
-          const response = prompt(msg.prompt ?? "") ?? "";
-          const sab = inputSAB.current;
-          if (sab) mainThreadRespond(sab, response);
-          return;
-        }
-        if (msg.type === "output") {
-          setOutput(prev => prev + msg.text);
-        } else if (msg.type === "preamble_done") {
-          // Preamble succeeded; the visible script is now running.
-          setRunPhase("main");
-        } else if (msg.type === "preamble_error") {
-          // Preamble failed — reveal its (otherwise hidden) output and error.
-          setIsRunning(false);
-          setRunPhase(null);
-          setOutputTab(0);
-          const preText = msg.text ? `${msg.text}\n` : "";
-          setOutput(
-            `${preText}Error while preparing this example:\n${formatDiagnostic(msg)}\n`
-          );
-        } else if (msg.type === "drawnow") {
-          if (msg.plotInstructions?.length) {
-            for (const instr of msg.plotInstructions) {
-              handlePlotInstruction(instr);
-            }
-          }
-        } else if (msg.type === "done") {
-          setIsRunning(false);
-          setRunPhase(null);
-          // Persist anything the run installed under /system/ (e.g. a package
-          // a preamble's `mip load --install` downloaded) to the durable system
-          // directory, so later runs and other embeds reuse it instead of
-          // re-downloading.
-          if (msg.vfsChanges) {
-            void syncSystemVfsChanges(msg.vfsChanges).then(changed => {
-              if (changed) reloadSystemFiles();
-            });
-          }
-          if (msg.plotInstructions?.length) {
-            for (const instr of msg.plotInstructions) {
-              handlePlotInstruction(instr);
-            }
-          }
-        } else if (msg.type === "error") {
-          setIsRunning(false);
-          setRunPhase(null);
-          setOutput(prev => prev + `\n${formatDiagnostic(msg)}\n`);
-        }
-      };
+  const worker = useNumblWorker({
+    onOutput: text => setOutput(prev => prev + text),
+    // Preamble succeeded; the visible script is now running.
+    onPreambleDone: () => setRunPhase("main"),
+    // Preamble failed — reveal its (otherwise hidden) output and error.
+    onPreambleError: msg => {
+      setIsRunning(false);
+      setRunPhase(null);
+      setOutputTab(0);
+      const preText = msg.text ? `${msg.text}\n` : "";
+      setOutput(
+        `${preText}Error while preparing this example:\n${formatDiagnostic(msg)}\n`
+      );
     },
-    [handlePlotInstruction, reloadSystemFiles]
-  );
-
-  // Initialize worker
-  useEffect(() => {
-    workerRef.current = new Worker(
-      new URL("../numbl-worker.ts", import.meta.url),
-      { type: "module" }
-    );
-    setupWorkerHandler(workerRef.current);
-
-    return () => {
-      workerRef.current?.terminate();
-    };
-  }, [setupWorkerHandler]);
+    onPlotInstructions: instructions => {
+      for (const instr of instructions) handlePlotInstruction(instr);
+    },
+    onDone: () => {
+      setIsRunning(false);
+      setRunPhase(null);
+    },
+    onError: msg => {
+      setIsRunning(false);
+      setRunPhase(null);
+      setOutput(prev => prev + `\n${formatDiagnostic(msg)}\n`);
+    },
+    // Persist anything the run installed under /system/ (e.g. a package a
+    // preamble's `mip load --install` downloaded) to the durable system
+    // directory, so later runs and other embeds reuse it instead of
+    // re-downloading.
+    onVfsChanges: changes => {
+      void syncSystemVfsChanges(changes).then(changed => {
+        if (changed) reloadSystemFiles();
+      });
+    },
+  });
 
   const handleRun = useCallback(async () => {
-    if (!workerRef.current) return;
     setIsRunning(true);
     setOutput("");
     setRunPhase(preamble.trim() ? "preamble" : "main");
@@ -236,40 +194,31 @@ export function EmbedPage() {
     // actively-used embed (see useMipCorePackage's inactivity policy).
     markSystemActivity();
 
-    const [wsFiles, vfsFiles] = await Promise.all([
-      getSystemWorkspaceFiles(),
-      getSystemVfsFiles(),
-    ]);
+    const { workspaceFiles, vfsFiles } = await buildWorkerFiles({
+      getSystemVfsFiles,
+      getSystemWorkspaceFiles,
+    });
 
-    workerRef.current.postMessage({
-      type: "run",
+    worker.run({
       code,
       preamble: preamble.trim() ? preamble : undefined,
       options: {
         displayResults: true,
         maxIterations: 10000000,
-        optimization: 1,
+        optimization: "1",
       },
-      workspaceFiles: wsFiles,
+      workspaceFiles,
       vfsFiles,
       mainFileName: "script.m",
-      inputSAB: inputSAB.current ?? undefined,
     });
-  }, [code, preamble, getSystemWorkspaceFiles, getSystemVfsFiles]);
+  }, [worker, code, preamble, getSystemWorkspaceFiles, getSystemVfsFiles]);
 
   const handleStop = useCallback(() => {
-    if (workerRef.current) {
-      workerRef.current.terminate();
-      workerRef.current = new Worker(
-        new URL("../numbl-worker.ts", import.meta.url),
-        { type: "module" }
-      );
-      setupWorkerHandler(workerRef.current);
-      setIsRunning(false);
-      setRunPhase(null);
-      setOutput(prev => prev + "\n--- Execution stopped ---\n");
-    }
-  }, [setupWorkerHandler]);
+    worker.restart();
+    setIsRunning(false);
+    setRunPhase(null);
+    setOutput(prev => prev + "\n--- Execution stopped ---\n");
+  }, [worker]);
 
   const handleEditorMount: OnMount = (_, monaco) => {
     if (
