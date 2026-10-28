@@ -32,8 +32,9 @@ interface JsArtifact {
 }
 
 export const jsBackend: JitBackend<JsArtifact> = {
-  lang: "js",
   prefix: "jit",
+  native: false,
+  strictDisplayGate: false,
 
   available: () => true,
 

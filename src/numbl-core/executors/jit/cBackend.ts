@@ -59,8 +59,9 @@ interface CArtifact {
 const runningLibs = new Set<string>();
 
 export const cBackend: JitBackend<CArtifact> = {
-  lang: "c",
   prefix: "cjit",
+  native: true,
+  strictDisplayGate: true,
 
   available: interp => !!interp.nativeBridge?.koffi,
 

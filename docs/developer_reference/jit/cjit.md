@@ -16,7 +16,7 @@ At `--opt 2` both the C-JIT and JS-JIT executors are registered, C-JIT first. C-
 
 What C-JIT can accept is gated by the input types (`typeOfValue` in executor classification, runtime value → compiler `Type`), `typeAdapterC.ts` (compiler `Type` → C decl, via `compilerTypeToCDecl`), and `valueAdapterC.ts` (`RuntimeValue` ↔ C ABI via koffi). Scalars (real double, logical) pass as `double`; tensors pass as the `jit_tensor_t` struct (real/imag pointers + dims). Types the adapter can't marshal cause the executor to decline: the spec still lowers, but the call routes to JS-JIT/interpreter instead. The callee owns its tensor params, so input data is copied into buffers from the `.so`'s exported `jit_malloc`; returned tensors are copied out and released with `jit_free`.
 
-A loop or top-level wrapper may leave an output unassigned (the loop variable and body locals of a zero-trip `for`). C has no unassigned state, so `compileSpecC` adds a flag output for each output that is not definitely assigned (`lowering/assignedFlags.ts`), and the host skips writing back an output whose flag is still 0.
+A loop or top-level wrapper may leave an output unassigned (the loop variable and body locals of a zero-trip `for`). C has no unassigned state, so the compile pipeline (for a target with `definiteAssignment`) adds a flag output for each output that is not definitely assigned (`lowering/assignedFlags.ts`), and the host skips writing back an output whose flag is still 0.
 
 ## Runtime errors: the raise channel
 
