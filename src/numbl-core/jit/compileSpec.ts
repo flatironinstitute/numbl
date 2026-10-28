@@ -55,7 +55,7 @@ export interface CompileSpecArgs {
    *  are reused. */
   lowerer: Lowerer;
   /** The function AST to specialize. Caller fetches via
-   *  `workspace.ctx.fileASTCache` or `workspace.resolve(...)`. */
+   *  `workspace.code.fileASTCache` or `workspace.resolve(...)`. */
   funcDecl: FuncStmt;
   /** Argument types for this specialization. Caller should already
    *  have stripped `exact`; `compileSpec` runs `withoutExact` again

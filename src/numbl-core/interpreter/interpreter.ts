@@ -4,8 +4,8 @@
  * Walks the parsed AST directly without lowering or codegen.
  * All dispatch decisions are made at runtime using actual values.
  *
- * Reuses LoweringContext and FunctionIndex from the lowering pipeline
- * for workspace registration, class extraction, and function resolution.
+ * Function and class lookup goes through the workspace's `CodeIndex` (and
+ * the `FunctionIndex` built from it).
  *
  * The Interpreter class is defined here with all fields.
  * Methods are split across:
@@ -17,21 +17,14 @@ import type { AbstractSyntaxTree } from "../parser/types.js";
 import type { Runtime } from "../runtime/runtime.js";
 import type { RuntimeValue } from "../runtime/types.js";
 import type { CallSite } from "../runtime/runtimeHelpers.js";
-import type {
-  LoweringContext,
-  FunctionIndex,
-} from "../lowering/loweringContext.js";
+import type { CodeIndex } from "../workspace/codeIndex.js";
+import type { FunctionIndex } from "../workspace/functionIndex.js";
 import { resolveFunction, type ResolvedTarget } from "../functionResolve.js";
-import type { ItemType } from "../lowering/itemTypes.js";
+import type { ItemType } from "../itemTypes.js";
 
-import {
-  Environment,
-  funcDefFromStmt,
-  type FunctionDef,
-  type ControlSignal,
-} from "./types.js";
+import { Environment, type FunctionDef, type ControlSignal } from "./types.js";
 import type { Stmt, Expr, LValue } from "../parser/types.js";
-import type { ClassInfo } from "../lowering/classInfo.js";
+import type { ClassInfo } from "../workspace/classInfo.js";
 import { Registry } from "../executors/registry.js";
 
 // ── Interpreter ──────────────────────────────────────────────────────────
@@ -40,15 +33,12 @@ export class Interpreter {
   /** @internal */ env: Environment;
   public ans: RuntimeValue | undefined;
 
-  /** @internal */ ctx: LoweringContext;
-  /** @internal */ functionIndex: FunctionIndex;
+  /** @internal */ code: CodeIndex;
   /** @internal */ rt: Runtime;
 
   /** @internal */ currentFile: string;
   /** @internal */ currentClassName: string | undefined;
   /** @internal */ currentMethodName: string | undefined;
-
-  /** @internal */ mainLocalFunctions = new Map<string, FunctionDef>();
 
   /** @internal The main script (workspace) environment — for evalin/assignin('workspace', ...) */
   workspaceEnv: Environment | undefined;
@@ -155,15 +145,12 @@ export class Interpreter {
 
   constructor(
     rt: Runtime,
-    ctx: LoweringContext,
-    functionIndex: FunctionIndex,
-    mainFileName: string,
+    code: CodeIndex,
     initialVariableValues?: Record<string, RuntimeValue>
   ) {
     this.rt = rt;
-    this.ctx = ctx;
-    this.functionIndex = functionIndex;
-    this.currentFile = mainFileName;
+    this.code = code;
+    this.currentFile = code.mainFileName;
     this.env = new Environment();
     this.env.rt = rt;
     if (initialVariableValues) {
@@ -178,11 +165,15 @@ export class Interpreter {
     this.registry = new Registry();
   }
 
+  /** @internal The current function index (rebuilt after addpath/rmpath/cd). */
+  get functionIndex(): FunctionIndex {
+    return this.code.functionIndex;
+  }
+
   /** Clear all JIT and function resolution caches. Called after addpath/rmpath. */
   clearAllCaches(): void {
     this.functionDefCache.clear();
     this.compileInProgress.clear();
-    this.ctx.registry.fileContexts.clear();
     this.rt.classMethodCache.clear();
     this.registry.clearCache();
   }
@@ -216,24 +207,30 @@ export class Interpreter {
     this.rt.resolveClassMethod = (className: string, methodName: string) => {
       // Check if the method actually exists before returning a wrapper
       if (
-        !this.ctx.classHasMethod(className, methodName) &&
-        !this.ctx.classHasStaticMethod(className, methodName)
+        !this.code.classes.hasMethod(className, methodName) &&
+        !this.code.classes.hasStaticMethod(className, methodName)
       ) {
         // Check if it's a constructor
-        const classInfo = this.ctx.getClassInfo(className);
+        const classInfo = this.code.classes.get(className);
         if (!classInfo || classInfo.constructorName !== methodName) {
           // Check external method files
           const found =
             !!classInfo &&
-            this.ctx
-              .classLineage(classInfo)
+            this.code.classes
+              .lineage(classInfo)
               .some(c => c.externalMethodFiles.has(methodName));
           if (!found) return null;
         }
       }
 
-      const definingClass = this.ctx.findDefiningClass(className, methodName);
-      const isStatic = this.ctx.classHasStaticMethod(definingClass, methodName);
+      const definingClass = this.code.classes.findDefiningClass(
+        className,
+        methodName
+      );
+      const isStatic = this.code.classes.hasStaticMethod(
+        definingClass,
+        methodName
+      );
       return (nargout: number, ...args: unknown[]) => {
         const target: ResolvedTarget = {
           kind: "classMethod",
@@ -249,7 +246,7 @@ export class Interpreter {
     };
 
     this.rt.getClassAncestors = (className: string) =>
-      this.ctx.classAncestors(className);
+      this.code.classes.ancestors(className);
   }
 
   /** Run a complete AST (main script). */
@@ -257,23 +254,15 @@ export class Interpreter {
     // Remember the workspace (main script) environment
     this.workspaceEnv = this.env;
 
-    // First pass: collect local function definitions
-    for (const stmt of ast.body) {
-      if (stmt.type === "Function") {
-        this.mainLocalFunctions.set(stmt.name, funcDefFromStmt(stmt));
-      }
-    }
-
-    // Second pass: execute non-function, non-classdef statements
+    // Execute non-function, non-classdef statements. The main file's local
+    // functions were registered with the code index by executeCode.
     const nonFuncStmts = ast.body.filter(
       s => s.type !== "Function" && s.type !== "ClassDef"
     );
-    if (nonFuncStmts.length === 0 && this.mainLocalFunctions.size > 0) {
+    const firstFn = this.code.mainLocalFunctions.keys().next().value;
+    if (nonFuncStmts.length === 0 && firstFn !== undefined) {
       // Function file: call the first function with 0 args
-      const firstFn = this.mainLocalFunctions.values().next().value;
-      if (firstFn) {
-        this.callUserFunction(firstFn, [], 0);
-      }
+      this.callUserFunction(this.findMainLocalFunction(firstFn)!, [], 0);
     } else {
       // First, try to handle the entire script body as a unit (top-level
       // JIT). If a whole-scope executor takes it, the per-stmt loop is
@@ -406,6 +395,7 @@ export class Interpreter {
   ) => T;
   declare getWorkspaceFileName: (funcName: string) => string;
   declare getClassFileName: (className: string) => string;
+  declare findMainLocalFunction: (funcName: string) => FunctionDef | null;
   declare findFunctionInWorkspaceFile: (
     wsName: string,
     funcName: string

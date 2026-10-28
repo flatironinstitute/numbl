@@ -14,11 +14,7 @@ export const HANDLE_BASE_CLASSES = new Set([
   "hgsetget",
 ]);
 
-/**
- * Metadata about a class definition.
- * The ctx field is typed as 'unknown' to avoid circular dependencies with LoweringContext.
- * At runtime, it will hold a LoweringContext instance.
- */
+/** Metadata about a class definition. */
 export interface ClassInfo {
   name: string; // e.g. "Rectangle_"
   qualifiedName: string; // e.g. "Rectangle_" or "geometry.Circle"
@@ -38,8 +34,6 @@ export interface ClassInfo {
   isOldStyle?: boolean; // true for pre-classdef @folder classes (constructor is a plain function calling class(s,'name'))
   inferiorClasses: string[]; // classes declared inferior via InferiorClasses attribute
   externalMethodFiles: Map<string, { fileName: string; source: string }>; // method name → file info (for @folder methods)
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  ctx?: any; // lazily created lowering context (typed as any to avoid circular deps)
 }
 
 /**

@@ -3,7 +3,7 @@
  */
 
 import { allocFloat64Array } from "./alloc.js";
-import { ItemType } from "../lowering/itemTypes.js";
+import { ItemType } from "../itemTypes.js";
 import {
   type RuntimeNumber,
   RuntimeTensor,
@@ -224,10 +224,8 @@ export const getItemTypeFromRuntimeValue = (value: RuntimeValue): ItemType => {
         length: "unknown", // do not include length or we get too many jits
       };
     case "struct": {
-      const knownFields: Record<
-        string,
-        import("../lowering/itemTypes.js").ItemType
-      > = {};
+      const knownFields: Record<string, import("../itemTypes.js").ItemType> =
+        {};
       for (const [k, v] of value.fields) {
         knownFields[k] = getItemTypeFromRuntimeValue(v);
       }

@@ -42,8 +42,8 @@ import {
   type RuntimeClassInstance,
 } from "../runtime/types.js";
 import { getItemTypeFromRuntimeValue } from "../runtime/constructors.js";
-import { type ItemType } from "../lowering/itemTypes.js";
-import { BinaryOperation } from "../lowering/index.js";
+import { type ItemType } from "../itemTypes.js";
+import { BinaryOperation } from "../parser/index.js";
 import { getConstant } from "../helpers/constants.js";
 import { globToRegExp } from "../helpers/glob.js";
 import { COLON_SENTINEL, END_SENTINEL } from "./sentinels.js";
@@ -281,9 +281,8 @@ export class Runtime {
     (nargout: number, args: unknown[]) => unknown
   > = {};
 
-  // JIT compilation callback: compiles and evaluates a specialized function at
-  // runtime. Set by executeCode() to close over the LoweringContext and Codegen.
-  // The callback handles the full resolution chain (local → class method →
+  // Function resolution callback: resolves a name to a callable user
+  // function. Set by Interpreter.installRuntimeCallbacks(). The callback handles the full resolution chain (local → class method →
   // workspace) internally, using callSite for context. Returns the callable
   // function or null if nothing was found.
   public compileSpecialized:

@@ -5,7 +5,7 @@
  * None of these depend on the Runtime class instance.
  */
 
-import { BinaryOperation } from "../lowering/index.js";
+import { BinaryOperation } from "../parser/index.js";
 import {
   type RuntimeValue,
   type RuntimeLogical,

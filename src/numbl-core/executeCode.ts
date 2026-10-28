@@ -1,7 +1,7 @@
 /**
  * Entry point for code execution.
  *
- * Parses source, sets up the LoweringContext and Runtime,
+ * Parses source, indexes the workspace, sets up the Runtime,
  * creates an Interpreter, and runs the AST.
  */
 
@@ -23,9 +23,8 @@ import {
 } from "../numbl-core/runtime/index.js";
 import type { NativeBridge } from "./workspace/index.js";
 import { Workspace, SHIM_SEARCH_PATH } from "./workspace/workspace.js";
-import { parseMFile, type Stmt } from "./parser/index.js";
+import { parseMFile } from "./parser/index.js";
 import { Interpreter } from "./interpreter/interpreter.js";
-import { LoweringContext } from "./lowering/loweringContext.js";
 import { stdlibFiles, shimFiles } from "./stdlib-bundle.js";
 import { resetAppdataStore } from "./interpreter/builtins/misc.js";
 import { registerExecutorsForOpt } from "./executors/plugins.js";
@@ -169,28 +168,18 @@ export function executeCode(
     options.log("AST parsed, starting interpretation");
   }
 
-  // Separate local functions and class definitions from main body
-  const isRepl = mainFileName === "repl";
-  const localFunctions: (Stmt & { type: "Function" })[] = [];
-  const localClasses: (Stmt & { type: "ClassDef" })[] = [];
-  for (const stmt of ast.body) {
-    if (stmt.type === "Function") {
-      if (isRepl) {
-        throw new RuntimeError(
-          "Function definitions are not supported in the REPL. Save the function to a .m file instead.",
-          stmt.span
-        );
-      }
-      localFunctions.push(stmt);
-    } else if (stmt.type === "ClassDef") {
-      localClasses.push(stmt);
+  if (mainFileName === "repl") {
+    const fn = ast.body.find(s => s.type === "Function");
+    if (fn) {
+      throw new RuntimeError(
+        "Function definitions are not supported in the REPL. Save the function to a .m file instead.",
+        fn.span
+      );
     }
   }
 
-  // ── 2. Set up LoweringContext for resolution ────────────────────────
-  const ctx = new LoweringContext(source, mainFileName);
-
-  const ws = new Workspace(ctx, options.fileIO, nativeBridge);
+  // ── 2. Index the workspace for function resolution ──────────────────
+  const ws = new Workspace(mainFileName, source, options.fileIO, nativeBridge);
   ws.load(
     workspaceFiles ?? [],
     searchPaths ?? [],
@@ -204,13 +193,9 @@ export function executeCode(
       })),
     ]
   );
-  ctx.fileASTCache.set(mainFileName, ast);
-  for (const fn of localFunctions) ctx.registerLocalFunctionAST(fn);
-  for (const cls of localClasses) ctx.registerLocalClass(cls);
+  ws.code.setMainFile(ast);
   ws.register();
-
-  // Build function index (enables definitive resolution)
-  const functionIndex = ctx.buildFunctionIndex();
+  ws.code.buildFunctionIndex();
 
   // ── 3. Create runtime ──────────────────────────────────────────────
   const rt = new Runtime(options, options.initialVariableValues);
@@ -223,9 +208,7 @@ export function executeCode(
   // ── 4. Create interpreter and wire up runtime callbacks ────────────
   const interpreter = new Interpreter(
     rt,
-    ctx,
-    functionIndex,
-    mainFileName,
+    ws.code,
     options.initialVariableValues
   );
 
@@ -270,10 +253,10 @@ export function executeCode(
   interpreter.installRuntimeCallbacks();
 
   // Expose search paths reference on the runtime (for path() builtin)
-  rt.searchPaths = ctx.registry.searchPaths;
+  rt.searchPaths = ws.code.searchPaths;
 
   const applyWorkspace = () => {
-    interpreter.functionIndex = ws.rebuild();
+    ws.rebuild();
     interpreter.clearAllCaches();
   };
   rt.onPathChange = (action, dir, position) => {

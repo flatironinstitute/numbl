@@ -1,14 +1,11 @@
 /**
  * The files visible to a run: the caller's workspace files, the implicit cwd,
  * the search path and the bundled stdlib. Keeps them in sync with addpath,
- * rmpath and cd, and registers them with the LoweringContext for function
+ * rmpath and cd, and registers them with its `CodeIndex` for function
  * resolution.
  */
 
-import type {
-  LoweringContext,
-  FunctionIndex,
-} from "../lowering/loweringContext.js";
+import { CodeIndex } from "./codeIndex.js";
 import type { FileIOAdapter } from "../fileIOAdapter.js";
 import type { SystemAdapter } from "../systemAdapter.js";
 import type { WorkspaceFile, NativeBridge } from "./types.js";
@@ -28,6 +25,8 @@ const isUnder = (name: string, dir: string) =>
   name === dir || name.startsWith(withSep(dir));
 
 export class Workspace {
+  /** Functions and classes defined by the files, by name. */
+  readonly code: CodeIndex;
   readonly mFiles: WorkspaceFile[] = [];
   readonly jsFiles: WorkspaceFile[] = [];
   readonly wasmFiles: WorkspaceFile[] = [];
@@ -44,13 +43,16 @@ export class Workspace {
   onFileRemoved?: (name: string) => void;
 
   constructor(
-    private readonly ctx: LoweringContext,
+    mainFileName: string,
+    mainSource: string,
     private readonly fileIO: FileIOAdapter | undefined,
     private readonly nativeBridge: NativeBridge | undefined
-  ) {}
+  ) {
+    this.code = new CodeIndex(mainFileName, mainSource);
+  }
 
   get searchPaths(): string[] {
-    return this.ctx.registry.searchPaths;
+    return this.code.searchPaths;
   }
 
   private resolve(dir: string): string {
@@ -61,7 +63,7 @@ export class Workspace {
    *  is skipped with a warning rather than aborting the run. */
   private parse(f: WorkspaceFile): boolean {
     try {
-      this.ctx.fileASTCache.set(f.name, parseMFile(f.source, f.name));
+      this.code.fileASTCache.set(f.name, parseMFile(f.source, f.name));
       return true;
     } catch (e) {
       if (e instanceof SyntaxError) {
@@ -144,17 +146,18 @@ export class Workspace {
     }
   }
 
-  /** Register the current files and .numbl.js functions with the context. */
+  /** Register the current files and .numbl.js functions with the code
+   *  index. */
   register(): void {
-    if (this.mFiles.length > 0) this.ctx.registerWorkspaceFiles(this.mFiles);
+    if (this.mFiles.length > 0) this.code.registerWorkspaceFiles(this.mFiles);
     for (const e of this.jsFunctions) {
-      this.ctx.registerJsUserFunction(e.name, e.fileName, e.builtin, e.help);
+      this.code.registerJsUserFunction(e.name, e.fileName, e.builtin, e.help);
     }
   }
 
-  /** Re-sort the files by search-path priority, re-register them and return
-   *  a fresh function index. */
-  rebuild(): FunctionIndex {
+  /** Re-sort the files by search-path priority, re-register them and
+   *  rebuild the function index. */
+  rebuild(): void {
     const paths = this.searchPaths;
     // A file belongs to its LONGEST matching search path: with /a as the cwd
     // and /a/b on the path, /a/b/c.m belongs to /a/b.
@@ -173,10 +176,10 @@ export class Workspace {
     this.jsFunctions.sort(
       (a, b) => priorityOf(a.fileName) - priorityOf(b.fileName)
     );
-    this.ctx.clearWorkspaceRegistrations();
+    this.code.clearWorkspaceRegistrations();
     this.register();
     this.modified = true;
-    return this.ctx.buildFunctionIndex();
+    this.code.buildFunctionIndex();
   }
 
   /** Scan a directory: parse its .m files not already known, and (re)load
@@ -195,7 +198,7 @@ export class Workspace {
     const newWasm: WorkspaceFile[] = [];
     for (const f of files) {
       if (f.name.endsWith(".m")) {
-        if (this.ctx.fileASTCache.has(f.name) || !this.parse(f)) continue;
+        if (this.code.fileASTCache.has(f.name) || !this.parse(f)) continue;
         this.mFiles.push(f);
         this.onFileAdded?.(f);
       } else if (isNumblJsFile(f.name)) {
@@ -225,7 +228,7 @@ export class Workspace {
     for (let i = this.mFiles.length - 1; i >= 0; i--) {
       const name = this.mFiles[i].name;
       if (!drop(name)) continue;
-      this.ctx.fileASTCache.delete(name);
+      this.code.fileASTCache.delete(name);
       this.onFileRemoved?.(name);
       this.mFiles.splice(i, 1);
     }

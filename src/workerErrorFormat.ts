@@ -8,7 +8,6 @@ import {
   CancellationError,
 } from "./numbl-core/runtime/index.js";
 import { SyntaxError } from "./numbl-core/parser/index.js";
-import { SemanticError } from "./numbl-core/lowering/errors.js";
 
 export function extractSnippetByLine(
   source: string,
@@ -38,7 +37,7 @@ export function extractSnippetByLine(
 
 export function formatError(
   message: string,
-  errorType: "syntax" | "semantic" | "runtime" | "unknown",
+  errorType: "syntax" | "runtime" | "unknown",
   line: number | null,
   snippet: string | null
 ): string {
@@ -46,11 +45,9 @@ export function formatError(
   const errorKind =
     errorType === "syntax"
       ? "Syntax error"
-      : errorType === "semantic"
-        ? "Semantic error"
-        : errorType === "runtime"
-          ? "Runtime error"
-          : "Error";
+      : errorType === "runtime"
+        ? "Runtime error"
+        : "Error";
   const loc = line !== null ? `at line ${line}` : null;
   parts.push(loc ? `${errorKind} ${loc}:` : `${errorKind}:`);
   parts.push(`  ${message}`);
@@ -87,22 +84,6 @@ export function formatExecuteError(
         : null;
     return {
       message: formatError(error.message, "syntax", error.line, snippet),
-      cancelled: false,
-    };
-  }
-  if (error instanceof SemanticError && error.span !== null) {
-    const snippet =
-      error.line !== null
-        ? extractSnippetByLine(code, error.line, 2, error.column)
-        : null;
-    return {
-      message: formatError(error.message, "semantic", error.line, snippet),
-      cancelled: false,
-    };
-  }
-  if (error instanceof SemanticError) {
-    return {
-      message: formatError(error.message, "semantic", null, null),
       cancelled: false,
     };
   }

@@ -10,7 +10,7 @@ For a conceptual orientation to how the system fits together — the compiler pi
 
 ## Architecture
 
-The execution pipeline is: Parse → AST-walk via the `Interpreter` class (`src/numbl-core/interpreter/`). The `LoweringContext` handles workspace/function resolution. New builtins and features go in `src/numbl-core/interpreter/builtins/`.
+The execution pipeline is: Parse → AST-walk via the `Interpreter` class (`src/numbl-core/interpreter/`). The `Workspace` (`src/numbl-core/workspace/`) tracks the visible files and owns a `CodeIndex` (parsed ASTs, function and class names, the `ClassTable`) from which it builds the `FunctionIndex` that `resolveFunction` uses to resolve calls. New builtins and features go in `src/numbl-core/interpreter/builtins/`.
 
 ### Interpreter builtins (IBuiltins)
 

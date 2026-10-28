@@ -35,7 +35,7 @@ import {
   range as runtimeRange,
 } from "../runtime/runtimeOperators.js";
 import { resolveFunction, type ResolvedTarget } from "../functionResolve.js";
-import type { FunctionIndex } from "../lowering/loweringContext.js";
+import type { FunctionIndex } from "../workspace/functionIndex.js";
 
 import {
   BreakSignal,
@@ -611,7 +611,7 @@ export function evalExprNargout(
       const args = this.evalArgs(expr.args);
       const objVal = this.env.get(expr.methodName);
       if (objVal !== undefined) {
-        const superClassInfo = this.ctx.getClassInfo(expr.superClassName);
+        const superClassInfo = this.code.classes.get(expr.superClassName);
         if (superClassInfo && superClassInfo.constructorName) {
           const superResult = this.interpretConstructor(
             superClassInfo,
@@ -1197,7 +1197,7 @@ export function makeFuncHandle(this: Interpreter, name: string): RuntimeValue {
   if (dotIdx > 0) {
     const className = name.slice(0, dotIdx);
     const methodName = name.slice(dotIdx + 1);
-    if (this.ctx.getClassInfo(className)) {
+    if (this.code.classes.get(className)) {
       const fn = RTV.func(name, "builtin");
       fn.jsFn = (nargout: unknown, ...rest: unknown[]) => {
         const actualArgs = Array.isArray(rest[0])

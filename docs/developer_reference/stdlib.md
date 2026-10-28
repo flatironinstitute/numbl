@@ -6,7 +6,7 @@ Examples include `inputParser`, `readmatrix`, and a collection of namespace shim
 
 ## Why it is bundled
 
-The CLI can read `.m` files from disk, but the browser web app cannot. To make the same stdlib available in both, the stdlib files are embedded into the core at build time as a single generated TypeScript module. The module exports arrays of `{ name, source }` pairs that `executeCode` injects into every run's `LoweringContext` as pre-registered workspace files.
+The CLI can read `.m` files from disk, but the browser web app cannot. To make the same stdlib available in both, the stdlib files are embedded into the core at build time as a single generated TypeScript module. The module exports arrays of `{ name, source }` pairs that `executeCode` injects into every run's `Workspace` (and so its `CodeIndex`) as pre-registered workspace files.
 
 There are two arrays:
 

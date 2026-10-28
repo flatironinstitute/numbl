@@ -18,7 +18,7 @@
  * produce a logical array the size of the member array.
  */
 
-import { BinaryOperation } from "../lowering/index.js";
+import { BinaryOperation } from "../parser/index.js";
 import { toNumber } from "./convert.js";
 import { RTV } from "./constructors.js";
 import { RuntimeError } from "./error.js";

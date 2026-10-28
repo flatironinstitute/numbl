@@ -199,7 +199,7 @@ export class BrowserFileIOAdapter implements FileIOAdapter {
     // Mirrors cli-scan.ts: only top-level .m/.numbl.js/.wasm files, plus
     // files inside @class/, +pkg/, and private/ subdirectories (recursively).
     // Files are stored with their absolute VFS path in `name` so that
-    // search-path prefix matching in the lowering context works correctly.
+    // search-path prefix matching in the code index works correctly.
     for (const filePath of this.vfs.allFiles()) {
       if (!filePath.startsWith(prefix)) continue;
       const relativePath = filePath.slice(prefix.length);

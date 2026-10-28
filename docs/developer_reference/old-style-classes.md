@@ -12,7 +12,7 @@ handles construction, dispatch, and indexing.
 
 Implemented across: the 2-arg `class(struct,'name')` constructor + `isobject`
 (`interpreter/builtins/introspection.ts`); old-style `@folder` registration
-(`lowering/classInfo.ts` `makeOldStyleClassInfo`, `lowering/loweringContext.ts`);
+(`workspace/classInfo.ts` `makeOldStyleClassInfo`, `workspace/codeIndex.ts`);
 the construction path (`interpreter/interpreterFunctions.ts` `instantiateClass`);
 object-array growth (`runtime/runtimeIndexing.ts` `indexStore`,
 `runtime/constructors.ts` `RTV.classInstanceArray`); JIT skip
@@ -45,7 +45,7 @@ GeoPDEs is built entirely on the old-style class system: 6 `@ClassName` folders
 `@sp_multipatch`, `@sp_multipatch_C1`), **zero `classdef` files**, and `obj =
 class(struct, 'name')` constructors. numbl today only registers `@ClassName`
 folders that contain a `classdef` file and explicitly _skips_ folder-classes
-without one (`loweringContext.ts`, the `if (!group.classDefFile) continue;`
+without one (then `loweringContext.ts`, now `codeIndex.ts`; the `if (!group.classDefFile) continue;`
 branch). The first wall is:
 
 ```
@@ -285,12 +285,12 @@ Concrete touch points for the implementer (paths relative to repo root):
   (`class` builtin currently 1-arg only). Build a `RuntimeClassInstance` from the
   struct's fields, `isHandleClass=false`. Validate/record the field-name set.
 - **Class-folder registration without `classdef`** —
-  `src/numbl-core/lowering/loweringContext.ts`, the `classFolderGroups` loop. The
+  `src/numbl-core/workspace/codeIndex.ts`, the `classFolderGroups` loop. The
   `if (!group.classDefFile) continue;` branch must instead register an _old-style_
   class: synthesize a `ClassInfo` whose constructor is `@Name/Name.m`, whose
   `methodNames`/`externalMethodFiles` are the other `.m` files, with a flag (e.g.
   `isOldStyle: true`) and no property declarations. `ClassInfo` is defined in
-  `src/numbl-core/lowering/classInfo.ts`.
+  `src/numbl-core/workspace/classInfo.ts`.
 - **Function-call method dispatch on the leftmost object arg** — the resolution
   path used by `dispatch()` in `src/numbl-core/runtime/runtimeDispatch.ts` and
   `resolveClassMethod` in `src/numbl-core/interpreter/interpreter.ts` /
