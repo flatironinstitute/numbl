@@ -133,29 +133,17 @@ function complexComparisonOp(
   // scalar op tensor
   if (ac.scalar && !bc.scalar) {
     const len = bc.re.length;
-    if (
-      bc.re instanceof Float64Array &&
-      (!bc.im || bc.im instanceof Float64Array)
-    ) {
-      const result = allocFloat64Array(len);
-      tensorOps.complexScalarComparison(
-        opCode,
-        len,
-        ac.re,
-        ac.im,
-        bc.re,
-        bc.im as Float64Array | null,
-        true,
-        result
-      );
-      const t = RTV.tensor(result, bc.shape);
-      t._isLogical = true;
-      return t;
-    }
     const result = allocFloat64Array(len);
-    for (let i = 0; i < len; i++) {
-      result[i] = op(ac.re, ac.im, bc.re[i], bc.im[i]) ? 1 : 0;
-    }
+    tensorOps.complexScalarComparison(
+      opCode,
+      len,
+      ac.re,
+      ac.im,
+      bc.re,
+      bc.im,
+      true,
+      result
+    );
     const t = RTV.tensor(result, bc.shape);
     t._isLogical = true;
     return t;
@@ -164,29 +152,17 @@ function complexComparisonOp(
   // tensor op scalar
   if (!ac.scalar && bc.scalar) {
     const len = ac.re.length;
-    if (
-      ac.re instanceof Float64Array &&
-      (!ac.im || ac.im instanceof Float64Array)
-    ) {
-      const result = allocFloat64Array(len);
-      tensorOps.complexScalarComparison(
-        opCode,
-        len,
-        bc.re,
-        bc.im,
-        ac.re,
-        ac.im as Float64Array | null,
-        false,
-        result
-      );
-      const t = RTV.tensor(result, ac.shape);
-      t._isLogical = true;
-      return t;
-    }
     const result = allocFloat64Array(len);
-    for (let i = 0; i < len; i++) {
-      result[i] = op(ac.re[i], ac.im[i], bc.re, bc.im) ? 1 : 0;
-    }
+    tensorOps.complexScalarComparison(
+      opCode,
+      len,
+      bc.re,
+      bc.im,
+      ac.re,
+      ac.im,
+      false,
+      result
+    );
     const t = RTV.tensor(result, ac.shape);
     t._isLogical = true;
     return t;
@@ -213,30 +189,16 @@ function complexComparisonOp(
     at.shape.every((d, i) => d === bt.shape[i])
   ) {
     const len = at.re.length;
-    if (
-      at.re instanceof Float64Array &&
-      bt.re instanceof Float64Array &&
-      (!at.im || at.im instanceof Float64Array) &&
-      (!bt.im || bt.im instanceof Float64Array)
-    ) {
-      const result = allocFloat64Array(len);
-      tensorOps.complexComparison(
-        opCode,
-        len,
-        at.re,
-        at.im as Float64Array | null,
-        bt.re,
-        bt.im as Float64Array | null,
-        result
-      );
-      const t = RTV.tensor(result, at.shape);
-      t._isLogical = true;
-      return t;
-    }
     const result = allocFloat64Array(len);
-    for (let i = 0; i < len; i++) {
-      result[i] = op(at.re[i], at.im[i], bt.re[i], bt.im[i]) ? 1 : 0;
-    }
+    tensorOps.complexComparison(
+      opCode,
+      len,
+      at.re,
+      at.im,
+      bt.re,
+      bt.im,
+      result
+    );
     const t = RTV.tensor(result, at.shape);
     t._isLogical = true;
     return t;
@@ -298,27 +260,25 @@ function complexBinaryOp(
     const aScalarParts = scalarComplexParts(a);
     const bScalarParts = scalarComplexParts(b);
     if (aScalarParts && isRuntimeTensor(b) && b.data.length > 1) {
-      const nr = tryNativeComplexScalarTensor(
+      return complexScalarTensorElemwise(
         aScalarParts.re,
         aScalarParts.im,
-        b.data as Float64Array,
-        b.imag as Float64Array | undefined,
+        b.data,
+        b.imag,
         b.shape,
         nativeOpCode,
         /*scalarOnLeft=*/ true
       );
-      if (nr) return nr;
     } else if (bScalarParts && isRuntimeTensor(a) && a.data.length > 1) {
-      const nr = tryNativeComplexScalarTensor(
+      return complexScalarTensorElemwise(
         bScalarParts.re,
         bScalarParts.im,
-        a.data as Float64Array,
-        a.imag as Float64Array | undefined,
+        a.data,
+        a.imag,
         a.shape,
         nativeOpCode,
         /*scalarOnLeft=*/ false
       );
-      if (nr) return nr;
     }
   }
 
@@ -443,17 +403,14 @@ function matchSameShapeTensors(
 }
 
 /**
- * Element-wise op on two same-shape real tensors via the tensor-ops layer.
- * Returns null only when the data isn't Float64Array (USE_FLOAT32 build);
- * otherwise always succeeds (native if available, TS fallback otherwise).
+ * Element-wise op on two same-shape real tensors via the tensor-ops layer
+ * (native if available, TS fallback otherwise).
  */
-function tryNativeElemwiseReal(
+function tensorElemwiseReal(
   at: RuntimeTensor,
   bt: RuntimeTensor,
   opCode: number
-): RuntimeValue | null {
-  if (!(at.data instanceof Float64Array) || !(bt.data instanceof Float64Array))
-    return null;
+): RuntimeValue {
   const n = at.data.length;
   const out = allocFloat64Array(n);
   tensorOps.realBinaryElemwise(opCode, n, at.data, bt.data, out);
@@ -462,7 +419,7 @@ function tryNativeElemwiseReal(
 
 /**
  * Scalar-tensor element-wise op via the tensor-ops layer.
- * Returns null only when data isn't Float64Array; otherwise always succeeds.
+ * Returns null when the tensor is complex.
  */
 function tryNativeElemwiseScalar(
   scalar: number,
@@ -471,7 +428,6 @@ function tryNativeElemwiseScalar(
   scalarOnLeft: boolean
 ): RuntimeValue | null {
   if (tensor.imag) return null;
-  if (!(tensor.data instanceof Float64Array)) return null;
   const n = tensor.data.length;
   const out = allocFloat64Array(n);
   tensorOps.realScalarBinaryElemwise(
@@ -503,9 +459,9 @@ function scalarComplexParts(
 
 /**
  * Complex-scalar * (real or complex) tensor element-wise op via the
- * tensor-ops layer. Returns null only when the data isn't Float64Array.
+ * tensor-ops layer.
  */
-function tryNativeComplexScalarTensor(
+function complexScalarTensorElemwise(
   scalarRe: number,
   scalarIm: number,
   arrRe: Float64Array,
@@ -513,9 +469,7 @@ function tryNativeComplexScalarTensor(
   shape: number[],
   opCode: number,
   scalarOnLeft: boolean
-): RuntimeValue | null {
-  if (!(arrRe instanceof Float64Array)) return null;
-  if (arrIm && !(arrIm instanceof Float64Array)) return null;
+): RuntimeValue {
   const n = arrRe.length;
   const outRe = allocFloat64Array(n);
   const outIm = allocFloat64Array(n);
@@ -525,7 +479,7 @@ function tryNativeComplexScalarTensor(
     scalarRe,
     scalarIm,
     arrRe,
-    (arrIm as Float64Array | undefined) ?? null,
+    arrIm ?? null,
     scalarOnLeft,
     outRe,
     outIm
@@ -542,73 +496,38 @@ function tryNativeComplexScalarTensor(
 }
 
 /**
- * Element-wise op on two same-shape tensors where at least one is complex.
- * Uses the tensor-ops layer (native if available, TS fallback otherwise) for
- * Float64 data; falls back to the JS callback loop only for USE_FLOAT32 builds.
+ * Element-wise op on two same-shape tensors where at least one is complex,
+ * via the tensor-ops layer (native if available, TS fallback otherwise).
  */
 function tensorElemwiseComplex(
   at: RuntimeTensor,
   bt: RuntimeTensor,
-  opCode: number,
-  jsOp: (
-    aRe: number,
-    aIm: number,
-    bRe: number,
-    bIm: number
-  ) => { re: number; im: number }
+  opCode: number
 ): RuntimeValue {
-  if (at.data instanceof Float64Array && bt.data instanceof Float64Array) {
-    const n = at.data.length;
-    const outRe = allocFloat64Array(n);
-    const outIm = allocFloat64Array(n);
-    tensorOps.complexBinaryElemwise(
-      opCode,
-      n,
-      at.data,
-      (at.imag as Float64Array | undefined) ?? null,
-      bt.data,
-      (bt.imag as Float64Array | undefined) ?? null,
-      outRe,
-      outIm
-    );
-    // Drop outIm if result is purely real.
-    let isReal = true;
-    for (let i = 0; i < n; i++) {
-      if (outIm[i] !== 0) {
-        isReal = false;
-        break;
-      }
-    }
-    return isReal
-      ? RTV.tensorRaw(outRe, at.shape)
-      : RTV.tensor(outRe, at.shape, outIm);
-  }
-  const len = at.data.length;
-  const aIm = at.imag;
-  const bIm = bt.imag;
-  const resultRe = allocFloat64Array(len);
-  const resultIm = allocFloat64Array(len);
-  if (aIm && bIm) {
-    for (let i = 0; i < len; i++) {
-      const r = jsOp(at.data[i], aIm[i], bt.data[i], bIm[i]);
-      resultRe[i] = r.re;
-      resultIm[i] = r.im;
-    }
-  } else if (aIm) {
-    for (let i = 0; i < len; i++) {
-      const r = jsOp(at.data[i], aIm[i], bt.data[i], 0);
-      resultRe[i] = r.re;
-      resultIm[i] = r.im;
-    }
-  } else {
-    for (let i = 0; i < len; i++) {
-      const r = jsOp(at.data[i], 0, bt.data[i], bIm![i]);
-      resultRe[i] = r.re;
-      resultIm[i] = r.im;
+  const n = at.data.length;
+  const outRe = allocFloat64Array(n);
+  const outIm = allocFloat64Array(n);
+  tensorOps.complexBinaryElemwise(
+    opCode,
+    n,
+    at.data,
+    at.imag ?? null,
+    bt.data,
+    bt.imag ?? null,
+    outRe,
+    outIm
+  );
+  // Drop outIm if result is purely real.
+  let isReal = true;
+  for (let i = 0; i < n; i++) {
+    if (outIm[i] !== 0) {
+      isReal = false;
+      break;
     }
   }
-  const isReal = resultIm.every(x => x === 0);
-  return RTV.tensor(resultRe, at.shape, isReal ? undefined : resultIm);
+  return isReal
+    ? RTV.tensorRaw(outRe, at.shape)
+    : RTV.tensor(outRe, at.shape, outIm);
 }
 
 // ── Mixed real/complex multiply and divide ──────────────────────────────
@@ -814,22 +733,9 @@ export function mAdd(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
   if (m) {
     const [at, bt] = m;
     if (!at.imag && !bt.imag) {
-      const nr = tryNativeElemwiseReal(at, bt, ELEMWISE_ADD);
-      if (nr) return nr;
-      const len = at.data.length;
-      const result = allocFloat64Array(len);
-      for (let i = 0; i < len; i++) result[i] = at.data[i] + bt.data[i];
-      return RTV.tensorRaw(result, at.shape);
+      return tensorElemwiseReal(at, bt, ELEMWISE_ADD);
     }
-    return tensorElemwiseComplex(
-      at,
-      bt,
-      ELEMWISE_ADD,
-      (aRe, aIm, bRe, bIm) => ({
-        re: aRe + bRe,
-        im: aIm + bIm,
-      })
-    );
+    return tensorElemwiseComplex(at, bt, ELEMWISE_ADD);
   }
   if (isRuntimeSparseMatrix(a) || isRuntimeSparseMatrix(b))
     return mAddSparse(a, b);
@@ -878,22 +784,9 @@ export function mSub(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
   if (m) {
     const [at, bt] = m;
     if (!at.imag && !bt.imag) {
-      const nr = tryNativeElemwiseReal(at, bt, ELEMWISE_SUB);
-      if (nr) return nr;
-      const len = at.data.length;
-      const result = allocFloat64Array(len);
-      for (let i = 0; i < len; i++) result[i] = at.data[i] - bt.data[i];
-      return RTV.tensorRaw(result, at.shape);
+      return tensorElemwiseReal(at, bt, ELEMWISE_SUB);
     }
-    return tensorElemwiseComplex(
-      at,
-      bt,
-      ELEMWISE_SUB,
-      (aRe, aIm, bRe, bIm) => ({
-        re: aRe - bRe,
-        im: aIm - bIm,
-      })
-    );
+    return tensorElemwiseComplex(at, bt, ELEMWISE_SUB);
   }
   if (isRuntimeSparseMatrix(a) || isRuntimeSparseMatrix(b))
     return mSubSparse(a, b);
@@ -985,22 +878,9 @@ export function mElemMul(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
   if (m) {
     const [at, bt] = m;
     if (!at.imag && !bt.imag) {
-      const nr = tryNativeElemwiseReal(at, bt, ELEMWISE_MUL);
-      if (nr) return nr;
-      const len = at.data.length;
-      const result = allocFloat64Array(len);
-      for (let i = 0; i < len; i++) result[i] = at.data[i] * bt.data[i];
-      return RTV.tensorRaw(result, at.shape);
+      return tensorElemwiseReal(at, bt, ELEMWISE_MUL);
     }
-    return tensorElemwiseComplex(
-      at,
-      bt,
-      ELEMWISE_MUL,
-      (aRe, aIm, bRe, bIm) => ({
-        re: aRe * bRe - aIm * bIm,
-        im: aRe * bIm + aIm * bRe,
-      })
-    );
+    return tensorElemwiseComplex(at, bt, ELEMWISE_MUL);
   }
   if (isRuntimeSparseMatrix(a) || isRuntimeSparseMatrix(b))
     return mElemMulSparse(a, b);
@@ -1096,14 +976,9 @@ export function mElemDiv(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
   if (m) {
     const [at, bt] = m;
     if (!at.imag && !bt.imag) {
-      const nr = tryNativeElemwiseReal(at, bt, ELEMWISE_DIV);
-      if (nr) return nr;
-      const len = at.data.length;
-      const result = allocFloat64Array(len);
-      for (let i = 0; i < len; i++) result[i] = at.data[i] / bt.data[i];
-      return RTV.tensorRaw(result, at.shape);
+      return tensorElemwiseReal(at, bt, ELEMWISE_DIV);
     }
-    return tensorElemwiseComplex(at, bt, ELEMWISE_DIV, complexDivide);
+    return tensorElemwiseComplex(at, bt, ELEMWISE_DIV);
   }
   if (isRuntimeSparseMatrix(a) || isRuntimeSparseMatrix(b))
     return mElemDivSparse(a, b);
@@ -2131,24 +2006,15 @@ function comparisonOp(
   if (an.scalar && !bn.scalar) {
     const scalarVal = an.isComplex ? an.re : an.value;
     const len = bn.tensor.data.length;
-    if (bn.tensor.data instanceof Float64Array) {
-      const result = allocFloat64Array(len);
-      tensorOps.realScalarComparison(
-        opCode,
-        len,
-        scalarVal,
-        bn.tensor.data,
-        true,
-        result
-      );
-      const t = RTV.tensor(result, bn.tensor.shape);
-      t._isLogical = true;
-      return t;
-    }
     const result = allocFloat64Array(len);
-    for (let i = 0; i < len; i++) {
-      result[i] = op(scalarVal, bn.tensor.data[i]) ? 1 : 0;
-    }
+    tensorOps.realScalarComparison(
+      opCode,
+      len,
+      scalarVal,
+      bn.tensor.data,
+      true,
+      result
+    );
     const t = RTV.tensor(result, bn.tensor.shape);
     t._isLogical = true;
     return t;
@@ -2157,24 +2023,15 @@ function comparisonOp(
   if (!an.scalar && bn.scalar) {
     const scalarVal = bn.isComplex ? bn.re : bn.value;
     const len = an.tensor.data.length;
-    if (an.tensor.data instanceof Float64Array) {
-      const result = allocFloat64Array(len);
-      tensorOps.realScalarComparison(
-        opCode,
-        len,
-        scalarVal,
-        an.tensor.data,
-        false,
-        result
-      );
-      const t = RTV.tensor(result, an.tensor.shape);
-      t._isLogical = true;
-      return t;
-    }
     const result = allocFloat64Array(len);
-    for (let i = 0; i < len; i++) {
-      result[i] = op(an.tensor.data[i], scalarVal) ? 1 : 0;
-    }
+    tensorOps.realScalarComparison(
+      opCode,
+      len,
+      scalarVal,
+      an.tensor.data,
+      false,
+      result
+    );
     const t = RTV.tensor(result, an.tensor.shape);
     t._isLogical = true;
     return t;
@@ -2190,17 +2047,8 @@ function comparisonOp(
     at.shape.every((d, i) => d === bt.shape[i])
   ) {
     const len = at.data.length;
-    if (at.data instanceof Float64Array && bt.data instanceof Float64Array) {
-      const result = allocFloat64Array(len);
-      tensorOps.realComparison(opCode, len, at.data, bt.data, result);
-      const t = RTV.tensor(result, at.shape);
-      t._isLogical = true;
-      return t;
-    }
     const result = allocFloat64Array(len);
-    for (let i = 0; i < len; i++) {
-      result[i] = op(at.data[i], bt.data[i]) ? 1 : 0;
-    }
+    tensorOps.realComparison(opCode, len, at.data, bt.data, result);
     const t = RTV.tensor(result, at.shape);
     t._isLogical = true;
     return t;
@@ -2247,24 +2095,20 @@ function matMul(a: RuntimeTensor, b: RuntimeTensor): RuntimeValue {
   const isComplex = a.imag !== undefined || b.imag !== undefined;
 
   const bridge = getLapackBridge();
-  const f64ARe =
-    a.data instanceof Float64Array ? a.data : allocFloat64Array(a.data);
-  const f64BRe =
-    b.data instanceof Float64Array ? b.data : allocFloat64Array(b.data);
   if (!isComplex) {
-    const raw = bridge.matmul(f64ARe, aRows, aCols, f64BRe, bCols);
+    const raw = bridge.matmul(a.data, aRows, aCols, b.data, bCols);
     return unwrap1x1(RTV.tensor(raw, [aRows, bCols]));
   }
 
   const aIm = a.imag || allocFloat64Array(a.data.length);
   const bIm = b.imag || allocFloat64Array(b.data.length);
   const raw = bridge.matmulComplex(
-    f64ARe,
-    aIm instanceof Float64Array ? aIm : allocFloat64Array(aIm),
+    a.data,
+    aIm,
     aRows,
     aCols,
-    f64BRe,
-    bIm instanceof Float64Array ? bIm : allocFloat64Array(bIm),
+    b.data,
+    bIm,
     bCols
   );
   return unwrap1x1(RTV.tensor(raw.re, [aRows, bCols], raw.im));
