@@ -22,11 +22,12 @@ import { ensureRuntimeValue } from "../runtime/runtimeHelpers.js";
 import { allocFloat64Array } from "../runtime/alloc.js";
 import { incref, decref } from "../runtime/refcount.js";
 import { applyHandleProperty } from "../runtime/struct-access.js";
-import {
-  registerSpecial,
-  registerSpecialVoid,
-} from "../runtime/registerSpecial.js";
 import { getIBuiltin } from "../interpreter/builtins/types.js";
+import {
+  builtin,
+  type Arity,
+  type BuiltinSpec,
+} from "../interpreter/builtins/builtin.js";
 import {
   pcolorCall as _pcolorCall,
   lineCall as _lineCall,
@@ -61,25 +62,70 @@ const NO_AUTO_FIGURE = new Set([
   "cameratoolbar",
 ]);
 
+/** MATLAB implements most graphics functions as M-files (or P-files); these
+ *  are the built-in ones. Only the "too many" error identifiers differ. */
+const BUILTIN_NAMES = new Set([
+  "plot",
+  "plot3",
+  "line",
+  "patch",
+  "fill",
+  "surface",
+  "semilogx",
+  "semilogy",
+  "loglog",
+  "figure",
+  "set",
+  "drawnow",
+  "pause",
+]);
+
+type PlotFn = (
+  nargout: number,
+  args: RuntimeValue[],
+  rt: Runtime
+) => RuntimeValue | RuntimeValue[] | void;
+
+/** Arity metadata for a graphics builtin. Inputs are unchecked (the
+ *  argument parsers raise their own errors) unless given; `nargout`
+ *  defaults to one (an optional handle). */
+interface PlotArity {
+  nargin?: Arity;
+  nargout?: Arity;
+}
+
+function plotSpec(name: string, arity: PlotArity, fn: PlotFn): BuiltinSpec {
+  return {
+    name,
+    nargin: arity.nargin,
+    nargout: arity.nargout ?? 1,
+    mfile: !BUILTIN_NAMES.has(name),
+    apply: (args, nargout, ctx) => fn(nargout, args, ctx.rt),
+  };
+}
+
+/** Register a graphics builtin that needs no current figure. */
+function graphicsBuiltin(name: string, arity: PlotArity, fn: PlotFn): void {
+  builtin(plotSpec(name, arity, fn));
+}
+
 /** Register a plot builtin. Any graphics op other than those in
  *  NO_AUTO_FIGURE implies a current figure: register the implicit figure 1
  *  on first use so a later no-arg `figure` allocates a new handle. */
-function registerPlot(
-  name: string,
-  fn: (nargout: number, args: RuntimeValue[], rt: Runtime) => unknown
-): void {
-  registerSpecial(name, (nargout, args, rt) => {
-    if (!NO_AUTO_FIGURE.has(name)) rt.ensureCurrentFigure();
-    return fn(nargout, args, rt);
-  });
+function registerPlot(name: string, arity: PlotArity, fn: PlotFn): void {
+  builtin(
+    plotSpec(name, arity, (nargout, args, rt) => {
+      if (!NO_AUTO_FIGURE.has(name)) rt.ensureCurrentFigure();
+      return fn(nargout, args, rt);
+    })
+  );
 }
 
 // `pcolor` returns a graphics handle when an output is requested —
 // the dispatch table pushes the instruction, and we read back the
 // freshly-pushed trace for the handle. Override the loop entry.
-registerPlot("pcolor", (_nargout, args, rt) => {
-  const margs = args.map(a => ensureRuntimeValue(a));
-  _pcolorCall(rt.plotInstructions, margs);
+registerPlot("pcolor", {}, (_nargout, args, rt) => {
+  _pcolorCall(rt.plotInstructions, args);
   if (_nargout >= 1) {
     const last = rt.plotInstructions[rt.plotInstructions.length - 1];
     if (last && last.type === "pcolor") {
@@ -95,9 +141,8 @@ registerPlot("pcolor", (_nargout, args, rt) => {
 // (`pl = line(...)`). Like pcolor, the dispatch table pushes the
 // instruction and we wrap the freshly-pushed trace so later property
 // assignments (e.g. `pl.Color = 'green'`) update the rendered line.
-registerPlot("line", (_nargout, args, rt) => {
-  const margs = args.map(a => ensureRuntimeValue(a));
-  _lineCall(rt.plotInstructions, margs);
+registerPlot("line", {}, (_nargout, args, rt) => {
+  _lineCall(rt.plotInstructions, args);
   if (_nargout >= 1) {
     const last = rt.plotInstructions[rt.plotInstructions.length - 1];
     if (last && (last.type === "line" || last.type === "line3")) {
@@ -118,9 +163,8 @@ registerPlot("line", (_nargout, args, rt) => {
 // `patch` returns a Patch handle when an output is requested
 // (`p = patch(...)`). Wrap the freshly-pushed trace and tag it with an id
 // so `set(p,'FaceColor',...)` can live-update the rendered patch.
-registerPlot("patch", (_nargout, args, rt) => {
-  const margs = args.map(a => ensureRuntimeValue(a));
-  _patchCall(rt.plotInstructions, margs);
+registerPlot("patch", {}, (_nargout, args, rt) => {
+  _patchCall(rt.plotInstructions, args);
   if (_nargout >= 1) {
     const last = rt.plotInstructions[rt.plotInstructions.length - 1];
     if (last && last.type === "patch") {
@@ -139,9 +183,8 @@ for (const [name, call] of [
   ["trimesh", _trimeshCall],
   ["trisurf", _trisurfCall],
 ] as const) {
-  registerPlot(name, (_nargout, args, rt) => {
-    const margs = args.map(a => ensureRuntimeValue(a));
-    call(rt.plotInstructions, margs);
+  registerPlot(name, {}, (_nargout, args, rt) => {
+    call(rt.plotInstructions, args);
     if (_nargout >= 1) {
       const last = rt.plotInstructions[rt.plotInstructions.length - 1];
       if (last && last.type === "patch") {
@@ -161,9 +204,8 @@ for (const [name, call] of [
 // faces}` (nargout 1), `[faces, verts]` (2), or `[faces, verts, colors]`
 // (3). Faces are 1-based in the returned data (MATLAB convention) but
 // 0-based in the patch trace.
-registerPlot("isosurface", (_nargout, args, rt) => {
-  const margs = args.map(a => ensureRuntimeValue(a));
-  const mesh = isosurfaceFromArgs(margs);
+registerPlot("isosurface", { nargout: 3 }, (_nargout, args, rt) => {
+  const mesh = isosurfaceFromArgs(args);
   const nv = mesh.vertices.length;
   const nf = mesh.faces.length;
   const vertsTensor = (): RuntimeValue => {
@@ -217,10 +259,9 @@ registerPlot("isosurface", (_nargout, args, rt) => {
 // `fill` creates filled 2-D patches (one per X,Y,C group). It reuses the
 // patch trace/handle machinery; `p = fill(...)` returns the handle of the
 // first patch created (MATLAB returns a vector when there are several).
-registerPlot("fill", (_nargout, args, rt) => {
-  const margs = args.map(a => ensureRuntimeValue(a));
+registerPlot("fill", {}, (_nargout, args, rt) => {
   const start = rt.plotInstructions.length;
-  _fillCall(rt.plotInstructions, margs);
+  _fillCall(rt.plotInstructions, args);
   if (_nargout >= 1) {
     let firstHandle: RuntimeValue | undefined;
     for (let i = start; i < rt.plotInstructions.length; i++) {
@@ -245,8 +286,7 @@ registerPlot("fill", (_nargout, args, rt) => {
 const contourOverride =
   (filled: boolean) =>
   (_nargout: number, args: RuntimeValue[], rt: Runtime) => {
-    const margs = args.map(a => ensureRuntimeValue(a));
-    _contourCall(rt.plotInstructions, margs, filled);
+    _contourCall(rt.plotInstructions, args, filled);
     if (_nargout < 1) return undefined;
     const last = rt.plotInstructions[rt.plotInstructions.length - 1];
     if (!last || last.type !== "contour") return RTV.dummyHandle();
@@ -266,14 +306,14 @@ const contourOverride =
     );
     return [C, H];
   };
-registerPlot("contour", contourOverride(false));
-registerPlot("contourf", contourOverride(true));
+registerPlot("contour", { nargout: 2 }, contourOverride(false));
+// MATLAB contourf has an undocumented third output that numbl does not return.
+registerPlot("contourf", { nargout: 2 }, contourOverride(true));
 // `quiver3` returns a Quiver handle when an output is requested. The
 // handle wraps the pushed trace object directly, so later property
 // assignments (e.g. `q.ShowArrowHead = 'off'`) update the rendered plot.
-registerPlot("quiver3", (_nargout, args, rt) => {
-  const margs = args.map(a => ensureRuntimeValue(a));
-  _quiver3Call(rt.plotInstructions, margs);
+registerPlot("quiver3", {}, (_nargout, args, rt) => {
+  _quiver3Call(rt.plotInstructions, args);
   if (_nargout < 1) return undefined;
   const last = rt.plotInstructions[rt.plotInstructions.length - 1];
   if (last && last.type === "quiver3") {
@@ -288,9 +328,8 @@ registerPlot("quiver3", (_nargout, args, rt) => {
 // the current limits, and an `axis manual` form that freezes the current
 // limits — both need the runtime's accumulated plot state, so they are
 // handled here rather than in the generic dispatch.
-registerPlot("axis", (nargout, args, rt) => {
-  const margs = args.map(a => ensureRuntimeValue(a));
-  const applied = applyAxisCommand(margs, rt.plotInstructions, () =>
+registerPlot("axis", {}, (nargout, args, rt) => {
+  const applied = applyAxisCommand(args, rt.plotInstructions, () =>
     rt.currentAxisLimits()
   );
   if (!applied && nargout >= 1) {
@@ -300,35 +339,35 @@ registerPlot("axis", (nargout, args, rt) => {
 });
 // `fplot` / `fplot3` evaluate a user function-handle and so need
 // the full Runtime context — kept as explicit registrations.
-registerPlot("fplot", (_nargout, args, rt) => {
-  _fplotCall(rt, rt.plotInstructions, args.map(ensureRuntimeValue));
+registerPlot("fplot", {}, (_nargout, args, rt) => {
+  _fplotCall(rt, rt.plotInstructions, args);
 });
-registerPlot("fplot3", (_nargout, args, rt) => {
-  _fplot3Call(rt, rt.plotInstructions, args.map(ensureRuntimeValue));
+registerPlot("fplot3", {}, (_nargout, args, rt) => {
+  _fplot3Call(rt, rt.plotInstructions, args);
 });
 // `streamline` / `stream2` return non-trivial values (handle / matrix).
-registerPlot("streamline", (_nargout, args, rt) => {
-  const h = _streamlineCall(rt.plotInstructions, args.map(ensureRuntimeValue));
+registerPlot("streamline", {}, (_nargout, args, rt) => {
+  const h = _streamlineCall(rt.plotInstructions, args);
   if (_nargout >= 1) return h;
 });
-registerPlot("stream2", (_nargout, args) => {
-  return _stream2Call(args.map(ensureRuntimeValue));
+registerPlot("stream2", {}, (_nargout, args) => {
+  return _stream2Call(args);
 });
 // `cameratoolbar` — accepted as a no-op (numbl has no interactive camera
 // toolbar). State/SetMode/Get… arguments are ignored. Returns a dummy
 // handle only when an output is requested, so the bare-statement form
 // (used by simpplot/distmeshsurface) does not print an `ans`.
-registerPlot("cameratoolbar", _nargout => {
+registerPlot("cameratoolbar", {}, _nargout => {
   if (_nargout >= 1) return RTV.dummyHandle();
 });
 
 // ── drawnow / pause ──────────────────────────────────────────────────
 
-registerSpecialVoid("drawnow", (_args, rt) => {
+graphicsBuiltin("drawnow", { nargout: 0 }, (_nargout, _args, rt) => {
   rt.drawnow();
 });
 
-registerSpecial("pause", (nargout, args, rt) => {
+graphicsBuiltin("pause", {}, (nargout, args, rt) => {
   rt.pause(args[0] ?? 0);
   // MATLAB returns the current pause state when assigned.
   return nargout >= 1 ? RTV.char("on") : undefined;
@@ -341,17 +380,12 @@ registerSpecial("pause", (nargout, args, rt) => {
 // stubs don't track real handles, so they hand back placeholder values
 // only when an output is explicitly requested.
 
-registerSpecial("ishold", (_nargout, _args, rt) => {
+graphicsBuiltin("ishold", { nargin: [0, 1] }, (_nargout, _args, rt) => {
   return rt.ishold();
 });
 
-registerSpecial("figure", (nargout, args, rt) => {
-  dispatchPlotBuiltin(
-    "figure",
-    args.map(ensureRuntimeValue),
-    rt.plotInstructions,
-    rt
-  );
+graphicsBuiltin("figure", {}, (nargout, args, rt) => {
+  dispatchPlotBuiltin("figure", args, rt.plotInstructions, rt);
   // dispatchPlotBuiltin set rt.currentFigureHandle to the (possibly newly
   // allocated) handle; return it so `h = figure` gets the right value.
   return nargout >= 1 ? RTV.num(rt.currentFigureHandle) : undefined;
@@ -364,10 +398,9 @@ registerSpecial("figure", (nargout, args, rt) => {
 // is the `Data` property already JSON-encoded (the shim calls `jsonencode`);
 // the renderer parses it and feeds it to the page's `htmlComponent` so the
 // `setup`/`"DataChanged"` bridge fires.
-registerSpecial("drawuihtml", (nargout, args, rt) => {
-  const html = args.length > 0 ? toString(ensureRuntimeValue(args[0])) : "";
-  const data =
-    args.length > 1 ? toString(ensureRuntimeValue(args[1])) : undefined;
+graphicsBuiltin("drawuihtml", {}, (nargout, args, rt) => {
+  const html = args.length > 0 ? toString(args[0]) : "";
+  const data = args.length > 1 ? toString(args[1]) : undefined;
   rt.uihtmlSeq += 1;
   const id = "uh" + rt.uihtmlSeq;
   rt.plotInstructions.push({
@@ -387,11 +420,11 @@ registerSpecial("drawuihtml", (nargout, args, rt) => {
 // setting `htmlComponent.Data`). The handle is incref'd so it survives after
 // the run while the host keeps this runtime alive to dispatch events. A new
 // registration for the same component replaces (and decrefs) the old one.
-registerSpecial("registeruihtmlcallback", (_nargout, args, rt) => {
+graphicsBuiltin("registeruihtmlcallback", {}, (_nargout, args, rt) => {
   if (args.length < 3) return undefined;
-  const compId = toString(ensureRuntimeValue(args[0]));
-  const eventType = toString(ensureRuntimeValue(args[1]));
-  const fcn = ensureRuntimeValue(args[2]);
+  const compId = toString(args[0]);
+  const eventType = toString(args[1]);
+  const fcn = args[2];
   if (eventType !== "HTMLEventReceived" && eventType !== "DataChanged") {
     return undefined;
   }
@@ -402,38 +435,37 @@ registerSpecial("registeruihtmlcallback", (_nargout, args, rt) => {
   incref(fcn);
   entry[eventType] = fcn;
   rt.uihtmlCallbacks.set(compId, entry);
-  return undefined;
 });
 
 // `sendEventToHTMLSource(src, name, data)` — push an event from MATLAB back to
 // a uihtml component's page (MATLAB → JS). `src` is the struct passed to the
 // callback (carrying ComponentId); `data` is jsonencode'd and the host
 // forwards it to the iframe, where it fires the page's addEventListener(name).
-registerSpecial("sendEventToHTMLSource", (_nargout, args, rt) => {
-  if (args.length < 2) {
-    throw new RuntimeError("sendEventToHTMLSource requires src and name");
-  }
-  const src = ensureRuntimeValue(args[0]);
-  if (!isRuntimeStruct(src) || !src.fields.has("ComponentId")) {
-    throw new RuntimeError(
-      "sendEventToHTMLSource: src must be the component passed to the callback"
+graphicsBuiltin(
+  "sendEventToHTMLSource",
+  { nargin: [2, 3] },
+  (_nargout, args, rt) => {
+    const src = args[0];
+    if (!isRuntimeStruct(src) || !src.fields.has("ComponentId")) {
+      throw new RuntimeError(
+        "sendEventToHTMLSource: src must be the component passed to the callback"
+      );
+    }
+    const compId = toString(src.fields.get("ComponentId")!);
+    const name = toString(args[1]);
+    const dataArg = args.length > 2 ? args[2] : RTV.num(0);
+    const dataJson = toString(
+      ensureRuntimeValue(rt.dispatch("jsonencode", 1, [dataArg]))
     );
+    rt.onHtmlSourceEvent?.(compId, name, dataJson);
   }
-  const compId = toString(src.fields.get("ComponentId")!);
-  const name = toString(ensureRuntimeValue(args[1]));
-  const dataArg = args.length > 2 ? ensureRuntimeValue(args[2]) : RTV.num(0);
-  const dataJson = toString(
-    ensureRuntimeValue(rt.dispatch("jsonencode", 1, [dataArg]))
-  );
-  rt.onHtmlSourceEvent?.(compId, name, dataJson);
-  return undefined;
-});
+);
 
 // MATLAB `uigridlayout` shim so standard layout-wrapped uihtml code runs
 // unchanged in numbl. numbl fills the figure pane regardless of layout, so
 // this is a no-op container handle (parent/sizing args are ignored). Use a
 // plain `figure` as the parent.
-registerSpecial("uigridlayout", nargout =>
+graphicsBuiltin("uigridlayout", {}, nargout =>
   nargout >= 1 ? RTV.num(0) : undefined
 );
 
@@ -443,13 +475,8 @@ registerSpecial("uigridlayout", nargout =>
 // of truth for the (name → set_xxx) mapping.
 const PLOT_RETURNS_ZERO = ["subplot", "tiledlayout", "nexttile", "legend"];
 for (const name of PLOT_RETURNS_ZERO) {
-  registerSpecial(name, (nargout, args, rt) => {
-    dispatchPlotBuiltin(
-      name,
-      args.map(ensureRuntimeValue),
-      rt.plotInstructions,
-      rt
-    );
+  graphicsBuiltin(name, {}, (nargout, args, rt) => {
+    dispatchPlotBuiltin(name, args, rt.plotInstructions, rt);
     return nargout >= 1 ? RTV.num(0) : undefined;
   });
 }
@@ -469,11 +496,10 @@ const TEXT_LABELS: Record<
   sgtitle: "set_sgtitle",
 };
 for (const [name, instrType] of Object.entries(TEXT_LABELS)) {
-  registerSpecial(name, (nargout, args, rt) => {
-    const margs = args.map(ensureRuntimeValue);
-    dispatchPlotBuiltin(name, margs, rt.plotInstructions, rt);
+  graphicsBuiltin(name, {}, (nargout, args, rt) => {
+    dispatchPlotBuiltin(name, args, rt.plotInstructions, rt);
     if (nargout >= 1) {
-      const text = margs.length > 0 ? toString(margs[0]) : "";
+      const text = args.length > 0 ? toString(args[0]) : "";
       return RTV.graphicsHandle({ string: text, __target: instrType }, "text");
     }
     return undefined;
@@ -486,20 +512,19 @@ for (const [name, instrType] of Object.entries(TEXT_LABELS)) {
 // batches are serialized to the viewer and an already-flushed instruction
 // can't be reached by mutation alone. `set` on a dummy handle (gca/gcf) or a
 // non-handle is accepted as a no-op.
-registerSpecial("set", (_nargout, args, rt) => {
-  const margs = args.map(ensureRuntimeValue);
-  const handle = margs[0];
+graphicsBuiltin("set", { nargin: [1, Infinity] }, (_nargout, args, rt) => {
+  const handle = args[0];
   if (!isRuntimeGraphicsHandle(handle)) return undefined;
   const props: Record<string, unknown> = {};
-  for (let i = 1; i + 1 < margs.length; i += 2) {
-    const keyArg = margs[i];
+  for (let i = 1; i + 1 < args.length; i += 2) {
+    const keyArg = args[i];
     const key = isRuntimeString(keyArg)
       ? keyArg
       : isRuntimeChar(keyArg)
         ? keyArg.value
         : null;
     if (!key) continue;
-    const val = margs[i + 1];
+    const val = args[i + 1];
     if (handle._traceType === "text") {
       // Title/label handle: 'String' updates the text; re-emit the matching
       // label instruction. Other text props (FontSize, …) aren't modeled.
@@ -532,40 +557,38 @@ registerSpecial("set", (_nargout, args, rt) => {
 
 const PLOT_RETURNS_ONE = ["close", "clf"];
 for (const name of PLOT_RETURNS_ONE) {
-  registerSpecial(name, (nargout, args, rt) => {
-    dispatchPlotBuiltin(
-      name,
-      args.map(ensureRuntimeValue),
-      rt.plotInstructions,
-      rt
-    );
+  graphicsBuiltin(name, {}, (nargout, args, rt) => {
+    dispatchPlotBuiltin(name, args, rt.plotInstructions, rt);
     return nargout >= 1 ? RTV.num(1) : undefined;
   });
 }
 
-// `hold`, `grid`, `shading`, `cla` are truly void in MATLAB (they error
-// on `r = hold`). registerSpecialVoid surfaces that as
-// "Too many output arguments." when nargout > 0.
-const PLOT_VOID = ["hold", "grid", "shading", "cla"];
-for (const name of PLOT_VOID) {
-  registerSpecialVoid(name, (args, rt) => {
-    dispatchPlotBuiltin(
-      name,
-      args.map(ensureRuntimeValue),
-      rt.plotInstructions,
-      rt
-    );
+// `hold`, `grid`, `shading` are void in MATLAB (they error on `r = hold`
+// with "Too many output arguments.").
+const PLOT_VOID: Record<string, PlotArity> = {
+  hold: { nargout: 0 },
+  grid: { nargout: 0 },
+  shading: { nargin: [0, 2], nargout: 0 },
+};
+for (const [name, arity] of Object.entries(PLOT_VOID)) {
+  graphicsBuiltin(name, arity, (_nargout, args, rt) => {
+    dispatchPlotBuiltin(name, args, rt.plotInstructions, rt);
   });
 }
+
+// `cla` returns the axes handle when an output is requested (`ax = cla`).
+graphicsBuiltin("cla", {}, (nargout, args, rt) => {
+  dispatchPlotBuiltin("cla", args, rt.plotInstructions, rt);
+  return nargout >= 1 ? RTV.dummyHandle() : undefined;
+});
 
 // `colorbar` returns a handle-shaped struct when an output is
 // requested — kept as a custom registration so we can build the
 // struct from the args we just parsed. The push side still goes
 // through dispatchPlotBuiltin (which re-parses the args to produce
 // the same set_colorbar instruction).
-registerSpecial("colorbar", (nargout, args, rt) => {
-  const margs = args.map(ensureRuntimeValue);
-  dispatchPlotBuiltin("colorbar", margs, rt.plotInstructions, rt);
+graphicsBuiltin("colorbar", {}, (nargout, args, rt) => {
+  dispatchPlotBuiltin("colorbar", args, rt.plotInstructions, rt);
   if (nargout >= 1) {
     const last = rt.plotInstructions[rt.plotInstructions.length - 1];
     if (last && last.type === "set_colorbar") {
@@ -579,10 +602,15 @@ registerSpecial("colorbar", (nargout, args, rt) => {
 });
 
 // Every other name handled by `dispatchPlotBuiltin` only pushes its plot
-// instruction. Names registered above keep those registrations.
+// instruction. Names registered above keep those registrations. Arity
+// that differs from the default (any inputs, an optional handle output):
+const DISPATCH_ARITY: Record<string, PlotArity> = {
+  box: { nargout: 0 },
+  colormap: { nargin: [0, 2] },
+};
 for (const name of PLOT_DISPATCH_NAMES) {
   if (getIBuiltin(name)) continue;
-  registerPlot(name, (_nargout, args, rt) => {
+  registerPlot(name, DISPATCH_ARITY[name] ?? {}, (_nargout, args, rt) => {
     dispatchPlotBuiltin(name, args, rt.plotInstructions, rt);
   });
 }

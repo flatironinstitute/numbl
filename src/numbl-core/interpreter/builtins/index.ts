@@ -37,6 +37,15 @@ import "./misc.js";
 import "./dictionary.js";
 import "./hash.js";
 import "./help-text.js";
+import "./output.js";
+import "./higher-order.js";
+import "./file-io.js";
+import "./filesystem.js";
+import "./web.js";
+import "./path-env.js";
+import "./ode.js";
+import "./gmres.js";
+import "./eigs.js";
 
 export {
   getIBuiltin,
@@ -53,9 +62,8 @@ export { builtin, makeBuiltin } from "./builtin.js";
 export type { BuiltinSpec, BuiltinContext, Arity } from "./builtin.js";
 export { resetAppdataStore, convertJsonValue } from "./misc.js";
 
-// Register IBuiltin names so isBuiltin() recognizes them. The runtime
-// specials and plot builtins register at module load, so load them first.
-import "../../runtime/specialBuiltins.js";
+// Register IBuiltin names so isBuiltin() recognizes them. The plot
+// builtins register at module load, so load them first.
 import "../../plotting/builtins.js";
 import { registerExtraBuiltinNames } from "../../helpers/registry.js";
 import { getAllIBuiltinNames as _getAllIBuiltinNames } from "./types.js";
