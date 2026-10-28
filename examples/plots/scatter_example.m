@@ -1,6 +1,7 @@
 % scatter - Basic scatter plot
 % Demonstrates a 2D scatter plot with random data
 
+rng(0);
 x = randn(1, 100);
 y = 0.5 * x + 0.3 * randn(1, 100);
 
