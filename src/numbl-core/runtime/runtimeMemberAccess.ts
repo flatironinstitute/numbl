@@ -193,6 +193,9 @@ export function setMemberReturn(
       // A classdef object has only its declared (or dynamic) properties.
       throw unrecognizedPropertyError(name, mv.className);
     }
+    // Property validation runs before any set.PropertyName method.
+    if (rt.validateProperty)
+      rhs = rt.validateProperty(mv.className, name, ensureRuntimeValue(rhs));
     // Check for property setter method (set.PropertyName)
     const accessorKey = `${mv.className}.set.${name}`;
     if (!rt.activeAccessors.has(accessorKey)) {

@@ -205,6 +205,15 @@ export function registerClassDef(
         for (let i = 0; i < m.names.length; i++) {
           const name = m.names[i];
           const def = m.defaultValues[i];
+          // Size/class/validator declarations are applied by the
+          // interpreter on every assignment; the JIT does not apply them.
+          if (m.validations[i]) {
+            throw new UnsupportedConstruct(
+              `property '${name}' of classdef '${s.name}' has a size, class ` +
+                `or validator declaration; not supported in v1`,
+              s.span
+            );
+          }
           if (
             propertyNames.includes(name) ||
             pendingProperties.has(name) ||

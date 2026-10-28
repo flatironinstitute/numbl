@@ -15,10 +15,10 @@ import { CallFrame } from "./callFrame.js";
 import type { Interpreter } from "./interpreter.js";
 import { execStmts } from "./execStatements.js";
 import {
-  nameValueFieldNames,
-  nameValueTailStart,
-  positionalParamCount,
-  processArgumentsBlocks,
+  argumentsSpec,
+  bindArguments,
+  validateOutputs,
+  type ArgsSpec,
 } from "./argumentsBlock.js";
 
 /** Call a function body in its own file and class context. A JIT executor
@@ -35,12 +35,16 @@ export function callBody(
 ): unknown {
   const fn = body.fn;
   checkOutputCount(fn, nargout);
+  const spec = argumentsSpec(fn);
 
   // Try the registered call executors in order; if all decline or bail,
   // fall through to the interpreter. Refcount-driven COW handles aliasing
   // across the call boundary: binding a parameter increfs its argument, so
-  // a mutation through the parameter sees rc>1 and copies.
-  if (narginOverride === undefined && interp.registry.hasCallExecutors) {
+  // a mutation through the parameter sees rc>1 and copies. A function
+  // whose `arguments` blocks need checking is offered to them only after
+  // its inputs are validated (see `runFunctionBody`).
+  const jit = narginOverride === undefined && interp.registry.hasCallExecutors;
+  if (jit && (spec === null || spec.jitDirect)) {
     const r = interp.registry.dispatchCall(fn, args, nargout, interp);
     if (r) return r.result;
   }
@@ -48,13 +52,9 @@ export function callBody(
   const fnEnv = new Environment();
   fnEnv.rt = interp.rt;
   fnEnv.persistentFuncId = `${body.file}:${fn.name}`;
-  bindInputs(
-    fn,
-    fnEnv,
-    args,
-    nargout,
-    narginOverride ?? args.length,
-    (name, value) => fnEnv.set(name, value)
+  const nargin = narginOverride ?? args.length;
+  bindInputs(fn, fnEnv, args, nargout, nargin, spec, (name, value) =>
+    fnEnv.set(name, value)
   );
   const frame = new CallFrame(
     interp.code,
@@ -65,7 +65,11 @@ export function callBody(
     interp.frame,
     interp.frame.callSiteNames
   );
-  return runFunctionBody(interp, fn, frame, args, nargout);
+  return runFunctionBody(interp, fn, frame, args, nargout, {
+    spec,
+    posOffset: args.length - nargin,
+    jitAfterValidation: jit && !!spec?.jitAfterValidation,
+  });
 }
 
 /** Call a nested function. It shares its parent's workspace by reference
@@ -90,7 +94,8 @@ export function callNestedFunction(
   // them must never be redirected to a same-named variable in the parent
   // workspace (e.g. an output `s` that shadows the parent's `s`).
   fnEnv.nestedLocalNames = new Set([...fn.params, ...fn.outputs]);
-  bindInputs(fn, fnEnv, args, nargout, args.length, (name, value) =>
+  const spec = argumentsSpec(fn);
+  bindInputs(fn, fnEnv, args, nargout, args.length, spec, (name, value) =>
     fnEnv.setLocal(name, value)
   );
   const frame = new CallFrame(
@@ -102,7 +107,11 @@ export function callNestedFunction(
     caller,
     caller.callSiteNames
   );
-  return runFunctionBody(interp, fn, frame, args, nargout);
+  return runFunctionBody(interp, fn, frame, args, nargout, {
+    spec,
+    posOffset: 0,
+    jitAfterValidation: false,
+  });
 }
 
 /** MATLAB: calling a function with more outputs than it declares is an
@@ -118,41 +127,33 @@ function checkOutputCount(fn: FunctionDef, nargout: number): void {
 
 /** Bind call arguments to `fn`'s parameters in `fnEnv` (positional
  *  parameters, `varargin`, nargin and nargout), and hoist the function's
- *  own nested functions. `set` binds a name in `fnEnv`. */
+ *  own nested functions. `set` binds a name in `fnEnv`. A function with
+ *  `arguments` blocks binds its inputs later, in its own frame
+ *  (`bindArguments`). */
 function bindInputs(
   fn: FunctionDef,
   fnEnv: Environment,
   args: unknown[],
   nargout: number,
   nargin: number,
+  spec: ArgsSpec | null,
   set: (name: string, value: RuntimeValue) => void
 ): void {
-  // `varargin` is normally last, but name-value struct parameters declared
-  // via dotted `arguments` entries may follow it (the parser enforces this).
-  const vararginIdx = fn.params.indexOf("varargin");
-  const hasVarargin = vararginIdx !== -1;
-  const regularParams = hasVarargin
-    ? fn.params.slice(0, vararginIdx)
-    : fn.params;
-
-  const numPositional = positionalParamCount(fn, regularParams);
-  for (let i = 0; i < numPositional; i++) {
-    if (i < args.length && args[i] !== undefined) {
-      set(regularParams[i], ensureRuntimeValue(args[i]));
+  if (spec === null) {
+    const hasVarargin =
+      fn.params.length > 0 && fn.params[fn.params.length - 1] === "varargin";
+    const regularParams = hasVarargin ? fn.params.slice(0, -1) : fn.params;
+    for (let i = 0; i < regularParams.length; i++) {
+      if (i < args.length && args[i] !== undefined) {
+        set(regularParams[i], ensureRuntimeValue(args[i]));
+      }
     }
-  }
-  if (hasVarargin) {
-    let extras = args.slice(regularParams.length);
-    // When name-value struct params follow varargin, the repeating section
-    // ends at the first argument naming a declared option.
-    if (vararginIdx !== fn.params.length - 1) {
-      extras = extras.slice(
-        0,
-        nameValueTailStart(extras, nameValueFieldNames(fn))
-      );
+    if (hasVarargin) {
+      const extraArgs = args
+        .slice(regularParams.length)
+        .map(a => ensureRuntimeValue(a));
+      set("varargin", RTV.cell(extraArgs, [1, extraArgs.length]));
     }
-    const extraArgs = extras.map(a => ensureRuntimeValue(a));
-    set("varargin", RTV.cell(extraArgs, [1, extraArgs.length]));
   }
   set("$nargin", nargin);
   set("$nargout", nargout);
@@ -170,6 +171,16 @@ function bindInputs(
   }
 }
 
+/** How `runFunctionBody` handles a function's `arguments` blocks. */
+interface ArgumentsHandling {
+  spec: ArgsSpec | null;
+  /** Leading arguments that are not user arguments (a constructor's
+   *  instance). */
+  posOffset: number;
+  /** Offer the call to the JIT executors once the inputs are validated. */
+  jitAfterValidation: boolean;
+}
+
 /** Run a bound function body in `frame` and return its outputs. Shared by
  *  ordinary and nested function calls. */
 function runFunctionBody(
@@ -177,20 +188,31 @@ function runFunctionBody(
   fn: FunctionDef,
   frame: CallFrame,
   args: unknown[],
-  nargout: number
+  nargout: number,
+  argsHandling: ArgumentsHandling
 ): unknown {
   const rt = interp.rt;
   const fnEnv = frame.env;
+  const { spec } = argsHandling;
   rt.pushCallFrame(fn.name);
   rt.pushCleanupScope();
   const saved = interp.frame;
   interp.frame = frame;
 
   try {
-    // Apply `arguments`-block defaults / name-value structs now that the
-    // function scope is active and provided args are bound, so defaults can
-    // reference earlier arguments.
-    processArgumentsBlocks(interp, fn, args);
+    if (spec) {
+      // Bind and validate inputs now that the function scope is active, so
+      // defaults and validators can reference earlier arguments.
+      bindArguments(interp, spec, args, argsHandling.posOffset);
+      if (argsHandling.jitAfterValidation && args.length === fn.params.length) {
+        const converted = fn.params.map(p => fnEnv.get(p));
+        const r = interp.registry.dispatchCall(fn, converted, nargout, interp);
+        if (r) {
+          fnEnv.clearLocals();
+          return r.result;
+        }
+      }
+    }
 
     execStmts(interp, fn.body);
 
@@ -203,6 +225,9 @@ function runFunctionBody(
       }
     }
 
+    if (spec?.outputs) {
+      validateOutputs(interp, spec);
+    }
     const outputs = collectOutputs(fn, fnEnv, nargout);
 
     // Adopt every output into the caller's transient scope so they

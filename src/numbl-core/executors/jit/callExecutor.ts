@@ -52,7 +52,10 @@ function funcStmtFromDef(fd: FunctionDef): FuncStmt {
     params: [...fd.params],
     outputs: [...fd.outputs],
     body: fd.body,
-    argumentsBlocks: fd.argumentsBlocks ?? [],
+    // `callBody` handles the `arguments` blocks: it offers a call to the
+    // executors only when the blocks need nothing, or after validating the
+    // inputs (`ArgsSpec.jitDirect` / `jitAfterValidation`).
+    argumentsBlocks: [],
     span,
   };
 }

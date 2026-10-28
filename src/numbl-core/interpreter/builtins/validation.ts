@@ -2,8 +2,9 @@
  * Validation builtins: mustBe* family.
  */
 
-import type { RuntimeValue } from "../../runtime/types.js";
+import type { RuntimeChar, RuntimeValue } from "../../runtime/types.js";
 import {
+  isRuntimeStringArray,
   isRuntimeNumber,
   isRuntimeLogical,
   isRuntimeTensor,
@@ -14,13 +15,13 @@ import {
   isRuntimeSparseMatrix,
 } from "../../runtime/types.js";
 import { toNumber, RuntimeError } from "../../runtime/index.js";
+import { RTV } from "../../runtime/constructors.js";
+import { ensureRuntimeValue } from "../../runtime/runtimeHelpers.js";
+import type { Runtime } from "../../runtime/runtime.js";
 import { builtin } from "./builtin.js";
-import { unsupportedFormError } from "./text-args.js";
+import { builtinError } from "./args.js";
+import { MATLAB_KEYWORDS } from "./introspection.js";
 import { valueShape } from "../../runtime/utils.js";
-
-function isNumeric(v: RuntimeValue): boolean {
-  return isRuntimeNumber(v) || isRuntimeTensor(v) || isRuntimeLogical(v);
-}
 
 function numericElements(v: RuntimeValue): number[] {
   if (isRuntimeNumber(v)) return [v as number];
@@ -30,12 +31,7 @@ function numericElements(v: RuntimeValue): number[] {
 }
 
 function numelVal(v: RuntimeValue): number {
-  if (isRuntimeNumber(v) || isRuntimeLogical(v)) return 1;
-  if (isRuntimeTensor(v)) return v.data.length;
-  if (isRuntimeChar(v)) return v.value.length;
-  if (isRuntimeString(v)) return 1;
-  if (isRuntimeCell(v)) return v.data.length;
-  return 0;
+  return valueShape(v).reduce((a, b) => a * b, 1);
 }
 
 /** Define a mustBe* validator: an M-file function in MATLAB, with no
@@ -43,113 +39,420 @@ function numelVal(v: RuntimeValue): number {
 function validator(
   name: string,
   nargin: number | [number, number],
-  check: (args: RuntimeValue[]) => void
+  check: (args: RuntimeValue[], rt: Runtime) => void
 ): void {
   builtin({
     name,
     nargin,
     nargout: 0,
     mfile: true,
-    apply: args => check(args),
+    apply: (args, _nargout, ctx) => check(args, ctx.rt),
   });
 }
 
-function makeElemValidator(
+/** The error a mustBe* validator raises: `MATLAB:validators:<name>`. */
+function fail(name: string, message: string): RuntimeError {
+  return builtinError(`MATLAB:validators:${name}`, message);
+}
+
+/** Real and imaginary parts of a numeric, logical (or, with `allowChar`,
+ *  char) value, or null for any other value. */
+function numericParts(
+  v: RuntimeValue,
+  allowChar = false
+): { re: ArrayLike<number>; im?: ArrayLike<number> } | null {
+  if (isRuntimeNumber(v)) return { re: [v] };
+  if (isRuntimeLogical(v)) return { re: [v ? 1 : 0] };
+  if (isRuntimeTensor(v)) return { re: v.data, im: v.imag };
+  if (isRuntimeComplexNumber(v)) return { re: [v.re], im: [v.im] };
+  if (isRuntimeSparseMatrix(v)) {
+    const re = new Float64Array(v.m * v.n);
+    const im = v.pi ? new Float64Array(v.m * v.n) : undefined;
+    for (let j = 0; j < v.n; j++) {
+      for (let k = v.jc[j]; k < v.jc[j + 1]; k++) {
+        re[j * v.m + v.ir[k]] = v.pr[k];
+        if (im) im[j * v.m + v.ir[k]] = v.pi![k];
+      }
+    }
+    return { re, im };
+  }
+  if (allowChar && isRuntimeChar(v)) {
+    return { re: Array.from(v.value, c => c.charCodeAt(0)) };
+  }
+  return null;
+}
+
+/** Numeric parts, raising mustBeNumericOrLogical for anything else. */
+function requireNumeric(v: RuntimeValue): {
+  re: ArrayLike<number>;
+  im?: ArrayLike<number>;
+} {
+  const p = numericParts(v);
+  if (!p)
+    throw fail("mustBeNumericOrLogical", "Value must be numeric or logical.");
+  return p;
+}
+
+function isLogicalValue(v: RuntimeValue): boolean {
+  return isRuntimeLogical(v) || (isRuntimeTensor(v) && !!v._isLogical);
+}
+
+/** An element-wise test on the real parts of a numeric or logical value. */
+function elemValidator(
   name: string,
-  predicate: (n: number) => boolean,
-  message: string
+  test: (re: number, im: number) => boolean,
+  message: string,
+  allowChar = false
 ): void {
-  validator(name, 1, args => {
-    const v = args[0];
-    if (!isNumeric(v)) throw new RuntimeError(message);
-    for (const n of numericElements(v)) {
-      if (!predicate(n)) throw new RuntimeError(message);
+  validator(name, 1, ([v]) => {
+    if (typeof v === "number") {
+      if (!test(v, 0)) throw fail(name, message);
+      return;
+    }
+    const p = allowChar ? numericParts(v, true) : requireNumeric(v);
+    if (!p)
+      throw fail("mustBeNumericOrLogical", "Value must be numeric or logical.");
+    for (let i = 0; i < p.re.length; i++) {
+      if (!test(p.re[i], p.im ? p.im[i] : 0)) throw fail(name, message);
     }
   });
 }
 
-validator("mustBeNumeric", 1, args => {
-  if (!isNumeric(args[0])) throw new RuntimeError("Value must be numeric.");
-});
-
-makeElemValidator(
+elemValidator("mustBePositive", re => re > 0, "Value must be positive.");
+elemValidator("mustBeNonnegative", re => re >= 0, "Value must be nonnegative.");
+elemValidator(
+  "mustBeNonpositive",
+  re => re <= 0,
+  "Value must not be positive."
+);
+elemValidator("mustBeNegative", re => re < 0, "Value must be negative.");
+elemValidator(
+  "mustBeNonzero",
+  (re, im) => re !== 0 || im !== 0,
+  "Value must not be zero."
+);
+elemValidator(
   "mustBeInteger",
-  n => Number.isFinite(n) && Math.floor(n) === n,
+  (re, im) => im === 0 && Number.isFinite(re) && Math.floor(re) === re,
   "Value must be integer."
 );
-makeElemValidator("mustBePositive", n => n > 0, "Value must be positive.");
-makeElemValidator(
-  "mustBeNonnegative",
-  n => n >= 0,
-  "Value must be nonnegative."
-);
-makeElemValidator("mustBeNonzero", n => n !== 0, "Value must be nonzero.");
-makeElemValidator(
+elemValidator(
   "mustBeFinite",
-  n => Number.isFinite(n),
-  "Value must be finite."
+  (re, im) => Number.isFinite(re) && Number.isFinite(im),
+  "Value must be finite.",
+  true
+);
+elemValidator(
+  "mustBeNonNan",
+  (re, im) => !Number.isNaN(re) && !Number.isNaN(im),
+  "Value must not be NaN.",
+  true
 );
 
-validator("mustBeNonempty", 1, args => {
-  if (numelVal(args[0]) === 0)
-    throw new RuntimeError("Value must be nonempty.");
+validator("mustBeReal", 1, ([v]) => {
+  const p = numericParts(v);
+  if (p?.im && Array.from(p.im).some(x => x !== 0))
+    throw fail("mustBeReal", "Value must be real.");
 });
 
-validator("mustBeScalarOrEmpty", 1, args => {
-  const n = numelVal(args[0]);
+validator("mustBeNumeric", 1, ([v]) => {
+  if (!numericParts(v) || isLogicalValue(v))
+    throw fail("mustBeNumeric", "Value must be numeric.");
+});
+
+validator("mustBeNumericOrLogical", 1, ([v]) => {
+  requireNumeric(v);
+});
+
+validator("mustBeFloat", 1, ([v]) => {
+  if (!numericParts(v) || isLogicalValue(v))
+    throw fail("mustBeFloat", "Value must be a floating-point array.");
+});
+
+validator("mustBeNonempty", 1, ([v]) => {
+  if (numelVal(v) === 0)
+    throw fail("mustBeNonempty", "Value must not be empty.");
+});
+
+validator("mustBeNonsparse", 1, ([v]) => {
+  if (isRuntimeSparseMatrix(v))
+    throw fail("mustBeNonsparse", "Value must not be sparse.");
+});
+
+validator("mustBeScalarOrEmpty", 1, ([v]) => {
+  const n = numelVal(v);
   if (n !== 0 && n !== 1)
-    throw new RuntimeError("Value must be scalar or empty.");
+    throw fail("mustBeScalarOrEmpty", "Value must be scalar or empty.");
 });
 
-// mustBeVector(v, 'allow-all-empties'): empty input is always accepted.
-validator("mustBeVector", [1, 2], args => {
-  const v = args[0];
-  if (isRuntimeTensor(v)) {
-    const isVec =
-      v.shape.length <= 2 &&
-      (v.shape[0] === 1 || v.shape[1] === 1 || v.data.length === 0);
-    if (!isVec) throw new RuntimeError("Value must be a vector.");
-  } else if (!isRuntimeNumber(v) && !isRuntimeLogical(v)) {
-    throw new RuntimeError("Value must be a vector.");
+// mustBeVector(v, 'allow-all-empties'): any empty is then accepted.
+validator("mustBeVector", [1, 2], ([v, opt]) => {
+  const shape = valueShape(v);
+  if (opt !== undefined) {
+    const o = textValue(opt);
+    if (o?.toLowerCase() !== "allow-all-empties")
+      throw builtinError(
+        "MATLAB:validatorUsage:invalidOption",
+        "Second input to function 'mustBeVector' must be 'allow-all-empties'."
+      );
+    if (numelVal(v) === 0) return;
   }
-});
-
-validator("mustBeMember", 2, args => {
-  const v = args[0];
-  const set = args[1];
-  const vElems = isRuntimeString(v) ? [v] : numericElements(v);
-  const setElems = isRuntimeCell(set)
-    ? set.data
-    : isRuntimeString(set)
-      ? [set]
-      : numericElements(set);
-  for (const elem of vElems) {
-    const found = (setElems as unknown[]).some(s =>
-      typeof s === "object" &&
-      s !== null &&
-      "kind" in s &&
-      isRuntimeString(s as RuntimeValue)
-        ? (s as { kind: string; value: string }).value === String(elem)
-        : s === elem
+  if (shape.length !== 2 || (shape[0] !== 1 && shape[1] !== 1))
+    throw fail(
+      "mustBeVector",
+      "Value must be a 1-by-n vector or an n-by-1 vector."
     );
-    if (!found)
-      throw new RuntimeError("Value must be a member of the specified set.");
-  }
 });
+
+validator("mustBeRow", 1, ([v]) => {
+  const shape = valueShape(v);
+  if (shape.length !== 2 || shape[0] !== 1)
+    throw fail("mustBeRow", "Value must be a row vector.");
+});
+
+validator("mustBeColumn", 1, ([v]) => {
+  const shape = valueShape(v);
+  if (shape.length !== 2 || shape[1] !== 1)
+    throw fail("mustBeColumn", "Value must be a column vector.");
+});
+
+validator("mustBeMatrix", 1, ([v]) => {
+  if (valueShape(v).length !== 2)
+    throw fail("mustBeMatrix", "Value must be a matrix.");
+});
+
+// ── Text validators ─────────────────────────────────────────────────────
+
+const TEXT_MESSAGE =
+  "Value must be a character vector, string array, or cell array of character vectors.";
+
+/** A char row vector or string scalar as a JS string, else null. */
+function textValue(v: RuntimeValue): string | null {
+  if (isRuntimeString(v)) return v;
+  if (isRuntimeChar(v)) {
+    const shape = valueShape(v);
+    return shape.length === 2 && shape[0] <= 1 ? v.value : null;
+  }
+  return null;
+}
+
+/** The strings of a text value (char row, string array or cellstr), or
+ *  null when the value is not text. */
+function textElements(v: RuntimeValue): string[] | null {
+  const t = textValue(v);
+  if (t !== null) return [t];
+  if (isRuntimeStringArray(v)) return v.data;
+  if (isRuntimeCell(v)) {
+    const out: string[] = [];
+    for (const e of v.data) {
+      const ev = ensureRuntimeValue(e);
+      if (!isRuntimeChar(ev)) return null;
+      const s = textValue(ev);
+      if (s === null) return null;
+      out.push(s);
+    }
+    return out;
+  }
+  return null;
+}
+
+validator("mustBeText", 1, ([v]) => {
+  if (textElements(v) === null) throw fail("mustBeText", TEXT_MESSAGE);
+});
+
+validator("mustBeTextScalar", 1, ([v]) => {
+  if (textValue(v) === null)
+    throw fail(
+      "mustBeTextScalar",
+      "Value must be a character vector or string scalar."
+    );
+});
+
+validator("mustBeNonzeroLengthText", 1, ([v]) => {
+  const els = textElements(v);
+  if (els === null) throw fail("mustBeNonzeroLengthText", TEXT_MESSAGE);
+  if (els.length === 0 || els.some(s => s.length === 0))
+    throw fail(
+      "mustBeNonzeroLengthText",
+      "Value must be text with one or more characters."
+    );
+});
+
+validator("mustBeValidVariableName", 1, ([v]) => {
+  const els = textElements(v);
+  if (els === null) throw fail("mustBeValidVariableName", TEXT_MESSAGE);
+  const bad = els.filter(
+    s => !/^[A-Za-z][A-Za-z0-9_]{0,62}$/.test(s) || MATLAB_KEYWORDS.has(s)
+  );
+  if (bad.length > 0)
+    throw fail(
+      "mustBeValidVariableName",
+      `These are not valid variable names: ${bad.map(s => `'${s}'`).join(", ")}.`
+    );
+});
+
+// ── Comparison validators ───────────────────────────────────────────────
+
+/** Format a bound for a comparison validator's message (MATLAB's num2str). */
+function formatBound(n: number): string {
+  if (Number.isInteger(n)) return String(n);
+  if (!Number.isFinite(n))
+    return Number.isNaN(n) ? "NaN" : n > 0 ? "Inf" : "-Inf";
+  return String(parseFloat(n.toPrecision(5)));
+}
+
+function comparisonValidator(
+  name: string,
+  test: (x: number, c: number) => boolean,
+  phrase: string
+): void {
+  validator(name, 2, ([v, c]) => {
+    const cp = numericParts(c);
+    if (!cp || cp.re.length !== 1)
+      throw builtinError(
+        "MATLAB:validatorUsage:nonScalarSecondInput",
+        `Second input to function '${name}' must be a scalar.`
+      );
+    const bound = cp.re[0];
+    const p = requireNumeric(v);
+    for (let i = 0; i < p.re.length; i++) {
+      if (!test(p.re[i], bound))
+        throw fail(name, `Value must be ${phrase} ${formatBound(bound)}.`);
+    }
+  });
+}
+
+comparisonValidator("mustBeGreaterThan", (x, c) => x > c, "greater than");
+comparisonValidator(
+  "mustBeGreaterThanOrEqual",
+  (x, c) => x >= c,
+  "greater than or equal to"
+);
+comparisonValidator("mustBeLessThan", (x, c) => x < c, "less than");
+comparisonValidator(
+  "mustBeLessThanOrEqual",
+  (x, c) => x <= c,
+  "less than or equal to"
+);
 
 // mustBeInRange(value, lower, upper[, boundflag1[, boundflag2]])
-validator("mustBeInRange", [3, 5], args => {
-  if (args.length > 3)
-    throw unsupportedFormError("mustBeInRange", "a boundary option");
-  const v = args[0];
-  const lower = toNumber(args[1]);
-  const upper = toNumber(args[2]);
-  if (!isNumeric(v)) throw new RuntimeError("Value must be in range.");
-  for (const n of numericElements(v)) {
-    if (n < lower || n > upper) {
-      throw new RuntimeError(`Value must be in range [${lower}, ${upper}].`);
+validator("mustBeInRange", [3, 5], ([v, lo, hi, ...flags]) => {
+  const scalar = (x: RuntimeValue, which: string): number => {
+    const p = numericParts(x);
+    if (!p || p.re.length !== 1)
+      throw builtinError(
+        "MATLAB:validatorUsage:nonScalarInput",
+        `${which} input to function 'mustBeInRange' must be a scalar.`
+      );
+    return p.re[0];
+  };
+  const lower = scalar(lo, "Second");
+  const upper = scalar(hi, "Third");
+  let lowerOpen = false;
+  let upperOpen = false;
+  for (const f of flags) {
+    switch (textValue(f)?.toLowerCase()) {
+      case "inclusive":
+        break;
+      case "exclusive":
+        lowerOpen = upperOpen = true;
+        break;
+      case "exclude-lower":
+        lowerOpen = true;
+        break;
+      case "exclude-upper":
+        upperOpen = true;
+        break;
+      default:
+        throw builtinError(
+          "MATLAB:validatorUsage:invalidBoundFlag",
+          "Bound flag must be 'inclusive', 'exclusive', 'exclude-lower', or 'exclude-upper'."
+        );
     }
   }
+  const p = requireNumeric(v);
+  const fmt = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(15));
+  for (let i = 0; i < p.re.length; i++) {
+    const x = p.re[i];
+    const ok =
+      (lowerOpen ? x > lower : x >= lower) &&
+      (upperOpen ? x < upper : x <= upper);
+    if (!ok) {
+      throw fail(
+        "mustBeInRange",
+        `Value must be greater than ${lowerOpen ? "" : "or equal to "}${fmt(lower)}, and less than ${upperOpen ? "" : "or equal to "}${fmt(upper)}.`
+      );
+    }
+  }
+});
+
+// ── Membership and class ────────────────────────────────────────────────
+
+validator("mustBeMember", 2, ([v, set]) => {
+  const setText = isRuntimeChar(set) ? null : textElements(set);
+  const vText = textElements(v);
+  if (setText !== null || (isRuntimeChar(set) && vText !== null)) {
+    // Text membership (case-sensitive). A char set is matched character-
+    // wise, like ismember.
+    const members = setText ?? Array.from((set as RuntimeChar).value);
+    const items =
+      setText === null && isRuntimeChar(v) ? Array.from(v.value) : vText;
+    if (items !== null && items.every(s => members.includes(s))) return;
+    const shown = setText ?? [(set as RuntimeChar).value];
+    throw fail(
+      "mustBeMember",
+      `Value must be a member of this set:\n${shown.map(s => `    '${s}'\n`).join("")}`
+    );
+  }
+  const sp = numericParts(set, true);
+  const vp = numericParts(v, true);
+  if (!sp) {
+    throw fail(
+      "mustBeMemberGenericText",
+      "Value must be members of the required set."
+    );
+  }
+  const members = Array.from(sp.re);
+  if (vp && Array.from(vp.re).every(x => members.includes(x))) return;
+  throw fail(
+    "mustBeMember",
+    `Value must be a member of this set:\n${members.map(n => `    ${formatBound(n)}\n`).join("")}`
+  );
+});
+
+/** Class names given as char, string array or cellstr. */
+function classNamesArg(v: RuntimeValue, name: string): string[] {
+  const els = textElements(v);
+  if (els === null)
+    throw builtinError(
+      "MATLAB:validatorUsage:invalidClassNames",
+      `Second input to function '${name}' must be a string array, character vector, or cell array of character vectors.`
+    );
+  return els;
+}
+
+validator("mustBeA", 2, ([v, classes], rt) => {
+  const names = classNamesArg(classes, "mustBeA");
+  for (const c of names) {
+    if (rt.isa(v, RTV.char(c))) return;
+  }
+  const q = names.map(n => `'${n}'`);
+  const list =
+    q.length <= 2
+      ? q.join(" or ")
+      : `${q.slice(0, -1).join(", ")}, or ${q[q.length - 1]}`;
+  throw fail("mustBeA", `Value must be one of these types: ${list}.`);
+});
+
+validator("mustBeUnderlyingType", 2, ([v, types], rt) => {
+  const names = classNamesArg(types, "mustBeUnderlyingType");
+  for (const c of names) {
+    if (rt.isa(v, RTV.char(c))) return;
+  }
+  throw fail(
+    "mustBeUnderlyingType",
+    `Value must have one of these underlying types: ${names.join(", ")}.`
+  );
 });
 
 // ── validateattributes ─────────────────────────────────────────────────

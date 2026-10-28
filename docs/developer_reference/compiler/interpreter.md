@@ -15,18 +15,26 @@ The interpreter is an AST walker. Given a parsed program and a `CodeIndex`, it e
 
 The `Interpreter` class holds state only. The evaluation code is in modules of plain functions that take the interpreter as their first argument, under `src/numbl-core/interpreter/`:
 
-| File                 | Contents                                                                                   |
-| -------------------- | ------------------------------------------------------------------------------------------ |
-| `execStatements.ts`  | statements, control flow, `for`/`while` loops, `%!numbl:assert_jit`                        |
-| `evalExpressions.ts` | expressions, operators, call expressions, member access, tensor and cell literals          |
-| `indexing.ts`        | indexing reads, `end`, assignment targets (`a(i).f{j} = v`), the same-class subsref bypass |
-| `handles.ts`         | anonymous functions and `@name` handles                                                    |
-| `calls.ts`           | calling what a name resolves to (user functions, builtins, `.numbl.js`, scripts)           |
-| `callConvention.ts`  | binding inputs, running a body in a new frame, collecting outputs; nested functions        |
-| `oop.ts`             | instantiation, constructors, superclass calls, class methods, enumerations, Constant props |
-| `metaClass.ts`       | `?Name` and `metaclass`: meta.class objects                                                |
-| `argumentsBlock.ts`  | `arguments` block defaults and name-value struct parameters                                |
-| `callerScope.ts`     | the calling scope that builtins declared with `scope: true` see, eval of text              |
+| File                    | Contents                                                                                       |
+| ----------------------- | ---------------------------------------------------------------------------------------------- |
+| `execStatements.ts`     | statements, control flow, `for`/`while` loops, `%!numbl:assert_jit`                            |
+| `evalExpressions.ts`    | expressions, operators, call expressions, member access, tensor and cell literals              |
+| `indexing.ts`           | indexing reads, `end`, assignment targets (`a(i).f{j} = v`), the same-class subsref bypass     |
+| `handles.ts`            | anonymous functions and `@name` handles                                                        |
+| `calls.ts`              | calling what a name resolves to (user functions, builtins, `.numbl.js`, scripts)               |
+| `callConvention.ts`     | binding inputs, running a body in a new frame, collecting outputs; nested functions            |
+| `oop.ts`                | instantiation, constructors, superclass calls, class methods, enumerations, Constant props     |
+| `metaClass.ts`          | `?Name` and `metaclass`: meta.class objects                                                    |
+| `argumentsBlock.ts`     | `arguments` blocks: binding and validating inputs (positional, repeating, name-value), outputs |
+| `valueValidation.ts`    | size/class/validator checks shared by `arguments` blocks and property declarations             |
+| `propertyValidation.ts` | classdef property declarations, applied to defaults and assignments                            |
+| `callerScope.ts`        | the calling scope that builtins declared with `scope: true` see, eval of text                  |
+
+## Arguments blocks and property validation
+
+A function's `arguments` blocks are compiled once (per AST and parameter list) into an `ArgsSpec` (`argumentsBlock.ts`). On each call, `bindArguments` runs in the callee's frame: it parses the argument list (required count, name-value section, repeating groups), then binds each argument, evaluating defaults only for missing ones, and validates in MATLAB's order: class conversion, size (with scalar expansion and vector reshaping), then the validator functions. `validateOutputs` applies `arguments (Output)` declarations when the body returns. Classdef property declarations use the same checks (`valueValidation.ts`): `propertyValidation.ts` converts default values and validates every assignment, through the runtime's `validateProperty` hook in `setMemberReturn`, before any `set.Prop` method runs.
+
+The JIT does not apply these checks. `callBody` offers a call to the call executors directly only when the blocks need no work for it (`ArgsSpec.jitDirect`), or after `bindArguments` has validated and converted the inputs (`jitAfterValidation`, positional checks only). Inside compiled code, `specializeUserFunction` declines a callee whose blocks need run-time work, and the class registration declines classes with property declarations.
 
 ## Call frames
 

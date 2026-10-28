@@ -81,7 +81,7 @@ predicate("isstring", v => isRuntimeString(v) || isRuntimeStringArray(v));
 
 // MATLAB's reserved words (`iskeyword` with no args). Note true/false are
 // functions, not keywords; spmd is included.
-const MATLAB_KEYWORDS: ReadonlySet<string> = new Set([
+export const MATLAB_KEYWORDS: ReadonlySet<string> = new Set([
   "break",
   "case",
   "catch",

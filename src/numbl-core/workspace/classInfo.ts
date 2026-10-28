@@ -2,7 +2,12 @@
  * Class information types and extraction utilities.
  */
 
-import { type Attr, type Expr, type Stmt } from "../parser/index.js";
+import {
+  type Attr,
+  type Expr,
+  type Stmt,
+  type ValidationSpec,
+} from "../parser/index.js";
 
 /** Built-in base classes that confer handle (reference) semantics. */
 export const HANDLE_BASE_CLASSES = new Set([
@@ -76,6 +81,8 @@ export interface ClassInfo {
    *  `@folder` files, without a signature in the classdef, are not listed;
    *  they are public. */
   methods: Map<string, MethodInfo>;
+  /** Size/class/validator declarations of properties that have them. */
+  propertyValidations: Map<string, ValidationSpec>;
   methodNames: Set<string>; // instance method names (non-static, non-constructor)
   staticMethodNames: Set<string>;
   constructorName: string | null; // method name matching class name
@@ -174,6 +181,7 @@ export function extractClassInfo(
   const propertyDefaults = new Map<string, Expr>();
   const properties = new Map<string, PropertyInfo>();
   const methods = new Map<string, MethodInfo>();
+  const propertyValidations = new Map<string, ValidationSpec>();
   const methodNames = new Set<string>();
   const staticMethodNames = new Set<string>();
   let constructorName: string | null = null;
@@ -210,6 +218,8 @@ export function extractClassInfo(
         if (constant || dependent || abstract) continue;
         propertyNames.push(name);
         if (defaultExpr) propertyDefaults.set(name, defaultExpr);
+        const validation = member.validations[i];
+        if (validation) propertyValidations.set(name, validation);
       }
     } else if (member.type === "Methods") {
       const { getAccess, flags } = blockAttributes(member.attributes);
@@ -274,6 +284,7 @@ export function extractClassInfo(
     propertyDefaults,
     properties,
     methods,
+    propertyValidations,
     methodNames,
     staticMethodNames,
     constructorName,
@@ -327,6 +338,7 @@ export function makeOldStyleClassInfo(
     propertyDefaults: new Map(),
     properties: new Map(),
     methods: new Map(),
+    propertyValidations: new Map(),
     methodNames,
     staticMethodNames: new Set(),
     constructorName: baseName,

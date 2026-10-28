@@ -114,6 +114,28 @@ export function buildUserFunctionCall(
   };
 }
 
+/** Why a call to `decl` with `nargs` arguments needs its `arguments`
+ *  blocks applied at run time (null when it does not). The JIT does not
+ *  apply them: size/class/validator checks, name-value and repeating
+ *  arguments, output checks, and defaults of missing arguments run on the
+ *  interpreter (which validates before offering a top-level call to the
+ *  JIT, passing a declaration without blocks). */
+function argumentsBlockDecline(decl: FuncStmt, nargs: number): string | null {
+  for (const block of decl.argumentsBlocks) {
+    for (const e of block.entries) {
+      if (e.dimensions || e.className || e.validators.length > 0)
+        return "has argument validation (arguments block)";
+      if (e.name.includes("."))
+        return "has name-value arguments (arguments block)";
+      if (block.kind === "Repeating" && e.name !== "varargin")
+        return "has repeating arguments (arguments block)";
+      if (e.defaultValue && decl.params.indexOf(e.name) >= nargs)
+        return `is called without argument '${e.name}', which has a default (arguments block)`;
+    }
+  }
+  return null;
+}
+
 /** Specialize a user function (or method, or anonymous-function
  *  synth) on the given arg-type tuple. The C mangling salts by the
  *  defining file so two files defining a same-named subfunction get
@@ -174,6 +196,13 @@ export function specializeUserFunction(
         errSpan
       );
     }
+  }
+  const argsBlockReason = argumentsBlockDecline(decl, argTypes.length);
+  if (argsBlockReason) {
+    throw new UnsupportedConstruct(
+      `function '${decl.name}' ${argsBlockReason}`,
+      errSpan
+    );
   }
   // Allow calling with FEWER arguments than declared (the standard
   // MATLAB pattern: `function y = f(a, b); if nargin < 2; b = ...;`).
