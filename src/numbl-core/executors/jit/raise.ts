@@ -31,10 +31,11 @@
  * variables the unit would have
  * assigned before the error are unobservable. The last holds for the call
  * shape (the function's workspace is discarded) and, for the loop and
- * top-level shapes, outside any `try` (an uncaught error ends the run, and
- * a session does not adopt the state of a failed run). Inside a `try` the
- * catch block could read those variables, which the compiled unit has not
- * written back, so the unit re-runs.
+ * top-level shapes, outside any `try` when the unit's workspace ends with
+ * the run: a function's, or the base workspace of a one-shot run. Inside a
+ * `try` the catch block could read those variables, and a session's base
+ * workspace outlives a failed run (`Interpreter.baseWorkspacePersists`);
+ * the compiled unit has not written them back, so the unit re-runs.
  */
 
 import type { Interpreter } from "../../interpreter/interpreter.js";
@@ -147,7 +148,12 @@ export function handleRaise(
     r.loc !== null &&
     inScope(r.loc, scope) &&
     scope.reentrant !== true &&
-    (scope.callName !== undefined || interp.tryDepth === 0);
+    (scope.callName !== undefined ||
+      (interp.tryDepth === 0 &&
+        !(
+          interp.baseWorkspacePersists &&
+          interp.frame.env === interp.baseFrame.env
+        )));
   if (!direct) {
     jitLog(
       `[jit-rerun] ${where}: ${r.raiseMessage ?? "(interpreter wording)"}`

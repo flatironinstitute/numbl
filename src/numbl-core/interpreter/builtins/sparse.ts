@@ -14,6 +14,7 @@ import {
 } from "../../runtime/types.js";
 import type { RuntimeValue, RuntimeSparseMatrix } from "../../runtime/types.js";
 import { RTV, RuntimeError } from "../../runtime/index.js";
+import type { Runtime } from "../../runtime/runtime.js";
 import { parseStringArgLower } from "../../helpers/check-helpers.js";
 import { builtin } from "./builtin.js";
 import { boolToNumber, builtinError, realScalarArg } from "./args.js";
@@ -697,13 +698,14 @@ const SPPARMS_KEYS = [
 const SPPARMS_DEFAULTS = [
   0, 1.1, 1.0, 0, 3, 3, 0.5, 1, 1, 0.1, 0.5, 1, 0.001, 0.01, 1, -2, 0, 0, 0,
 ];
-let spparmsState = Float64Array.from(SPPARMS_DEFAULTS);
+/** The session's spparms values (`SessionState.spparms`). */
+function spparmsState(rt: Runtime): Float64Array {
+  return (rt.session.spparms ??= Float64Array.from(SPPARMS_DEFAULTS));
+}
 
-function spparmsVector(): RuntimeValue {
-  return RTV.tensor(allocFloat64Array(Array.from(spparmsState)), [
-    spparmsState.length,
-    1,
-  ]);
+function spparmsVector(rt: Runtime): RuntimeValue {
+  const state = spparmsState(rt);
+  return RTV.tensor(allocFloat64Array(Array.from(state)), [state.length, 1]);
 }
 
 builtin({
@@ -711,7 +713,7 @@ builtin({
   nargin: [0, 2],
   nargout: 2,
   mfile: true,
-  apply: (args, n) => {
+  apply: (args, n, { rt }) => {
     if (args.length === 0) {
       if (n >= 2) {
         // [keys, vals] = spparms
@@ -719,10 +721,10 @@ builtin({
         const padded = SPPARMS_KEYS.map(k => k.padEnd(width)).join("");
         return [
           new RuntimeChar(padded, [SPPARMS_KEYS.length, width]),
-          spparmsVector(),
+          spparmsVector(rt),
         ];
       }
-      return spparmsVector();
+      return spparmsVector(rt);
     }
     const first = args[0];
     const isText = isRuntimeChar(first) || isRuntimeString(first);
@@ -738,11 +740,11 @@ builtin({
       if (args.length >= 2) {
         // spparms('key', value) — store (no solver effect).
         const idx = SPPARMS_KEYS.indexOf(key);
-        if (idx >= 0) spparmsState[idx] = realScalarArg(args[1], "Value");
+        if (idx >= 0) spparmsState(rt)[idx] = realScalarArg(args[1], "Value");
         return;
       }
       if (key === "default") {
-        spparmsState = Float64Array.from(SPPARMS_DEFAULTS);
+        rt.session.spparms = null;
         return;
       }
       if (key === "tight") {
@@ -752,7 +754,7 @@ builtin({
       }
       // spparms('key') — query a single parameter value.
       const idx = SPPARMS_KEYS.indexOf(key);
-      if (idx >= 0) return RTV.num(spparmsState[idx]);
+      if (idx >= 0) return RTV.num(spparmsState(rt)[idx]);
       throw new RuntimeError(`spparms: unknown parameter '${key}'`);
     }
     // spparms(values) — restore from a vector.
@@ -765,9 +767,9 @@ builtin({
       throw new RuntimeError(
         "spparms: argument must be a parameter name or value vector"
       );
-    const next = Float64Array.from(spparmsState);
+    const next = Float64Array.from(spparmsState(rt));
     for (let i = 0; i < Math.min(vals.length, next.length); i++)
       next[i] = vals[i];
-    spparmsState = next;
+    rt.session.spparms = next;
   },
 });

@@ -27,7 +27,7 @@ import { Workspace, SHIM_SEARCH_PATH } from "./workspace/workspace.js";
 import { parseMFile } from "./parser/index.js";
 import { Interpreter } from "./interpreter/interpreter.js";
 import { stdlibFiles, shimFiles } from "./stdlib-bundle.js";
-import { resetAppdataStore } from "./interpreter/builtins/misc.js";
+import { SessionState } from "./sessionState.js";
 import { registerExecutorsForOpt } from "./executors/plugins.js";
 import { pushCurrentRuntime, popCurrentRuntime } from "./runtime/refcount.js";
 import {
@@ -44,6 +44,11 @@ export interface ExecOptions {
   onDrawnow?: (plotInstructions: PlotInstruction[]) => void;
   displayResults?: boolean;
   maxIterations?: number;
+  /** State that outlives the run (base workspace, globals, persistents,
+   *  warning and PRNG state, ...). An `ExecSession` passes its own; when
+   *  omitted the run gets a fresh one. */
+  session?: SessionState;
+  /** Variables to add to the base workspace before the run. */
   initialVariableValues?: Record<string, RuntimeValue>;
   /** Optional callback for verbose compilation logging. */
   log?: (message: string) => void;
@@ -159,9 +164,6 @@ export function executeCode(
   searchPaths?: string[],
   nativeBridge?: NativeBridge
 ): ExecResult {
-  // Reset module-level mutable state so separate runs don't bleed
-  resetAppdataStore();
-
   // ── 1. Parse main file ──────────────────────────────────────────────
   const ast = parseMFile(source, mainFileName);
 
@@ -204,7 +206,22 @@ export function executeCode(
   ws.code.buildFunctionIndex();
 
   // ── 3. Create runtime ──────────────────────────────────────────────
-  const rt = new Runtime(options, options.initialVariableValues);
+  const session = options.session ?? new SessionState();
+  const rt = new Runtime(options, session);
+  const baseEnv = session.baseEnv;
+  baseEnv.rt = rt;
+  if (options.initialVariableValues) {
+    for (const [name, value] of Object.entries(options.initialVariableValues))
+      baseEnv.set(name, value);
+  }
+
+  // Persistents of functions whose file was edited since the last run are
+  // cleared, as MATLAB does when it reloads a changed file.
+  const sourceOf = (file: string): string | undefined =>
+    file === mainFileName
+      ? source
+      : ws.mFiles.find(f => f.name === file)?.source;
+  session.syncPersistents(sourceOf);
 
   // Custom builtins take priority over registered builtins.
   if (options.customBuiltins) {
@@ -212,11 +229,8 @@ export function executeCode(
   }
 
   // ── 4. Create interpreter and wire up runtime callbacks ────────────
-  const interpreter = new Interpreter(
-    rt,
-    ws.code,
-    options.initialVariableValues
-  );
+  const interpreter = new Interpreter(rt, ws.code, baseEnv);
+  interpreter.baseWorkspacePersists = options.session !== undefined;
 
   // Populate file→source map for line number computation in error messages
   interpreter.fileSources.set(mainFileName, source);
@@ -358,6 +372,7 @@ export function executeCode(
     throw re;
   } finally {
     popCurrentRuntime(rt);
+    session.syncPersistents(sourceOf);
     // Files left open stay open (a REPL may keep using them), but their
     // contents reach the host now.
     rt.files?.flush();

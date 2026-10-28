@@ -1,10 +1,12 @@
 /**
- * REPL-style session over `executeCode`. Each call builds a fresh runtime, so
- * the state a session carries from one call to the next is threaded through
- * here: workspace variables, plot hold state, figure handles, search paths and
- * workspace files (as changed by addpath/rmpath), the implicit cwd, and the
- * uihtml session left by the latest run. Used by the CLI REPL and the
- * browser workers, and exported from "numbl" for other hosts.
+ * REPL-style session over `executeCode`. Each call builds a fresh runtime;
+ * what MATLAB keeps between commands lives in the session's `SessionState`
+ * (the base workspace, globals, persistents, warning and PRNG state, tic,
+ * appdata, ...), which every run is given. The session also threads plot
+ * hold state, figure handles, search paths and workspace files (as changed
+ * by addpath/rmpath), the implicit cwd, and the uihtml session left by the
+ * latest run. Used by the CLI REPL and the browser workers, and exported
+ * from "numbl" for other hosts.
  */
 
 import {
@@ -15,6 +17,7 @@ import {
   type UihtmlSession,
 } from "./executeCode.js";
 import type { RuntimeValue } from "./runtime/index.js";
+import { SessionState } from "./sessionState.js";
 import type { NativeBridge, WorkspaceFile } from "./workspace/types.js";
 
 export interface ExecSessionInit {
@@ -25,7 +28,8 @@ export interface ExecSessionInit {
 }
 
 export class ExecSession {
-  variableValues: Record<string, RuntimeValue> = {};
+  /** State every run of the session shares (see SessionState). */
+  state = new SessionState();
   holdState = false;
   figureHandles: FigureHandles = { current: 0, max: 0 };
   workspaceFiles: WorkspaceFile[];
@@ -44,9 +48,15 @@ export class ExecSession {
     this.nativeBridge = init.nativeBridge;
   }
 
-  /** Run `code` against the carried state and adopt the result's state. A
-   *  new run supersedes the previous uihtml session; on error the rest of
-   *  the state is left unchanged. */
+  /** The base workspace's variables (including the globals it declares). */
+  get variableValues(): Record<string, RuntimeValue> {
+    return this.state.baseEnv.toRecord();
+  }
+
+  /** Run `code` against the session and adopt the result's state. A new
+   *  run supersedes the previous uihtml session. On error, changes the run
+   *  made to variables, globals and the like stay, as at the MATLAB prompt;
+   *  the rest (hold state, figures, paths) is left unchanged. */
   execute(
     code: string,
     options: ExecOptions = {},
@@ -60,7 +70,7 @@ export class ExecSession {
     const result = executeCode(
       code,
       {
-        initialVariableValues: this.variableValues,
+        session: this.state,
         initialHoldState: this.holdState,
         initialFigureHandles: this.figureHandles,
         implicitCwdPath: this.implicitCwdPath,
@@ -75,9 +85,9 @@ export class ExecSession {
     return result;
   }
 
-  /** Carry a successful run's state forward. */
+  /** Carry a successful run's state forward (its variables are already in
+   *  `state`). */
   adopt(result: ExecResult): void {
-    this.variableValues = result.variableValues;
     this.holdState = result.holdState;
     this.figureHandles = result.figureHandles;
     if (result.searchPaths) {
@@ -90,10 +100,11 @@ export class ExecSession {
     this.uihtmlSession = result.uihtmlSession ?? null;
   }
 
-  /** Forget variables, hold state and figures (paths and cwd are kept). */
+  /** Start over: forget variables, globals, persistents and the rest of
+   *  the session state, hold state and figures (paths and cwd are kept). */
   clearWorkspace(): void {
     this.disposeUihtmlSession();
-    this.variableValues = {};
+    this.state = new SessionState();
     this.holdState = false;
     this.figureHandles = { current: 0, max: 0 };
   }

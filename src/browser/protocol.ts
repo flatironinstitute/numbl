@@ -67,7 +67,7 @@ export interface ExecuteResult {
   /**
    * True when the run ended because it was interrupted via
    * `NumblSession.interrupt()` (rather than finishing or erroring). The
-   * workspace is left at its pre-run state, so variables survive the abort.
+   * workspace survives the abort, with what the run did before it stopped.
    */
   aborted?: boolean;
 }

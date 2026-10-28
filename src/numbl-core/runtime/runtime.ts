@@ -88,7 +88,7 @@ import {
   indexCellStore as _indexCellStore,
   multiOutputCellAssign as _multiOutputCellAssign,
 } from "./runtimeIndexing.js";
-import { setWarningSink } from "../helpers/warn.js";
+import { SessionState } from "../sessionState.js";
 import {
   getMember as _getMember,
   getMemberDynamic as _getMemberDynamic,
@@ -154,7 +154,6 @@ export class Runtime {
    *  when there is none and no streaming frame is active. */
   private replay: OutputReplay | null = null;
   plotInstructions: PlotInstruction[] = [];
-  variableValues: Record<string, RuntimeValue> = {};
   holdState = false;
   /** Figure-handle tracking for MATLAB-style `figure` allocation: `figure`
    *  with no argument creates a new figure (`maxFigureHandle + 1`). */
@@ -230,13 +229,12 @@ export class Runtime {
   // Constructor helpers
   public RTV = RTV;
 
-  // Persistent variable storage: funcJsId → varName → value
-  // Public so the alias sweep can traverse it as a root.
-  public persistentStore = new Map<string, Map<string, RuntimeValue>>();
+  /** Persistent variables: "file:function" → name → value (the
+   *  session's). */
+  public readonly persistentStore: Map<string, Map<string, RuntimeValue>>;
 
-  // Global variable storage: varName → value (shared across all functions)
-  // Public object so generated code can read/write as $rt.$g["name"]
-  public $g: Record<string, RuntimeValue> = {};
+  /** Global variables: name → value (the session's). */
+  public readonly $g: Record<string, RuntimeValue>;
 
   /** Active per-statement transient scope. New refcounted values are
    *  auto-adopted into this scope (rc 0→1) on construction so they
@@ -296,8 +294,8 @@ export class Runtime {
   public searchPaths: string[] = [];
 
   /** Warning identifiers turned off with warning('off', id); 'all' covers
-   *  identifiers without their own entry. */
-  public warningsOff = new Set<string>();
+   *  identifiers without their own entry (the session's). */
+  public readonly warningsOff: Set<string>;
 
   /** Counter for uihtml component ids. */
   public uihtmlSeq = 0;
@@ -390,8 +388,13 @@ export class Runtime {
 
   constructor(
     private options: ExecOptions,
-    private initialVariableValues?: Record<string, RuntimeValue>
+    /** State that outlives the run: globals, persistents, warning state,
+     *  PRNG, ... (see SessionState). */
+    readonly session: SessionState = new SessionState()
   ) {
+    this.$g = session.globals;
+    this.persistentStore = session.persistents;
+    this.warningsOff = session.warningsOff;
     this.profilingEnabled = !!options.profile;
     if (options.fileIO) {
       this.fileIO = fileIOView(options.fileIO);
@@ -409,7 +412,6 @@ export class Runtime {
     if (options.cancelSAB) {
       this.cancelFlag = new Int32Array(options.cancelSAB);
     }
-    setWarningSink(msg => this.output("Warning: " + msg + "\n"));
   }
 
   /** Throw CancellationError if the cancel flag has been set. */
@@ -809,19 +811,6 @@ export class Runtime {
     let s = raw.slice(1, raw.length - 1);
     s = s.replaceAll('""', '"');
     return RTV.string(s);
-  }
-
-  // ── Variables ───────────────────────────────────────────────────────
-
-  public getInitialVariableValue(name: string): RuntimeValue | undefined {
-    return this.initialVariableValues
-      ? this.initialVariableValues[name]
-      : undefined;
-  }
-
-  public setVariableValue(name: string, value: RuntimeValue | undefined): void {
-    if (value === undefined) return;
-    this.variableValues[name] = ensureRuntimeValue(value);
   }
 
   // ── who() / whos() ─────────────────────────────────────────────────

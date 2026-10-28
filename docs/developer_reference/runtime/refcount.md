@@ -27,6 +27,9 @@ Every "slot" (env binding, struct field, cell element, function capture, diction
 - **`Environment.set` / `setLocal` / `clearLocals` / `delete`** ([`interpreter/types.ts`](../../../src/numbl-core/interpreter/types.ts)): incref new before decref old, so self-rebind is safe.
 - **`Environment.snapshot()`**: increfs every value copied into the new flat env so anonymous-function closures survive the source frame's exit.
 - **`Runtime.setPersistent`** ([`runtime/runtime.ts`](../../../src/numbl-core/runtime/runtime.ts)): same pattern for persistent variables.
+
+Globals, persistents and the base workspace's bindings live in the session (`SessionState`), not the run: an `ExecSession` reuses one base `Environment` across runs, so a value carried from one command to the next keeps the single reference its binding holds, and counts do not drift upward from run to run.
+
 - **Container constructors** ([`runtime/types.ts`](../../../src/numbl-core/runtime/types.ts)): `RuntimeStruct`, `RuntimeCell`, `RuntimeClassInstance`, `RuntimeFunction`, etc. incref every child value they accept at construction.
 - **`bindField` / `bindElement`**: methods for in-place mutation, `bindField` on `RuntimeStruct` and `RuntimeClassInstance`, `bindElement` on `RuntimeCell`, `RuntimeStructArray` and `RuntimeClassInstanceArray`. Used by `setRTValueField` (handle-class branch and value-class non-shared branch) and the cell and struct-array stores in `runtime/indexing.ts` (every write of a cell element goes through `setCellElement`).
 - **`callSuperConstructor`** ([`runtime/runtimeDispatch.ts`](../../../src/numbl-core/runtime/runtimeDispatch.ts)): class-to-class inheritance threads `bindField`; the built-in-superclass case decrefs the old `_builtinData` and increfs the new one.
