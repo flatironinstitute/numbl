@@ -31,6 +31,9 @@ export default defineConfig({
       "**/tests-browser/**",
       "**/.claude/**",
     ],
+    // Regenerate src/numbl-core/stdlib-bundle.ts if src/stdlib/ changed, so
+    // tests never run against a stale bundle.
+    globalSetup: ["./scripts/bundle-stdlib.ts"],
     // Install the qhull Delaunay backend (the only delaunay/delaunayn backend)
     // before tests run; see src/test-setup.ts.
     setupFiles: ["./src/test-setup.ts"],

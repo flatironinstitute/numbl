@@ -18,11 +18,13 @@ npm install
 ### Build
 
 ```bash
-npm run build          # build everything (web app, CLI, plot viewer)
+npm run build          # web app, test runner, CLI, plot viewer, site viewer
 npm run build:cli      # CLI only
 npm run build:web      # web app only
 npm run dev            # start web dev server (hot reload)
 ```
+
+The published library entry points are built separately: `npm run build:lib` (`numbl`, `numbl/node`), `npm run build:graphics` (`numbl/graphics`) and `npm run build:browser` (`numbl/browser`). All of them run in `prepublishOnly`.
 
 ## Project Components
 
@@ -58,13 +60,13 @@ src/numbl-core/stdlib-bundle.ts   ← auto-generated, do not edit
 
 This file exports two arrays of `WorkspaceFile` objects — one for the flat stdlib files and one for the shims — which the executor loads automatically before running any user code.
 
-**Regenerate the bundle** any time you add, remove, or modify a file in `src/stdlib/`:
+The generated file is committed, so a fresh clone works without a build step. **Regenerate it** and commit the result any time you add, remove, or modify a file in `src/stdlib/`:
 
 ```bash
-npx tsx scripts/bundle-stdlib.ts
+npm run bundle:stdlib
 ```
 
-The `build:web` and `build:cli` scripts run this automatically, but when working from source with `npx tsx src/cli.ts` you need to run it once manually (or re-run it after stdlib changes). The script is a no-op if nothing has changed.
+The script is a no-op if nothing has changed. `npm test`, `npm run test:scripts`, `npm run test:scripts:c`, `npm run jit-parity` and the `build:*` scripts regenerate it automatically; when running `npx tsx src/cli.ts` directly after a stdlib edit, run it yourself first. CI fails if the committed file is out of date (`npm run bundle:stdlib:check`).
 
 > Do not edit `stdlib-bundle.ts` directly — it will be overwritten the next time the script runs.
 
