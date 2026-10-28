@@ -6,14 +6,9 @@ import {
   existsSync,
   writeFileSync,
   appendFileSync,
-  mkdirSync,
-  rmSync,
   copyFileSync,
 } from "fs";
 import { delimiter, dirname, join, resolve } from "path";
-import { homedir } from "os";
-import { fileURLToPath } from "url";
-import { createRequire } from "module";
 import { execSync } from "child_process";
 import { type PlotServerOptions } from "./cli-plot-server.js";
 import { createPlotHandler } from "./cli-plot-handler.js";
@@ -21,10 +16,8 @@ import {
   getAllIBuiltinNames,
   getIBuiltinHelp,
 } from "./numbl-core/interpreter/builtins/index.js";
-import {
-  setLapackBridge,
-  setBridgeLog,
-} from "./numbl-core/native/lapack-bridge.js";
+import { setBridgeLog } from "./numbl-core/native/lapack-bridge.js";
+import { loadQhullNodeBackend } from "./numbl-core/native/qhull-node.js";
 import {
   diagnoseErrors,
   formatDiagnostics,
@@ -47,72 +40,16 @@ import { cmdShowProfile, writeProfile } from "./cli-profile.js";
 import { executeCode } from "./numbl-core/executeCode.js";
 import { parseMFile } from "./numbl-core/parser/index.js";
 import { WorkspaceFile, NativeBridge } from "./numbl-core/workspace/types.js";
-import { registerNodeCompileC } from "./numbl-core/executors/jit/compileC.node.js";
 import { scanMFiles } from "./cli-scan.js";
-import { unzipToFiles } from "./vfs/unzipToFiles.js";
+import {
+  initNodePlatform,
+  packageDir,
+  variantAddonPath,
+} from "./node-platform.js";
 
-// Install the Node-side koffi C-JIT implementation into the
-// browser-safe stub in `compileC.ts`. Keeping the `node:fs` /
-// `node:child_process` imports inside `compileC.node.ts` (only loaded
-// here) is what lets the browser bundle stay green.
-registerNodeCompileC();
-
-// ── Package directory & native addon paths ───────────────────────────────────
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const packageDir = join(__dirname, "..");
 const addonBuildPath = join(packageDir, "build", "Release", "numbl_addon.node");
 
-/** Variant-specific addon path. Build-addon copies the freshly built
- *  `numbl_addon.node` here so both fast-math and no-fast-math variants
- *  can coexist; the loader picks the one matching the runtime
- *  `--no-fast-math` choice. */
-function variantAddonPath(fastMath: boolean): string {
-  const name = fastMath
-    ? "numbl_addon.fastmath.node"
-    : "numbl_addon.nofastmath.node";
-  return join(packageDir, "build", "Release", name);
-}
-
-// ── Try to load the native LAPACK addon ──────────────────────────────────────
-
-import { NATIVE_ADDON_EXPECTED_VERSION } from "./numbl-core/native/lapack-bridge.js";
-
-function loadNativeAddon(fastMath: boolean, noNative = false): void {
-  if (noNative || process.env.NUMBL_NO_NATIVE) return;
-  const variantPath = variantAddonPath(fastMath);
-  const flag = fastMath ? " --fast-math" : "";
-  if (!existsSync(variantPath)) {
-    console.error(
-      `Warning: native addon not built${fastMath ? " with fast-math" : " with --no-fast-math"}. ` +
-        `Run "npx numbl build-addon${flag}" to build it. Using JS fallbacks.`
-    );
-    return;
-  }
-  try {
-    const req = createRequire(import.meta.url);
-    const addon = req(variantPath);
-    const addonVer =
-      typeof addon.addonVersion === "function" ? addon.addonVersion() : 0;
-    if (addonVer !== NATIVE_ADDON_EXPECTED_VERSION) {
-      console.error(
-        `Warning: native addon version mismatch (got ${addonVer}, expected ${NATIVE_ADDON_EXPECTED_VERSION}). ` +
-          `Run "npx numbl build-addon${flag}" to rebuild. Using JS fallbacks.`
-      );
-      return;
-    }
-    setLapackBridge(addon);
-  } catch (e) {
-    console.error(
-      `Warning: failed to load native addon at ${variantPath}: ${(e as Error).message}. Using JS fallbacks.`
-    );
-  }
-}
-
 // ── Try to load the qhull WASM Delaunay backend ──────────────────────────────
-
-import { loadQhullNodeBackend } from "./numbl-core/native/qhull-node.js";
 
 let qhullLoaded = false;
 async function loadQhullBackend(): Promise<void> {
@@ -125,69 +62,6 @@ async function loadQhullBackend(): Promise<void> {
       `Warning: failed to load qhull WASM backend: ${(e as Error).message}. ` +
         `delaunay/delaunayn will be unavailable.`
     );
-  }
-}
-
-// ── Try to load koffi for native FFI bridge ───────────────────────────────────
-
-let nativeBridge: NativeBridge | undefined;
-try {
-  const req = createRequire(import.meta.url);
-  const koffi = req("koffi");
-  nativeBridge = { load: (path: string) => koffi.load(path), koffi };
-} catch {
-  // koffi not installed — native shared library support disabled
-}
-
-// ── MIP core package auto-install ───────────────────────────────────────────
-
-const MHL_URL =
-  "https://github.com/mip-org/mip-core/releases/download/mip-numbl/mip-numbl-any.mhl";
-const mipCoreDir = join(
-  homedir(),
-  ".numbl",
-  "mip",
-  "packages",
-  "gh",
-  "mip-org",
-  "core",
-  "mip"
-);
-const mipCoreSearchPath = join(mipCoreDir, "mip");
-const mipCoreStampPath = join(homedir(), ".numbl", "mip", ".last-refreshed");
-const MIP_REFRESH_INTERVAL_MS = 60 * 60 * 1000;
-
-function readMipRefreshStamp(): number {
-  try {
-    const raw = readFileSync(mipCoreStampPath, "utf8");
-    const n = parseInt(raw, 10);
-    return Number.isFinite(n) ? n : 0;
-  } catch {
-    return 0;
-  }
-}
-
-async function ensureMipCorePackage(): Promise<void> {
-  const installed = existsSync(join(mipCoreSearchPath, "mip.m"));
-  const fresh = Date.now() - readMipRefreshStamp() < MIP_REFRESH_INTERVAL_MS;
-  if (installed && fresh) return;
-  try {
-    if (!installed) console.error("Installing mip core package...");
-    const resp = await fetch(MHL_URL);
-    if (!resp.ok) return;
-    const buf = new Uint8Array(await resp.arrayBuffer());
-    const files = unzipToFiles(buf);
-    rmSync(mipCoreDir, { recursive: true, force: true });
-    for (const f of files) {
-      const dest = join(mipCoreDir, f.path);
-      mkdirSync(dirname(dest), { recursive: true });
-      writeFileSync(dest, f.content);
-    }
-    mkdirSync(dirname(mipCoreStampPath), { recursive: true });
-    writeFileSync(mipCoreStampPath, String(Date.now()));
-    if (!installed) console.error("mip core package installed.");
-  } catch {
-    // silently ignore download / install failures; previous cache (if any) stays intact
   }
 }
 
@@ -270,17 +144,25 @@ Environment variables:
 
 // ── Command handlers ─────────────────────────────────────────────────────────
 
-/** Extra --path / NUMBL_PATH directories plus the mip core package (installed
- *  or refreshed first), with the workspace files found in them. */
-async function prepareSearchPaths(
-  extraPaths: string[]
-): Promise<{ searchPaths: string[]; workspaceFiles: WorkspaceFile[] }> {
-  await ensureMipCorePackage();
-  const searchPaths = [...extraPaths];
-  if (existsSync(mipCoreSearchPath)) searchPaths.push(mipCoreSearchPath);
+/** Set up the Node platform (native addon, C-JIT, koffi, and the mip core
+ *  package, installed or refreshed first) and collect the search paths: the
+ *  extra --path / NUMBL_PATH directories plus the mip core package, with the
+ *  workspace files found in them. */
+async function preparePlatform(opts: RunOptions): Promise<{
+  searchPaths: string[];
+  workspaceFiles: WorkspaceFile[];
+  nativeBridge: NativeBridge | undefined;
+}> {
+  const platform = await initNodePlatform({
+    native: !opts.noNative,
+    fastMath: opts.fastMath,
+    mip: true,
+  });
+  const searchPaths = [...opts.extraPaths, ...platform.searchPaths];
   return {
     searchPaths,
     workspaceFiles: searchPaths.flatMap(d => scanMFiles(d)),
+    nativeBridge: platform.nativeBridge,
   };
 }
 
@@ -314,10 +196,16 @@ async function cmdRun(args: string[]) {
   // first-priority implicit search path via the cwd-as-search-path feature.
   process.chdir(dirname(filepath));
 
-  const { searchPaths, workspaceFiles } = await prepareSearchPaths(
-    opts.extraPaths
+  const { searchPaths, workspaceFiles, nativeBridge } =
+    await preparePlatform(opts);
+  await executeWithOptions(
+    code,
+    filepath,
+    workspaceFiles,
+    opts,
+    searchPaths,
+    nativeBridge
   );
-  await executeWithOptions(code, filepath, workspaceFiles, opts, searchPaths);
 }
 
 async function cmdParse(args: string[]) {
@@ -355,10 +243,16 @@ async function cmdParse(args: string[]) {
 async function cmdEval(args: string[]) {
   const opts = parseRunOptions(args);
   const code = singlePositional(opts.positional, "eval", "code");
-  const { searchPaths, workspaceFiles } = await prepareSearchPaths(
-    opts.extraPaths
+  const { searchPaths, workspaceFiles, nativeBridge } =
+    await preparePlatform(opts);
+  await executeWithOptions(
+    code,
+    "eval.m",
+    workspaceFiles,
+    opts,
+    searchPaths,
+    nativeBridge
   );
-  await executeWithOptions(code, "eval.m", workspaceFiles, opts, searchPaths);
 }
 
 /** NDJSON writer on stdout for --stream. */
@@ -393,9 +287,9 @@ async function executeWithOptions(
   mainFileName: string,
   workspaceFiles: WorkspaceFile[],
   opts: RunOptions,
-  searchPaths?: string[]
+  searchPaths: string[],
+  nativeBridge: NativeBridge | undefined
 ) {
-  loadNativeAddon(opts.fastMath, opts.noNative);
   await loadQhullBackend();
   const totalStart = performance.now();
 
@@ -670,10 +564,8 @@ function cmdListBuiltins(args: string[]) {
 
 async function cmdRepl(args: string[]) {
   const opts = parseRunOptions(args);
-  loadNativeAddon(opts.fastMath, opts.noNative);
-  const { searchPaths, workspaceFiles } = await prepareSearchPaths(
-    opts.extraPaths
-  );
+  const { searchPaths, workspaceFiles, nativeBridge } =
+    await preparePlatform(opts);
   await runRepl(
     workspaceFiles,
     plotHandlerFor(opts).onDrawnow,
@@ -750,7 +642,10 @@ async function main() {
       break;
     case "run-tests": {
       const opts = parseRunOptions(rest);
-      loadNativeAddon(opts.fastMath, opts.noNative);
+      const { nativeBridge } = await initNodePlatform({
+        native: !opts.noNative,
+        fastMath: opts.fastMath,
+      });
       await loadQhullBackend();
       runTests(
         opts.positional[0] ?? join(packageDir, "numbl_test_scripts"),

@@ -50,7 +50,7 @@ The element-wise kernels are dispatched by integer op code. The TypeScript side 
 
 The addon is built with `numbl build-addon` (or `npx tsx src/cli.ts build-addon`). It requires a C++ compiler and the LAPACK/BLAS and FFTW development headers. The build is copied to `build/Release/numbl_addon.nofastmath.node` (or `.fastmath.node` with `--fast-math`).
 
-The CLI loads the addon eagerly, before any code runs, in `run`, `eval`, `run-tests` and the REPL (`loadNativeAddon` in `src/cli.ts`), unless `--no-native` or `NUMBL_NO_NATIVE` is set. If the file is missing, or its `addonVersion()` differs from `NATIVE_ADDON_EXPECTED_VERSION` (`src/numbl-core/native/lapack-bridge.ts`), the CLI warns and uses the JS fallbacks. Changing the addon's exported API means bumping `ADDON_VERSION` in `native/numbl_addon.cpp` and the TS constant together; users then need to rebuild.
+The CLI loads the addon eagerly, before any code runs, in `run`, `eval`, `run-tests` and the REPL (via `initNodePlatform` in `src/node-platform.ts`, which Node library hosts can also call through `numbl/node`), unless `--no-native` or `NUMBL_NO_NATIVE` is set. If the file is missing, or its `addonVersion()` differs from `NATIVE_ADDON_EXPECTED_VERSION` (`src/numbl-core/native/lapack-bridge.ts`), the CLI warns and uses the JS fallbacks. Changing the addon's exported API means bumping `ADDON_VERSION` in `native/numbl_addon.cpp` and the TS constant together; users then need to rebuild.
 
 ## When to reach for it
 

@@ -15,28 +15,23 @@
  *
  * "JITs" / "passes" uses the same runTestScript as `run-tests` and
  * src/__tests__/test-scripts.test.ts (workspace scan, searchPaths, SUCCESS
- * last-line check); the --opt 2 check additionally wires koffi (as cli.ts
- * does) so the C path is exercised. Not wired into npm; run manually:
+ * last-line check); the --opt 2 check additionally sets up the C-JIT
+ * and koffi via initNodePlatform (as cli.ts does). Not wired into npm;
+ * run manually:
  *   npx tsx scripts/annotate_assert_jit.ts
  */
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createRequire } from "node:module";
-import type { NativeBridge } from "../src/numbl-core/workspace/types.js";
 import { findTestScripts } from "../src/cli-scan.js";
 import { runTestScript } from "../src/cli-run-tests.js";
-import { registerNodeCompileC } from "../src/numbl-core/executors/jit/compileC.node.js";
+import { initNodePlatform } from "../src/node-platform.js";
 
 const PLAIN = "%!numbl:assert_jit";
 const CVAR = "%!numbl:assert_jit c";
 
-registerNodeCompileC();
-let nativeBridge: NativeBridge | undefined;
-try {
-  const koffi = createRequire(import.meta.url)("koffi");
-  nativeBridge = { load: (p: string) => koffi.load(p), koffi };
-} catch {
+const { nativeBridge } = await initNodePlatform({ native: false });
+if (!nativeBridge) {
   console.error("koffi not available — cannot verify --opt 2; aborting.");
   process.exit(1);
 }

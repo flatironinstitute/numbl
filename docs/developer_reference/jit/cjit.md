@@ -22,7 +22,7 @@ A runtime error in compiled C (out-of-bounds index, `error(...)`) exits the proc
 
 ## Native compile/load
 
-The `cc`-invoke + koffi `dlopen` step lives in `executors/jit/compileC.node.ts` (Node only; uses `node:fs`/`node:child_process`). It is wired in behind a browser-safe stub (`compileC.ts`) via `registerNodeCompileC()` from `cli.ts` at bootstrap. Compiled `.so`s are cached on disk keyed by a hash of the flags + C source. Without `cc` or `koffi`, the C-JIT executors decline and `--opt 2` behaves like `--opt 1`.
+The `cc`-invoke + koffi `dlopen` step lives in `executors/jit/compileC.node.ts` (Node only; uses `node:fs`/`node:child_process`). It is wired in behind a browser-safe stub (`compileC.ts`) via `registerNodeCompileC()`, called by `initNodePlatform` (`src/node-platform.ts`; the CLI and `numbl/node` hosts). Compiled `.so`s are cached on disk keyed by a hash of the flags + C source. Without `cc` or `koffi`, the C-JIT executors decline and `--opt 2` behaves like `--opt 1`.
 
 ## When it helps
 

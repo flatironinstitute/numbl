@@ -78,6 +78,32 @@ const result = executeCode(
 );
 ```
 
+### Native addon and C-JIT (`initNodePlatform`)
+
+Optimization `"2"` and the native LAPACK addon need some Node-side setup, which the CLI does on startup. Library hosts call `initNodePlatform` once and pass the returned `nativeBridge` along:
+
+```js
+import { executeCode } from "numbl";
+import { initNodePlatform } from "numbl/node";
+
+const { nativeBridge } = await initNodePlatform();
+executeCode(code, { optimization: "2" }, [], "script.m", [], nativeBridge);
+```
+
+Options: `native` (load the addon if built, default `true`), `fastMath` (default `false`), `cjit` (default `true`), and `mip` (install or refresh the mip core package from GitHub and return its directory in `searchPaths`, default `false`). Without koffi or a C compiler, `"2"` behaves like `"1"`.
+
+### Sessions (`ExecSession`)
+
+`ExecSession` keeps variables, figures and search paths from one call to the next, as in a REPL or notebook:
+
+```js
+import { ExecSession } from "numbl";
+
+const session = new ExecSession({ nativeBridge }); // nativeBridge is optional
+session.execute("x = 3;");
+session.execute("disp(x + 1)", { onOutput: t => process.stdout.write(t) });
+```
+
 ### Error handling
 
 Errors throw a `RuntimeError` with file and line information:

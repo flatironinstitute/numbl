@@ -114,7 +114,7 @@ The JIT rejects statically: the compiler either lowers a spec cleanly or throws 
 | 1       | jit-top-level, jit-loop, jit-call                                                        |
 | 2       | cjit-top-level, cjit-loop, cjit-call, then jit-top-level, jit-loop, jit-call (Node only) |
 
-The C backend is not imported by `plugins.ts`. `cli.ts` calls `registerNodeCompileC()` (`executors/jit/compileC.node.ts`) at bootstrap, which installs the `cc` + koffi compile/load implementation behind the browser-safe stub in `compileC.ts` and registers `cBackend` with `registerCJitBackend`. The browser worker bundle never imports `compileC.node.ts`, so the Node modules and the C compile graph stay out of the web build; there, and whenever `koffi` is unavailable, `--opt 2` behaves like `--opt 1`.
+The C backend is not imported by `plugins.ts`. `initNodePlatform` (`src/node-platform.ts`, used by the CLI and exported from `numbl/node`) calls `registerNodeCompileC()` (`executors/jit/compileC.node.ts`), which installs the `cc` + koffi compile/load implementation behind the browser-safe stub in `compileC.ts` and registers `cBackend` with `registerCJitBackend`. The browser worker bundle never imports `compileC.node.ts`, so the Node modules and the C compile graph stay out of the web build; there, and whenever `koffi` is unavailable, `--opt 2` behaves like `--opt 1`.
 
 ## Files
 
