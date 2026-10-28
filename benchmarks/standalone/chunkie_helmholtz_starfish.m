@@ -6,11 +6,12 @@ function chunkie_helmholtz_starfish()
     % specialization cost is not included in the timed run. The warmup uses a
     % smaller kvec and grid so it hits the same code paths quickly.
     %
-    % Emits machine-parseable BENCH: and CHECK: lines so the runner can
-    % compare phase timings and result summaries between MATLAB and numbl.
+    % Prints BENCH: (phase timings) and CHECK: (result summaries) lines for
+    % comparing numbl modes and MATLAB. Needs the chunkie mip package, which
+    % is downloaded on the first run.
     %
-    % See benchmarks/chunkie_helmholtz_starfish.md for full description
-    % and typical results.
+    % Run with:  npx tsx src/cli.ts run benchmarks/standalone/chunkie_helmholtz_starfish.m
+    %            matlab -batch "run('benchmarks/standalone/chunkie_helmholtz_starfish.m')"
 
     t0 = tic;
     mip load --install chunkie;

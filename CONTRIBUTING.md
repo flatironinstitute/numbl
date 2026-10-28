@@ -123,6 +123,18 @@ Both test suites run under vitest (integration scripts are wrapped by `src/__tes
 npm run test:coverage:all
 ```
 
+## Benchmarks
+
+`npm run bench` times single operations (element-wise chains, reductions, matmul, mldivide, fft, sort, indexing, scalar, struct and cell loops) across problem sizes under each execution mode (`--opt 0/1/2`, with and without the native addon) and writes a JSON result plus a markdown summary. It is a developer tool and is not run in CI.
+
+```bash
+npm run bench -- --quick                       # small subset, about a minute
+npm run bench -- --case matmul --mode opt0,opt1
+npm run bench -- compare benchmarks/results/<baseline>.json benchmarks/results/local/<new>.json
+```
+
+See [docs/developer_reference/testing.md](docs/developer_reference/testing.md#benchmarks) for how the timing works, the options and the committed baseline.
+
 ## Filing an Issue and Adding a Test
 
 When you find a behavior that differs from MATLAB, the workflow is:

@@ -5,8 +5,8 @@
 % half-bandwidth mx = nx - 2), factors it once with chol, and runs the two
 % triangular solves per time step that an implicit scheme needs.
 %
-% Run with:  npx tsx src/cli.ts run benchmarks/sparse_direct_bench.m --no-native
-%            matlab -batch "run('benchmarks/sparse_direct_bench.m')"
+% Run with:  npx tsx src/cli.ts run benchmarks/standalone/sparse_direct_bench.m --no-native
+%            matlab -batch "run('benchmarks/standalone/sparse_direct_bench.m')"
 
 grids = [61 41 900; 121 81 200];   % nx, ny, nsteps
 for g = 1:size(grids, 1)
