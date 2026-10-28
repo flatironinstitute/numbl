@@ -112,7 +112,7 @@ function updateAxes(
 }
 
 /** Add traces with hold-state logic: with hold off, every trace field not in
- *  `update` is cleared (except fields marked `keptWithoutHold`). */
+ *  `update` is cleared. */
 function addTraces(
   state: FiguresState,
   update: Partial<AxesTraces> & { areaBaseValue?: number }
@@ -125,7 +125,7 @@ function addTraces(
   for (const f of TRACE_FIELD_NAMES) {
     const spec = TRACE_FIELDS[f];
     if (update[f] !== undefined) out[f] = update[f];
-    else if (hold || spec.keptWithoutHold) continue;
+    else if (hold) continue;
     else out[f] = spec.multiplicity === "many" ? [] : undefined;
   }
   next.areaBaseValue = update.areaBaseValue ?? axes.areaBaseValue;
