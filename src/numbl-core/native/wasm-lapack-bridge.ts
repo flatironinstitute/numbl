@@ -10,13 +10,11 @@
  * hands the exports here (see the browser loader); Node bundling can reuse
  * the same functions later.
  *
- * Two seams are installed from one instantiated module (see
- * `installWasmLapackBridge`):
- *   1. `setLapackBridge()` — covers the *interpreter* path (opt 0);
- *      `getLapackBridge()` takes ts-lapack for any op the module omits.
- *   2. `globalThis.$matmulAccel` — the hook the JS-JIT matmul runtime
- *      snippet consults (opt 1, the browser IDE default), which otherwise
- *      runs a naive JS triple-loop that never touches the bridge.
+ * The module is registered as the "wasm" provider of the LAPACK provider
+ * stack (see `installWasmLapackBridge`), which serves both the interpreter
+ * (opt 0) and the JS-JIT's matmul (opt 1, the browser IDE default, which
+ * reaches the stack through its host helpers). Ops the module omits, and
+ * products it declines as too small, resolve to the providers below it.
  *
  * Trust model: numbl instantiates only the module's *wasm* (never remote
  * JS) with a numbl-controlled import object, and does all marshaling here,
@@ -26,16 +24,21 @@
  * more ops (svd/qr/lu/…) can be added without breaking older endpoints.
  */
 
-import { setLapackBridge, type LapackBridge } from "./lapack-bridge.js";
+import {
+  PROVIDER_PRIORITY,
+  registerProvider,
+  unregisterProvider,
+  type LapackBridge,
+} from "./lapack-bridge.js";
 
 /** Bumped when the wasm ABI (export names / signatures) changes
  *  incompatibly. An endpoint manifest must advertise the same major. */
 export const ACCELERATOR_ABI = 1;
 
-/** Below this many multiply-adds (`m*n*k`) the JS loop beats the cost of
- *  marshaling into and out of the wasm heap, so the accelerator declines
- *  and the caller uses its own loop. Tuned conservatively; small matmuls
- *  dominate typical MATLAB code and should never pay the copy tax. */
+/** Below this many multiply-adds (`m*n*k`) the TypeScript matmul beats the
+ *  cost of marshaling into and out of the wasm heap, so the provider
+ *  declines. Tuned conservatively; small matmuls dominate typical MATLAB
+ *  code and should never pay the copy tax. */
 export const WASM_MATMUL_MIN_WORK = 100_000;
 
 /** Manifest served alongside the wasm (`numbl-bridge.json`). Describes
@@ -74,7 +77,7 @@ export interface WasmLapackExports {
   ): void;
 }
 
-/** Signature shared by `LapackBridge.matmul` and the `$matmulAccel` hook. */
+/** Signature of `LapackBridge.matmul`. */
 export type MatmulFn = (
   a: Float64Array,
   m: number,
@@ -166,87 +169,28 @@ export function buildLapackBridgeFromWasm(
   return bridge;
 }
 
-/**
- * Install/remove the JS-JIT matmul accelerator hook (`globalThis.$matmulAccel`)
- * that `jit_tensor_mtimes_real` consults. Pass `null` to uninstall.
- */
-export function setMatmulAccelerator(
-  fn:
-    | ((
-        a: Float64Array,
-        m: number,
-        k: number,
-        b: Float64Array,
-        n: number
-      ) => Float64Array | null | undefined)
-    | null
-): void {
-  if (fn) {
-    (globalThis as { $matmulAccel?: unknown }).$matmulAccel = fn;
-  } else {
-    delete (globalThis as { $matmulAccel?: unknown }).$matmulAccel;
-  }
-}
-
-/** Current matmul accelerator hook, or undefined if none is installed. */
-export function getMatmulAccelerator():
-  | ((
-      a: Float64Array,
-      m: number,
-      k: number,
-      b: Float64Array,
-      n: number
-    ) => Float64Array | null | undefined)
-  | undefined {
-  return (
-    globalThis as {
-      $matmulAccel?: (
-        a: Float64Array,
-        m: number,
-        k: number,
-        b: Float64Array,
-        n: number
-      ) => Float64Array | null | undefined;
-    }
-  ).$matmulAccel;
-}
-
-/**
- * Install both seams from one instantiated module:
- *  - registers a partial `LapackBridge` (interpreter / opt 0), and
- *  - installs the `$matmulAccel` hook (JS-JIT / opt 1) when the module
- *    provides matmul.
- *
- * The `$matmulAccel` wrapper is best-effort: it declines (returns `null`)
- * for small matmuls and on any error, so the JS loop remains the fallback.
- * The interpreter-path `bridge.matmul` is NOT wrapped — it propagates
- * errors like any other bridge (matching native-addon semantics).
- */
-/** Remove both seams (e.g. when the user disables the accelerator). Leaves
- *  the interpreter and JS-JIT on ts-lapack / the JS loop. */
+/** Remove the accelerator, leaving matmul to the providers below it. */
 export function uninstallWasmLapackBridge(): void {
-  setMatmulAccelerator(null);
-  setLapackBridge(null);
+  unregisterProvider("wasm");
 }
 
+/**
+ * Register an instantiated module as the "wasm" provider. Its matmul
+ * declines products below `WASM_MATMUL_MIN_WORK`; errors propagate as with
+ * any other provider.
+ */
 export function installWasmLapackBridge(
   exports: WasmLapackExports,
   manifest: AcceleratorManifest
 ): { matmul: boolean } {
-  const bridge = buildLapackBridgeFromWasm(exports, manifest);
-  setLapackBridge(bridge);
-  let matmulInstalled = false;
-  if (bridge.matmul) {
-    const matmul = bridge.matmul;
-    setMatmulAccelerator((a, m, k, b, n) => {
-      if (m * n * k < WASM_MATMUL_MIN_WORK) return null; // too small to pay the copy tax
-      try {
-        return matmul(a, m, k, b, n);
-      } catch {
-        return null; // fall back to the caller's JS loop
-      }
-    });
-    matmulInstalled = true;
-  }
-  return { matmul: matmulInstalled };
+  const entries = buildLapackBridgeFromWasm(exports, manifest);
+  registerProvider({
+    name: "wasm",
+    priority: PROVIDER_PRIORITY.wasm,
+    entries,
+    accepts: {
+      matmul: (_a, m, k, _b, n) => m * n * k >= WASM_MATMUL_MIN_WORK,
+    },
+  });
+  return { matmul: entries.matmul !== undefined };
 }

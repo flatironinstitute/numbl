@@ -1,4 +1,4 @@
-/* @snippet name=jit_tensor_mtimes_real deps=jit_tensor_t,jit_alloc,jit_tensor_alloc */
+/* @snippet name=jit_tensor_mtimes_real deps=jit_tensor_t,jit_alloc,jit_tensor_alloc,jit_host_numeric */
 /* JIT runtime helper: real 2-D matrix multiplication `A * B`.
  *
  * A is m×k, B is k×n; result is m×n, freshly owned. Column-major in,
@@ -20,6 +20,9 @@
  * The vector-special-cases (column×row outer product, row×column
  * inner product, row×matrix, matrix×column) all reduce to the same
  * triple-loop — no separate fast path.
+ *
+ * Large products go to the host when it bound a matmul callback (see
+ * `host_numeric.h`).
  */
 
 #include <stdio.h>
@@ -46,6 +49,12 @@ static double jit_tensor_mtimes_real_scalar(jit_tensor_t a,
             a.dims[1], b.dims[0]);
   }
   long k = a.dims[1];
+  if (jit_host_matmul && jit_host_matmul_wanted(1, k, 1)) {
+    double out;
+    if (jit_host_matmul(a.real, 1, k, b.real, 1, &out) != 0)
+      jit_raise_bail("jit_tensor_mtimes_real_scalar: host matmul failed");
+    return out;
+  }
   double acc = 0.0;
   for (long p = 0; p < k; p++) {
     acc += a.real[p] * b.real[p];
@@ -73,6 +82,11 @@ static jit_tensor_t jit_tensor_mtimes_real(jit_tensor_t a,
   r.ndim = 2;
   r.dims[0] = m;
   r.dims[1] = n;
+  if (jit_host_matmul && jit_host_matmul_wanted(m, k, n)) {
+    if (jit_host_matmul(a.real, m, k, b.real, n, r.real) != 0)
+      jit_raise_bail("jit_tensor_mtimes_real: host matmul failed");
+    return r;
+  }
   for (long j = 0; j < n; j++) {
     for (long i = 0; i < m; i++) {
       double acc = 0.0;

@@ -81,8 +81,6 @@ const JOBS = jobsArg
 // shown (EXCL) so the divergence stays visible, but don't count toward
 // pass/fail or the exit code. Keyed by filename substring → reason.
 const GATE_EXCLUDED = {
-  C03_matmul:
-    "matmul: BLAS dgemm (interpreter) vs naive triple-loop (JIT) accumulate in different orders → last-bit differences. Inherent FP non-associativity.",
   "A35_complex-pow":
     "(-1)^(0.5+1i) leaves a ~2.6e-18 real residue from exp(b·log(a)) (= exp(-π)·cos(π/2)); MATLAB keeps it, but it's the difference of transcendentals → sensitive to libm (opt2) vs V8 (opt0/opt1) ULP, like C02. The integer-power line is fixable; the script can't be byte-stable.",
   "F01_sprintf-half-even":

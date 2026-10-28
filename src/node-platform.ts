@@ -12,8 +12,9 @@ import { fileURLToPath } from "url";
 import { createRequire } from "module";
 import {
   NATIVE_ADDON_EXPECTED_VERSION,
-  setLapackBridge,
+  registerProvider,
 } from "./numbl-core/native/lapack-bridge.js";
+import { nativeAddonProvider } from "./numbl-core/native/native-provider.js";
 import { registerNodeCompileC } from "./numbl-core/executors/jit/compileC.node.js";
 import type { NativeBridge } from "./numbl-core/workspace/types.js";
 import { unzipToFiles } from "./vfs/unzipToFiles.js";
@@ -64,7 +65,7 @@ function loadNativeAddon(
       );
       return false;
     }
-    setLapackBridge(addon);
+    registerProvider(nativeAddonProvider(addon));
     return true;
   } catch (e) {
     onMessage(

@@ -2,14 +2,14 @@ import { describe, it, expect, afterEach } from "vitest";
 import { executeCode } from "../numbl-core/executeCode.js";
 import { isRuntimeTensor } from "../numbl-core/runtime/types.js";
 import {
-  setLapackBridge,
-  type LapackBridge,
+  registerProvider,
+  unregisterProvider,
 } from "../numbl-core/native/lapack-bridge.js";
 import {
   makeWasmMatmul,
   buildLapackBridgeFromWasm,
   installWasmLapackBridge,
-  setMatmulAccelerator,
+  uninstallWasmLapackBridge,
   validateManifest,
   ACCELERATOR_ABI,
   WASM_MATMUL_MIN_WORK,
@@ -91,10 +91,21 @@ function tensorVar(
 }
 
 afterEach(() => {
-  // Reset both seams so tests don't bleed into each other or other files.
-  setMatmulAccelerator(null);
-  setLapackBridge(null as unknown as LapackBridge);
+  // Reset the stack so tests don't bleed into each other or other files.
+  unregisterProvider("sentinel");
+  uninstallWasmLapackBridge();
 });
+
+/** Register a provider whose matmul returns a constant matrix. */
+function sentinelMatmul(value: number): void {
+  registerProvider({
+    name: "sentinel",
+    priority: 150,
+    entries: {
+      matmul: (_a, m, _k, _b, n) => new Float64Array(m * n).fill(value),
+    },
+  });
+}
 
 describe("wasm-lapack-bridge: manifest validation", () => {
   it("accepts a well-formed matmul manifest", () => {
@@ -151,26 +162,23 @@ describe("wasm-lapack-bridge: marshaling (makeWasmMatmul)", () => {
   });
 });
 
-describe("wasm-lapack-bridge: pipeline seams", () => {
+describe("wasm-lapack-bridge: provider stack", () => {
   // Build A (60×60), B (60×60) deterministically inside the script and
   // multiply. m*n*k = 216000 > WASM_MATMUL_MIN_WORK, so the accelerator is
   // not declined for size.
   const script = `A = reshape(1:3600, 60, 60); B = reshape(3600:-1:1, 60, 60); C = A*B;`;
 
-  it("opt 1 (JS-JIT) routes matmul through $matmulAccel", () => {
-    // Sentinel accelerator: returns all-7s. If (and only if) the JIT path
-    // consulted the hook, C comes back all 7s.
-    setMatmulAccelerator((_a, m, _k, _b, n) => new Float64Array(m * n).fill(7));
+  it("opt 1 (JS-JIT) routes large matmul through the provider stack", () => {
+    // Sentinel provider: returns all-7s. If (and only if) the JIT path
+    // consulted the stack, C comes back all 7s.
+    sentinelMatmul(7);
     const c = tensorVar(executeCode(script, { optimization: "1" }), "C");
     expect(c.length).toBe(3600);
     expect(c.every(x => x === 7)).toBe(true);
   });
 
-  it("opt 0 (interpreter) routes matmul through the LapackBridge", () => {
-    // Sentinel bridge: returns all-13s via getEffectiveBridge.
-    setLapackBridge({
-      matmul: (_a, m, _k, _b, n) => new Float64Array(m * n).fill(13),
-    });
+  it("opt 0 (interpreter) routes matmul through the provider stack", () => {
+    sentinelMatmul(13);
     const c = tensorVar(executeCode(script, { optimization: "0" }), "C");
     expect(c.length).toBe(3600);
     expect(c.every(x => x === 13)).toBe(true);
@@ -199,5 +207,13 @@ describe("wasm-lapack-bridge: pipeline seams", () => {
     const b = [9, 8, 7, 6, 5, 4, 3, 2, 1];
     expect(c).toEqual(refMatmul(a, 3, 3, b, 3));
     expect(calls()).toBe(0); // declined by the size threshold → JS loop used
+  });
+
+  it("uninstalling restores the lower providers", () => {
+    const { exports, calls } = makeFakeWasm();
+    installWasmLapackBridge(exports, matmulManifest());
+    uninstallWasmLapackBridge();
+    executeCode(script, { optimization: "0" });
+    expect(calls()).toBe(0);
   });
 });

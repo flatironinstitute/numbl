@@ -1,7 +1,8 @@
 // JS sibling of `tensor_mtimes_complex.h`. 2-D matrix multiplication
 // producing a complex result. Handles all three mixed cases
 // (complex × complex, complex × real, real × complex) by treating an
-// undefined imag lane as implicit zeros.
+// undefined imag lane as implicit zeros. Large products go to the host
+// (`$numeric`), as in `tensor_mtimes_real.js`.
 
 import { jit_tensor_alloc_complex } from "../tensor/tensor_alloc_complex.js";
 import { jit_raise_bail, jit_raise_error } from "../system/raise.js";
@@ -22,6 +23,10 @@ export function jit_tensor_mtimes_complex_scalar(a, b) {
   const k = a.shape[1];
   const aim = a.imag;
   const bim = b.imag;
+  if (typeof $numeric === "object" && $numeric) {
+    const r = $numeric.matmulComplex(a.data, aim, 1, k, b.data, bim, 1);
+    if (r) return { re: r.re[0], im: r.im[0] };
+  }
   let accR = 0;
   let accI = 0;
   for (let p = 0; p < k; p++) {
@@ -46,9 +51,13 @@ export function jit_tensor_mtimes_complex(a, b) {
   if (k !== k2) {
     jit_raise_error("", `Inner matrix dimensions must agree: ${k} vs ${k2}`);
   }
-  const out = jit_tensor_alloc_complex(m, n);
   const aim = a.imag;
   const bim = b.imag;
+  if (typeof $numeric === "object" && $numeric) {
+    const r = $numeric.matmulComplex(a.data, aim, m, k, b.data, bim, n);
+    if (r) return { jitTag: "tensor", shape: [m, n], data: r.re, imag: r.im };
+  }
+  const out = jit_tensor_alloc_complex(m, n);
   for (let j = 0; j < n; j++) {
     for (let i = 0; i < m; i++) {
       let accR = 0;
