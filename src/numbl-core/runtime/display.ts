@@ -20,6 +20,8 @@ import {
 import { colMajorIndex, ind2sub, valueShape } from "./utils.js";
 import { formatDatetimePattern } from "./datetime-format.js";
 import { MEXCEPTION_PROPERTIES } from "./mexception.js";
+import { getCurrentRuntime } from "./refcount.js";
+import type { Runtime } from "./runtime.js";
 
 /** Format a value for display */
 export function displayValue(v: RuntimeValue): string {
@@ -282,7 +284,7 @@ function formatCell(c: RuntimeCell): string {
   const parts = c.data.map(v => {
     if (isRuntimeChar(v)) return `'${v.value}'`;
     if (isRuntimeString(v)) return `"${v}"`;
-    return displayValue(v);
+    return propertyText(v);
   });
   return `{${parts.join(", ")}}`;
 }
@@ -290,7 +292,7 @@ function formatCell(c: RuntimeCell): string {
 function formatStruct(s: RuntimeStruct): string {
   const lines: string[] = [];
   for (const [key, val] of s.fields) {
-    lines.push(`    ${key}: ${displayValue(val)}`);
+    lines.push(`    ${key}: ${propertyText(val)}`);
   }
   return lines.join("\n");
 }
@@ -316,6 +318,22 @@ function formatSparseMatrix(v: RuntimeSparseMatrix): string {
   return lines.join("\n");
 }
 
+/** A property value in an object's display: a nested object is summarized
+ *  by its size and class, as MATLAB does. */
+function propertyText(v: RuntimeValue): string {
+  if (typeof v === "object") {
+    if (
+      v.kind === "class_instance" &&
+      v.className !== "datetime" &&
+      v.className !== "duration"
+    )
+      return `[1×1 ${v.className}]`;
+    if (v.kind === "class_instance_array")
+      return `[${v.shape[0]}×${v.shape[1]} ${v.className}]`;
+  }
+  return displayValue(v);
+}
+
 function formatClassInstance(v: RuntimeClassInstance): string {
   if (v.className === "datetime" || v.className === "duration") {
     const s = formatDatetimeOrDuration(v);
@@ -327,11 +345,31 @@ function formatClassInstance(v: RuntimeClassInstance): string {
     return formatPropertyList(v);
   }
   const lines: string[] = [`  ${v.className} with properties:\n`];
+  // A classdef object shows its public, non-hidden properties (Constant
+  // and Dependent ones included), then any dynamic properties.
+  const rt = getCurrentRuntime() as Runtime | null;
+  const table = rt?.classTable;
+  if (rt && table?.get(v.className)?.ast) {
+    for (const p of table.publicProperties(v.className)) {
+      let val: RuntimeValue | undefined;
+      if (p.constant) val = rt.constantPropertyValue!(p);
+      else if (p.dependent) {
+        if (!rt.cachedResolveClassMethod(v.className, `get.${p.name}`))
+          continue;
+        val = rt.getMember(v, p.name) as RuntimeValue;
+      } else val = v.fields.get(p.name);
+      if (val !== undefined) lines.push(`    ${p.name}: ${propertyText(val)}`);
+    }
+    for (const [key, val] of v.fields)
+      if (!table.findProperty(v.className, key) && !key.startsWith("_"))
+        lines.push(`    ${key}: ${propertyText(val)}`);
+    return lines.join("\n");
+  }
   for (const [key, val] of v.fields) {
     // Builtin-defined objects (graph, decomposition) keep internal state in
     // underscore-prefixed fields that are not user-visible properties.
     if (key.startsWith("_")) continue;
-    lines.push(`    ${key}: ${displayValue(val)}`);
+    lines.push(`    ${key}: ${propertyText(val)}`);
   }
   return lines.join("\n");
 }

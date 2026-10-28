@@ -66,8 +66,11 @@ export type NameResolution =
     }
   /** `Class.Member` for an enumeration member. */
   | { kind: "enumMember"; name: string; className: string; memberName: string }
-  /** `Class.name` where `name` is not a static method or enumeration member
-   *  (an instance method, a constant property, ...). */
+  /** `Class.Prop` for a Constant property (declared by `className` or an
+   *  ancestor). */
+  | { kind: "classConstant"; name: string; className: string; propName: string }
+  /** `Class.name` where `name` is not a static method, enumeration member
+   *  or Constant property (an instance method, ...). */
   | { kind: "classMember"; name: string; target: Target<"classMethod"> }
   | { kind: "notFound"; name: string };
 
@@ -209,6 +212,8 @@ function resolveQualifiedAs(
   const info = scope.code.classes.get(className);
   if (info?.enumMembers?.some(m => m.name === memberName))
     return { kind: "enumMember", name, className, memberName };
+  if (scope.code.classes.findProperty(className, memberName)?.constant)
+    return { kind: "classConstant", name, className, propName: memberName };
   const target: Target<"classMethod"> = {
     kind: "classMethod",
     className,
@@ -241,6 +246,8 @@ export function definingFile(
     case "enumMember":
     case "notFound":
       return undefined;
+    case "classConstant":
+      return code.classes.get(r.className)?.fileName;
     case "nested":
       return scope.file;
     case "classConstructor":

@@ -324,12 +324,25 @@ export class ClassParser extends FunctionParser {
 
     while (true) {
       if (this.consume(Token.RParen)) break;
+      // `~Name` is short for `Name = false`.
+      if (
+        this.peekToken() === Token.Tilde &&
+        this.peekTokenAt(1) === Token.Ident
+      ) {
+        this.pos++;
+        attrs.push({ name: this.expectIdent(), value: "false" });
+        this.consume(Token.Comma);
+        continue;
+      }
       if (this.peekToken() === Token.Ident) {
         const name = this.expectIdent();
         let value: string | null = null;
         if (this.consume(Token.Assign)) {
-          // Handle brace-delimited values like {?ClassName1, ?ClassName2}
-          if (this.peekToken() === Token.LBrace) {
+          if (this.consume(Token.Question)) {
+            // A single class: `Access = ?pkg.ClassName`, stored in list form.
+            value = `{?${this.parseQualifiedName()}}`;
+          } else if (this.peekToken() === Token.LBrace) {
+            // Brace-delimited values like {?ClassName1, ?ClassName2}
             let braceDepth = 0;
             const parts: string[] = [];
             while (this.peekToken() !== undefined) {

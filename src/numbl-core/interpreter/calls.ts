@@ -18,7 +18,11 @@ import { ReturnSignal } from "./types.js";
 import type { Interpreter } from "./interpreter.js";
 import { callBody, callNestedFunction } from "./callConvention.js";
 import { execStmt } from "./execStatements.js";
-import { instantiateClass, interpretClassMethod } from "./oop.js";
+import {
+  classConstantValue,
+  instantiateClass,
+  interpretClassMethod,
+} from "./oop.js";
 
 /** Call the function `name` resolves to in the running frame (a call
  *  expression or bare name; variables are handled by the caller). */
@@ -48,6 +52,10 @@ export function callResolved(
       return callNestedFunction(interp, r.fn, r.env, args, nargout);
     case "constant":
       return r.value;
+    case "classConstant": {
+      const value = classConstantValue(interp, r.className, r.propName);
+      return args.length > 0 ? interp.rt.index(value, args, nargout) : value;
+    }
     case "variable":
     case "enumMember":
     case "notFound":

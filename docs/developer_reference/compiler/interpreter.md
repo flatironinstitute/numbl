@@ -9,7 +9,7 @@ The interpreter is an AST walker. Given a parsed program and a `CodeIndex`, it e
 - **Environment**: the variables of an activation. Resolves variable reads and writes, and routes `global` and `persistent` declarations through shared stores on the runtime so their values outlive the call.
 - **Runtime**: shared state across a single execution: global/persistent stores, output router, plot instruction accumulator, JIT caches. (RNG state is held in module-level variables in [`helpers/prng.ts`](../../../src/numbl-core/helpers/prng.ts), not on the `Runtime`.)
 - **CodeIndex**: owned by the `Workspace` (the visible file set, kept in sync with addpath/rmpath/cd). Caches parsed ASTs, maps workspace files to function names (`+pkg` namespaces, `private/` scopes, `.numbl.js` functions), holds the main file's local functions, and builds the `FunctionIndex` that `resolveFunction` consults. The interpreter and the JIT share the same instance.
-- **ClassTable**: part of the `CodeIndex`: `ClassInfo` for workspace and main-file classes, plus inheritance queries (lineage, ancestors, defining class, handle-ness).
+- **ClassTable**: part of the `CodeIndex`: `ClassInfo` for workspace and main-file classes (with per-property and per-method attributes), plus inheritance and member queries (lineage, ancestors, defining class, handle-ness, `findProperty`/`findMethod`, access). See [classes.md](classes.md).
 
 ## Code layout
 
@@ -23,7 +23,8 @@ The `Interpreter` class holds state only. The evaluation code is in modules of p
 | `handles.ts`         | anonymous functions and `@name` handles                                                    |
 | `calls.ts`           | calling what a name resolves to (user functions, builtins, `.numbl.js`, scripts)           |
 | `callConvention.ts`  | binding inputs, running a body in a new frame, collecting outputs; nested functions        |
-| `oop.ts`             | instantiation, constructors, superclass calls, class methods, enumerations, introspection  |
+| `oop.ts`             | instantiation, constructors, superclass calls, class methods, enumerations, Constant props |
+| `metaClass.ts`       | `?Name` and `metaclass`: meta.class objects                                                |
 | `argumentsBlock.ts`  | `arguments` block defaults and name-value struct parameters                                |
 | `callerScope.ts`     | the calling scope that builtins declared with `scope: true` see, eval of text              |
 

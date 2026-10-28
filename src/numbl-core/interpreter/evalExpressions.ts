@@ -8,6 +8,7 @@ import type { RuntimeValue } from "../runtime/types.js";
 import {
   isRuntimeChar,
   isRuntimeClassInstance,
+  isRuntimeClassInstanceArray,
   isRuntimeFunction,
   isRuntimeStructArray,
 } from "../runtime/types.js";
@@ -38,10 +39,12 @@ import {
 import { evalAnonFunc, makeFuncHandle } from "./handles.js";
 import { callFunction, interpretTarget } from "./calls.js";
 import {
+  classConstantValue,
   instantiateClass,
   interpretEnumMember,
   evalSuperMethodCall,
 } from "./oop.js";
+import { metaClassFor } from "./metaClass.js";
 
 export function evalExpr(interp: Interpreter, expr: Expr): unknown {
   return evalExprNargout(interp, expr, 1);
@@ -148,7 +151,7 @@ export function evalExprNargout(
     }
 
     case "MetaClass":
-      throw new RuntimeError("Interpreter does not yet support meta.class");
+      return metaClassFor(interp, expr.name);
   }
 }
 
@@ -398,6 +401,14 @@ function evalMethodCall(
         evalIndicesWithEnd(interp, member, expr.args)
       );
     }
+    if (r.kind === "classConstant") {
+      const value = classConstantValue(interp, r.className, r.propName);
+      return interp.rt.index(
+        value,
+        evalIndicesWithEnd(interp, value, expr.args),
+        nargout
+      );
+    }
     const target = targetOf(r);
     if (target) {
       const args = evalArgs(interp, expr.args);
@@ -443,6 +454,8 @@ function evalMember(
     switch (r.kind) {
       case "enumMember":
         return interpretEnumMember(interp, r.className, r.memberName);
+      case "classConstant":
+        return classConstantValue(interp, r.className, r.propName);
       case "packageFunction":
       case "classConstructor":
       case "staticMethod":
@@ -450,12 +463,19 @@ function evalMember(
     }
   }
   const base = evalExpr(interp, expr.base);
-  // Field access on a non-scalar struct array yields a comma-separated
-  // list — represented as a JS array, like c{:} — so {s.f}, [s.f], and
-  // f(s.f) expand per element. (Class-instance arrays keep their
-  // materialized-horzcat behavior in rt.getMember.)
+  // Field access on a non-scalar struct array, or property access on a
+  // non-scalar object array, yields a comma-separated list — represented as
+  // a JS array, like c{:} — so {s.f}, [s.f], and f(s.f) expand per element.
+  // (Other member access on an object array, e.g. a method called without
+  // parentheses, keeps the materialized-horzcat behavior of rt.getMember.)
   const baseRv = ensureRuntimeValue(base);
-  if (isRuntimeStructArray(baseRv) && baseRv.elements.length !== 1) {
+  if (
+    (isRuntimeStructArray(baseRv) ||
+      (isRuntimeClassInstanceArray(baseRv) &&
+        (baseRv.elements[0]?.fields.has(expr.name) ||
+          interp.code.classes.findProperty(baseRv.className, expr.name)))) &&
+    baseRv.elements.length !== 1
+  ) {
     return baseRv.elements.map(el =>
       ensureRuntimeValue(interp.rt.getMember(el, expr.name))
     );

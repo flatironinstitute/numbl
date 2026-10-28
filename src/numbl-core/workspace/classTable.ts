@@ -1,9 +1,32 @@
 /**
  * The classes known to a run (workspace classdef files, `@folder` classes and
- * classdefs in the main file) and inheritance queries over them.
+ * classdefs in the main file) and inheritance and member queries over them.
  */
 
-import { HANDLE_BASE_CLASSES, type ClassInfo } from "./classInfo.js";
+import {
+  HANDLE_BASE_CLASSES,
+  type ClassInfo,
+  type MemberAccess,
+  type MethodInfo,
+  type PropertyInfo,
+} from "./classInfo.js";
+
+/** Public methods every handle class inherits from `handle`. */
+export const HANDLE_CLASS_METHODS = [
+  "addlistener",
+  "delete",
+  "eq",
+  "findobj",
+  "findprop",
+  "ge",
+  "gt",
+  "isvalid",
+  "le",
+  "listener",
+  "lt",
+  "ne",
+  "notify",
+];
 
 export class ClassTable {
   /** Workspace classes: qualified name → ClassInfo. */
@@ -12,20 +35,32 @@ export class ClassTable {
    *  the workspace is rebuilt after addpath/rmpath/cd. */
   readonly localClasses = new Map<string, ClassInfo>();
 
+  /** Member lookups by "class\0member", cleared when the table changes. */
+  private readonly propertyCache = new Map<string, PropertyInfo | null>();
+  private readonly methodCache = new Map<string, MethodInfo | null>();
+
   /** Register a workspace class. First wins: earlier search paths take
    *  priority, as for workspace functions. */
   addWorkspaceClass(info: ClassInfo): void {
     if (!this.workspaceClasses.has(info.qualifiedName)) {
       this.workspaceClasses.set(info.qualifiedName, info);
+      this.clearMemberCaches();
     }
   }
 
   addLocalClass(info: ClassInfo): void {
     this.localClasses.set(info.qualifiedName, info);
+    this.clearMemberCaches();
   }
 
   clearWorkspaceClasses(): void {
     this.workspaceClasses.clear();
+    this.clearMemberCaches();
+  }
+
+  private clearMemberCaches(): void {
+    this.propertyCache.clear();
+    this.methodCache.clear();
   }
 
   /** Workspace classes, then main-file classes. */
@@ -66,6 +101,13 @@ export class ClassTable {
   ancestors(className: string): string[] {
     const info = this.get(className);
     return info ? this.superclassNames(info) : [];
+  }
+
+  /** Whether `className` is `ancestor` or derives from it. */
+  isSubclassOf(className: string, ancestor: string): boolean {
+    return (
+      className === ancestor || this.ancestors(className).includes(ancestor)
+    );
   }
 
   /** A class followed by its ancestors that have class definitions, in
@@ -117,5 +159,149 @@ export class ClassTable {
       }
     }
     return className;
+  }
+
+  // ── Members and access ────────────────────────────────────────────────
+
+  /** The declaration of property `name` that instances of `className` see:
+   *  the class's own, else the first ancestor's in method-resolution order.
+   *  Undefined for an unknown class or property. */
+  findProperty(className: string, name: string): PropertyInfo | undefined {
+    const key = `${className}\0${name}`;
+    let found = this.propertyCache.get(key);
+    if (found === undefined) {
+      found = null;
+      const info = this.get(className);
+      if (info) {
+        for (const c of this.lineage(info)) {
+          const p = c.properties.get(name);
+          if (p) {
+            found = p;
+            break;
+          }
+        }
+      }
+      this.propertyCache.set(key, found);
+    }
+    return found ?? undefined;
+  }
+
+  /** The declaration of method `name` (instance, static or constructor)
+   *  that `className` dispatches to, like `findProperty`. Undefined when no
+   *  classdef declares it (e.g. a plain `@folder` method file). */
+  findMethod(className: string, name: string): MethodInfo | undefined {
+    const key = `${className}\0${name}`;
+    let found = this.methodCache.get(key);
+    if (found === undefined) {
+      found = null;
+      const info = this.get(className);
+      if (info) {
+        for (const c of this.lineage(info)) {
+          const m = c.methods.get(name);
+          if (m) {
+            found = m;
+            break;
+          }
+          // An @folder method file without a classdef signature is public
+          // and overrides any inherited declaration.
+          if (c.externalMethodFiles.has(name)) break;
+        }
+      }
+      this.methodCache.set(key, found);
+    }
+    return found ?? undefined;
+  }
+
+  /** Whether code of class `context` (undefined: code outside any class)
+   *  may use a member declared by `definingClass` with `access`. Private
+   *  admits the defining class; protected, also its subclasses; a class
+   *  list, also the listed classes and their subclasses. (`immutable` is
+   *  treated as private here; the constructor-only rule is the caller's.) */
+  canAccess(
+    access: MemberAccess,
+    definingClass: string,
+    context: string | undefined
+  ): boolean {
+    if (access === "public") return true;
+    if (access === "none" || context === undefined) return false;
+    if (context === definingClass) return true;
+    if (access === "protected")
+      return this.isSubclassOf(context, definingClass);
+    if (typeof access === "object")
+      return access.classes.some(c => this.isSubclassOf(context, c));
+    return false;
+  }
+
+  /** All properties instances of `className` have (own first, then
+   *  inherited in method-resolution order), one declaration per name. */
+  allProperties(className: string): PropertyInfo[] {
+    const info = this.get(className);
+    if (!info) return [];
+    const out: PropertyInfo[] = [];
+    const seen = new Set<string>();
+    for (const c of this.lineage(info)) {
+      for (const p of c.properties.values()) {
+        if (seen.has(p.name)) continue;
+        seen.add(p.name);
+        out.push(p);
+      }
+    }
+    return out;
+  }
+
+  /** The properties `properties`, `fieldnames` and object display list:
+   *  publicly readable and not Hidden. */
+  publicProperties(className: string): PropertyInfo[] {
+    return this.allProperties(className).filter(
+      p => p.getAccess === "public" && !p.hidden
+    );
+  }
+
+  /** The methods `methods` and `ismethod` report: the public, non-Hidden
+   *  instance and static methods of the class and its ancestors (classdef
+   *  and `@folder` methods), the class's constructor, and the methods of
+   *  `handle` for a handle class. Undefined for an unknown class. */
+  publicMethodNames(className: string): Set<string> | undefined {
+    const self = this.get(className);
+    if (!self) return undefined;
+    const lineage = this.lineage(self);
+    const ctorName = self.constructorName ?? self.name;
+    const candidates = new Set<string>([ctorName]);
+    for (const c of lineage) {
+      for (const n of c.methods.keys()) candidates.add(n);
+      for (const n of c.methodNames) candidates.add(n);
+      for (const n of c.staticMethodNames) candidates.add(n);
+      for (const n of c.externalMethodFiles.keys()) candidates.add(n);
+    }
+    // Superclass constructors are not methods of the class.
+    const superCtors = new Set(lineage.slice(1).map(c => c.name));
+    const out = new Set<string>();
+    for (const n of candidates) {
+      if (n.includes(".")) continue; // get.X / set.X accessors
+      if (n !== ctorName && superCtors.has(n)) continue;
+      const m = this.findMethod(className, n);
+      if (m && (m.access !== "public" || m.hidden)) continue;
+      out.add(n);
+    }
+    if (this.isHandleClass(self))
+      for (const n of HANDLE_CLASS_METHODS) out.add(n);
+    return out;
+  }
+
+  /** Abstract members `className` declares or inherits without a concrete
+   *  definition anywhere in its lineage. Empty for a concrete class. */
+  unimplementedAbstractMembers(className: string): string[] {
+    const info = this.get(className);
+    if (!info) return [];
+    const abstract = new Set<string>();
+    const concrete = new Set<string>();
+    for (const c of this.lineage(info)) {
+      for (const p of c.properties.values())
+        (p.abstract ? abstract : concrete).add(p.name);
+      for (const m of c.methods.values())
+        (m.abstract ? abstract : concrete).add(m.name);
+      for (const name of c.externalMethodFiles.keys()) concrete.add(name);
+    }
+    return [...abstract].filter(n => !concrete.has(n));
   }
 }

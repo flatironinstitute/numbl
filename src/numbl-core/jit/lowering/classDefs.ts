@@ -162,21 +162,29 @@ export function registerClassDef(
   for (const m of s.members) {
     switch (m.type) {
       case "Properties": {
-        // Property-block attributes. The JIT doesn't enforce visibility,
-        // so `Access` / `GetAccess` / `SetAccess` / `Hidden` are
-        // accepted silently — matches numbl, which ignores them in
-        // `extractClassInfo`. `Dependent` strips per-instance storage
-        // and routes reads/writes through `get.X` / `set.X` accessor
-        // methods. Everything else is rejected by name.
+        // Property-block attributes. The JIT doesn't enforce access, so
+        // only public `Access` / `GetAccess` / `SetAccess` are accepted
+        // (a restricted property is left to the interpreter, which raises
+        // MATLAB's access errors). `Hidden` only affects display.
+        // `Dependent` strips per-instance storage and routes reads/writes
+        // through `get.X` / `set.X` accessor methods. Everything else is
+        // rejected by name.
         let isDependent = false;
         for (const attr of m.attributes) {
           const lower = attr.name.toLowerCase();
           if (
             lower === "access" ||
             lower === "getaccess" ||
-            lower === "setaccess" ||
-            lower === "hidden"
+            lower === "setaccess"
           ) {
+            const value = (attr.value ?? "").replace(/['"]/g, "");
+            if (value.toLowerCase() === "public") continue;
+            throw new UnsupportedConstruct(
+              `property access '${attr.name} = ${attr.value}' is not supported in v1`,
+              s.span
+            );
+          }
+          if (lower === "hidden") {
             continue;
           }
           if (lower === "dependent") {

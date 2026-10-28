@@ -24,6 +24,11 @@ import {
   RuntimeTensor,
 } from "../../runtime/types.js";
 import type { RuntimeValue } from "../../runtime/types.js";
+import type { Runtime } from "../../runtime/runtime.js";
+import {
+  MEXCEPTION_CLASS,
+  MEXCEPTION_PROPERTIES,
+} from "../../runtime/mexception.js";
 import { RTV, RuntimeError } from "../../runtime/index.js";
 import { toString } from "../../runtime/convert.js";
 import { makeTensor } from "./types.js";
@@ -154,7 +159,7 @@ builtin({
       "Return logical 1 where PropertyName is a property of object obj, else 0. The result has the same size as obj. Only class objects have properties: structs (even with that field), numeric, char and other built-in types always return false. Methods are not properties.",
   },
   nargin: [2, Infinity],
-  apply: args => {
+  apply: (args, _nargout, ctx) => {
     const v = args[0];
     const nameArg = args[1];
     // PropertyName must be a single char row vector or string scalar;
@@ -163,13 +168,19 @@ builtin({
     if (isRuntimeChar(nameArg)) propName = nameArg.value;
     else if (isRuntimeString(nameArg)) propName = nameArg;
     // Object arrays are homogeneous, so every element gives the same
-    // answer. A class instance's field map holds all declared properties
-    // (public and private), which is exactly what isprop reports.
+    // answer. isprop reports every property, whatever its access: stored
+    // ones (including dynamic properties) and Constant / Dependent ones.
     let answer = false;
     if (propName !== null) {
-      if (isRuntimeClassInstance(v)) answer = v.fields.has(propName);
+      if (isRuntimeClassInstance(v))
+        answer =
+          v.fields.has(propName) ||
+          !!ctx.rt.classTable?.findProperty(v.className, propName);
       else if (isRuntimeClassInstanceArray(v))
-        answer = v.elements.length > 0 && v.elements[0].fields.has(propName);
+        answer =
+          v.elements.length > 0 &&
+          (v.elements[0].fields.has(propName) ||
+            !!ctx.rt.classTable?.findProperty(v.className, propName));
     }
     const shape = valueShape(v);
     const n = shape.reduce((a, b) => a * b, 1);
@@ -464,10 +475,26 @@ for (const name of ["superiorto", "inferiorto"]) {
 
 // ── fieldnames / fields ──────────────────────────────────────────────────
 
-function fieldnamesApply(v: RuntimeValue): RuntimeValue {
+function fieldnamesApply(v: RuntimeValue, rt: Runtime): RuntimeValue {
   // N×1 cell of char vectors (cellstr), matching MATLAB.
   if (isRuntimeStructArray(v)) {
     const names = v.fieldNames;
+    return RTV.cell(
+      names.map(n => RTV.char(n)),
+      [names.length, 1]
+    );
+  }
+  // An object of a classdef class: its public, non-hidden properties.
+  const table = rt.classTable;
+  if (
+    (isRuntimeClassInstance(v) || isRuntimeClassInstanceArray(v)) &&
+    table?.get(v.className)?.ast
+  ) {
+    const names = table.publicProperties(v.className).map(p => p.name);
+    // A subclass of MException also has MException's properties.
+    if (table.ancestors(v.className).includes(MEXCEPTION_CLASS))
+      for (const pn of MEXCEPTION_PROPERTIES)
+        if (!names.includes(pn)) names.push(pn);
     return RTV.cell(
       names.map(n => RTV.char(n)),
       [names.length, 1]
@@ -490,7 +517,7 @@ builtin({
   // fieldnames(obj, '-full'): the option only adds detail for Java and COM
   // objects, so it is accepted and ignored.
   nargin: [1, 2],
-  apply: args => {
+  apply: (args, _nargout, ctx) => {
     if (
       args.length === 2 &&
       !(
@@ -499,10 +526,14 @@ builtin({
       )
     )
       throw new RuntimeError("fieldnames: the second argument must be '-full'");
-    return fieldnamesApply(args[0]);
+    return fieldnamesApply(args[0], ctx.rt);
   },
 });
-builtin({ name: "fields", nargin: 1, apply: args => fieldnamesApply(args[0]) });
+builtin({
+  name: "fields",
+  nargin: 1,
+  apply: (args, _nargout, ctx) => fieldnamesApply(args[0], ctx.rt),
+});
 
 // ── fileparts ────────────────────────────────────────────────────────────
 
@@ -628,13 +659,62 @@ builtin({
   name: "properties",
   nargin: 1,
   scope: true,
-  apply: (args, _nargout, { scope }) => {
+  apply: (args, nargout, { scope, rt }) => {
     const className = referencedClass(args[0]);
     const names = className
       ? scope.classPublicProperties(className)
       : undefined;
-    return names ? nameColumn(names) : RTV.cell([], [0, 1]);
+    if (!names) return RTV.cell([], [0, 1]);
+    if (nargout === 0 && isRuntimeClassInstance(args[0])) {
+      // properties(obj) without an output lists the names.
+      rt.output(
+        `\nProperties for class ${className}:\n\n` +
+          names.map(n => `    ${n}\n`).join("") +
+          "\n"
+      );
+      return undefined;
+    }
+    return nameColumn(names);
   },
+});
+
+// methods(obj) / methods('ClassName'): the public, non-hidden methods,
+// sorted; listed in columns without an output.
+builtin({
+  name: "methods",
+  nargin: 1,
+  scope: true,
+  apply: (args, nargout, { scope, rt }) => {
+    const className = referencedClass(args[0]);
+    const found = className ? scope.classPublicMethods(className) : undefined;
+    const names = [...(found ?? [])].sort();
+    if (nargout > 0)
+      return RTV.cell(
+        names.map(n => RTV.char(n)),
+        [names.length, 1]
+      );
+    if (!found) return undefined;
+    const width = Math.max(...names.map(n => n.length)) + 2;
+    const perLine = Math.max(1, Math.floor(80 / width));
+    const lines: string[] = [];
+    for (let i = 0; i < names.length; i += perLine)
+      lines.push(
+        names
+          .slice(i, i + perLine)
+          .map(n => n.padEnd(width))
+          .join("")
+      );
+    rt.output(`\nMethods for class ${className}:\n\n${lines.join("\n")}\n\n`);
+    return undefined;
+  },
+});
+
+// metaclass(obj): the meta.class object of the value's class (as ?Name).
+builtin({
+  name: "metaclass",
+  nargin: 1,
+  scope: true,
+  apply: (args, _nargout, { scope }) => scope.metaClass(classNameOf(args[0])),
 });
 
 // ismethod(obj, name): whether `name` is a public method of the object's
