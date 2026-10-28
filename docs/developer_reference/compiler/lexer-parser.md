@@ -23,7 +23,7 @@ A recursive-descent parser, split into focused sub-parsers by category (expressi
 
 ### What the parser does _not_ do
 
-- No name resolution — identifiers are bare names at this stage. Resolution happens in the lowering context or the interpreter.
+- No name resolution — identifiers are bare names at this stage. Resolution happens at run time, through the `CodeIndex` and `resolveFunction`.
 - No type inference — all of that lives in the JIT.
 - No constant folding or other optimization.
 

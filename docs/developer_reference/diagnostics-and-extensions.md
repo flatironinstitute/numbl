@@ -2,18 +2,14 @@
 
 ## Diagnostics
 
-Errors that escape the interpreter — syntax errors, semantic errors, runtime errors — are converted to structured `DiagnosticInfo` objects before being reported. Each diagnostic carries:
+Errors that escape the interpreter — syntax errors and runtime errors — are converted to structured `DiagnosticInfo` objects before being reported. Each diagnostic carries:
 
-- error class (`errorType`: syntax / semantic / runtime / unknown);
+- error class (`errorType`: syntax / runtime / unknown);
 - source location (file, line);
 - a source snippet with a pointer caret;
 - the call stack when it is a runtime error.
 
 This conversion lives in a single diagnostics layer that both the CLI error formatter and the web worker consume. Any new error-producing path should throw a typed error the diagnostics layer already understands — do not format messages ad hoc.
-
-## External-access directives
-
-A per-file annotation that marks which workspace variables are externally observable. The web worker uses these to decide which variables to serialize back to the main thread after a run (most workspace state does not need to cross the wire). The `LoweringContext` collects and stores directive metadata from each parsed file; consumers read it through the context.
 
 ## JS user functions
 

@@ -5,9 +5,10 @@
  * to a definitive target. Used by both codegen (compile-time) and JIT (runtime).
  */
 
-import type { FunctionIndex } from "./lowering/loweringContext.js";
+import type { FunctionIndex } from "./workspace/functionIndex.js";
+import { callerPrivateScope } from "./workspace/searchPaths.js";
 import type { CallSite } from "./runtime/runtimeHelpers.js";
-import type { ItemType } from "./lowering/itemTypes.js";
+import type { ItemType } from "./itemTypes.js";
 import {
   type RuntimeValue,
   isRuntimeClassInstance,
@@ -55,37 +56,9 @@ export type ResolvedTarget =
       name: string;
     };
 
-/** Compute the relative path from search paths (longest match wins). */
-function getRelativePathFromSearchPaths(
-  absolutePath: string,
-  searchPaths: string[]
-): string {
-  if (searchPaths.length === 0) return absolutePath;
-  let bestPrefix = "";
-  for (const sp of searchPaths) {
-    const prefix = sp.endsWith("/") ? sp : sp + "/";
-    if (absolutePath.startsWith(prefix) && prefix.length > bestPrefix.length) {
-      bestPrefix = prefix;
-    }
-  }
-  if (bestPrefix) return absolutePath.slice(bestPrefix.length);
-  return absolutePath;
-}
-
-/** Compute the effective parent directory for private function scoping. */
-function getEffectiveDir(fileName: string, searchPaths: string[]): string {
-  const relativePath = getRelativePathFromSearchPaths(fileName, searchPaths);
-  const parts = relativePath.split("/");
-  parts.pop(); // remove filename
-  if (parts.length > 0 && parts[parts.length - 1] === "private") {
-    parts.pop();
-  }
-  return parts.length > 0 ? parts.join("/") + "/" : "";
-}
-
 // ── Resolution memoization ───────────────────────────────────────────
 // `resolveFunction` is hot: it runs on every interpreter call, redoing
-// the same Map lookups + path-splitting (`getEffectiveDir`) for the same
+// the same Map lookups + path-splitting (`callerPrivateScope`) for the same
 // call site every time. The decision depends only on `(name, callSite,
 // and the class-names of any ClassInstance args)` — for the common
 // numeric call it depends only on `(name, callSite)`. We cache the
@@ -341,7 +314,7 @@ function resolveFunctionImpl(
 
     // If the call originates from a private function file, check its subfunctions
     if (callSite.file && callSite.file.includes("/private/")) {
-      const dir = getEffectiveDir(callSite.file, index.searchPaths);
+      const dir = callerPrivateScope(callSite.file, index.searchPaths);
       const callerFunc = callSite.file.replace(/\.m$/, "").split("/").pop()!;
       if (
         index.privateFileSubfunctions?.get(`${dir}${callerFunc}`)?.has(name)
@@ -364,7 +337,7 @@ function resolveFunctionImpl(
   // 2. Private functions (scoped to caller's directory)
   //    Precedence: private functions before object functions.
   if (callSite.file) {
-    const dir = getEffectiveDir(callSite.file, index.searchPaths);
+    const dir = callerPrivateScope(callSite.file, index.searchPaths);
     if (index.privateFunctions.get(dir)?.has(name)) {
       return {
         kind: "privateFunction",

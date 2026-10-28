@@ -24,14 +24,14 @@ export type {
   AbstractSyntaxTree,
 } from "../../parser/index.js";
 
-// ── Resolver / lowering context (workspace function dispatch) ───────────
+// ── Resolver / code index (workspace function dispatch) ─────────────────
 
-export type { LoweringContext } from "../../lowering/loweringContext.js";
+export type { CodeIndex } from "../../workspace/codeIndex.js";
 export { resolveFunction } from "../../functionResolve.js";
 
 export type { CallSite } from "../../runtime/runtimeHelpers.js";
-export type { ItemType } from "../../lowering/itemTypes.js";
-export type { ClassInfo } from "../../lowering/classInfo.js";
+export type { ItemType } from "../../itemTypes.js";
+export type { ClassInfo } from "../../workspace/classInfo.js";
 
 // ── Plot builtin names ──────────────────────────────────────────────────
 

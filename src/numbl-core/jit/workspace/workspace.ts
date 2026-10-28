@@ -1,7 +1,7 @@
 /**
  * Workspace + cross-file function dispatch.
  *
- * Thin adapter over numbl's `LoweringContext`, shared with the
+ * Thin adapter over numbl's `CodeIndex`, shared with the
  * interpreter. Numbl's `resolveFunction` is the source of truth for
  * "which function does `foo(...)` refer to from this call site"; it
  * implements MATLAB's precedence rules (local > workspace > builtin,
@@ -20,7 +20,7 @@
 import type { AbstractSyntaxTree, Stmt, Span } from "../parser/index.js";
 import {
   resolveFunction,
-  type LoweringContext,
+  type CodeIndex,
   type CallSite,
   type ItemType,
   type ClassInfo,
@@ -95,11 +95,10 @@ export class Workspace {
    *  files don't see its local functions. */
   readonly mainFile: string;
 
-  /** Numbl resolution context, owned by the interpreter. Holds the
-   *  workspace registry (`filesByFuncName`, `classesByName`,
-   *  `localClassesByName`) and the `FunctionIndex` used by
-   *  `resolveFunction`. */
-  readonly ctx: LoweringContext;
+  /** Numbl's code index, shared with the interpreter. Holds the
+   *  workspace files (`filesByFuncName`), the class table and the
+   *  `FunctionIndex` used by `resolveFunction`. */
+  readonly code: CodeIndex;
 
   /** Resolved class registry — populated by `finalize()` by walking
    *  every classdef numbl knows about (workspace + local) and
@@ -119,23 +118,22 @@ export class Workspace {
 
   private finalized = false;
 
-  private constructor(ctx: LoweringContext, mainFile: string) {
-    this.ctx = ctx;
+  private constructor(code: CodeIndex, mainFile: string) {
+    this.code = code;
     this.mainFile = mainFile;
   }
 
-  /** Build a Workspace that wraps an existing `LoweringContext`. The
-   *  caller's `ctx` must already have file ASTs cached, local
-   *  functions and classes for the main file registered, workspace
-   *  files registered, and the function index built — because numbl's
-   *  interpreter has been driving the same context. The JIT runs its
-   *  own class-registry bookkeeping on top. */
-  static fromExistingContext(
-    ctx: LoweringContext,
+  /** Build a Workspace that wraps an existing `CodeIndex`. The
+   *  index must already have file ASTs cached, the main file set,
+   *  workspace files registered, and the function index built —
+   *  because numbl's interpreter has been driving the same index. The
+   *  JIT runs its own class-registry bookkeeping on top. */
+  static fromCodeIndex(
+    code: CodeIndex,
     mainFile: string,
     files: Iterable<WorkspaceFile>
   ): Workspace {
-    const ws = new Workspace(ctx, mainFile);
+    const ws = new Workspace(code, mainFile);
     for (const f of files) {
       ws.files.set(f.name, f);
     }
@@ -155,7 +153,7 @@ export class Workspace {
     // `@ClassName/<methodName>.m` external method files are already
     // discovered and parsed by numbl during `registerWorkspaceFiles`
     // (they live in `info.externalMethodFiles`, with their ASTs in
-    // `ctx.fileASTCache`). We pluck out each file's primary Function
+    // `code.fileASTCache`). We pluck out each file's primary Function
     // statement and feed them into `registerClassDef` so they join
     // the same validation pipeline as in-body methods.
     //
@@ -177,7 +175,7 @@ export class Workspace {
       }
     };
 
-    for (const [name, info] of this.ctx.registry.classesByName) {
+    for (const [name, info] of this.code.classes.workspaceClasses) {
       // Old-style (pre-classdef) @folder classes have no classdef AST and run
       // exclusively on the interpreter — never register them with the JIT.
       if (info.isOldStyle) continue;
@@ -189,7 +187,7 @@ export class Workspace {
         )
       );
     }
-    for (const [name, info] of this.ctx.registry.localClassesByName) {
+    for (const [name, info] of this.code.classes.localClasses) {
       if (this.classes.has(name) || this.failedClassValidations.has(name)) {
         // A workspace file already registered this name as a class;
         // a local class with the same name is a conflict.
@@ -204,7 +202,7 @@ export class Workspace {
     // Reject classes that shadow a registered workspace function or
     // a builtin: call-site dispatch routes by name, so disambiguation
     // would be ambiguous.
-    const fi = this.ctx.functionIndex;
+    const fi = this.code.functionIndex;
     for (const [cName, reg] of this.classes) {
       if (fi.builtins.has(cName)) {
         throw new UnsupportedConstruct(
@@ -219,8 +217,8 @@ export class Workspace {
 
   /** Pull the primary Function AST from each `@ClassName/<methodName>.m`
    *  external method file that numbl registered for `info`. Any other
-   *  top-level functions in the file are per-method-file local helpers
-   *  (numbl scopes them via `withMethodScope`); mtoc2 surfaces them
+   *  top-level functions in the file are per-method-file local helpers;
+   *  mtoc2 surfaces them
    *  through the resolve path via `target.source.from === "classFile"`,
    *  so we don't need to collect them here — only the primary needs to
    *  join the class's method registry. Returns `undefined` when the
@@ -231,7 +229,7 @@ export class Workspace {
     if (info.externalMethodFiles.size === 0) return undefined;
     const out = new Map<string, FuncStmt>();
     for (const [methodName, mf] of info.externalMethodFiles) {
-      const ast = this.ctx.fileASTCache.get(mf.fileName);
+      const ast = this.code.fileASTCache.get(mf.fileName);
       if (!ast) {
         throw new UnsupportedConstruct(
           `internal: external method file '${mf.fileName}' for ` +
@@ -320,14 +318,14 @@ export class Workspace {
       name,
       itemTypes,
       augmented,
-      this.ctx.functionIndex
+      this.code.functionIndex
     );
     if (!target) return null;
     switch (target.kind) {
       case "builtin":
         return { kind: "builtin", name: target.name };
       case "workspaceFunction": {
-        const entry = this.ctx.registry.filesByFuncName.get(target.name);
+        const entry = this.code.filesByFuncName.get(target.name);
         if (!entry) {
           throw new UnsupportedConstruct(
             `internal: resolver claimed '${target.name}' is a workspace ` +
@@ -336,7 +334,7 @@ export class Workspace {
           );
         }
         const ast = firstFunctionInFile(
-          this.ctx.fileASTCache.get(entry.fileName)
+          this.code.fileASTCache.get(entry.fileName)
         );
         if (!ast) {
           throw new UnsupportedConstruct(
@@ -364,7 +362,7 @@ export class Workspace {
         }
         if (target.source.from === "workspaceFile") {
           const wsName = target.source.wsName;
-          const entry = this.ctx.registry.filesByFuncName.get(wsName);
+          const entry = this.code.filesByFuncName.get(wsName);
           if (!entry) {
             throw new UnsupportedConstruct(
               `internal: resolver claimed '${name}' is a subfunction of ` +
@@ -373,7 +371,7 @@ export class Workspace {
             );
           }
           const ast = findFunctionInBody(
-            this.ctx.fileASTCache.get(entry.fileName)?.body,
+            this.code.fileASTCache.get(entry.fileName)?.body,
             name
           );
           if (!ast) {
@@ -402,7 +400,7 @@ export class Workspace {
               span
             );
           }
-          const classInfo = this.ctx.registry.classesByName.get(className);
+          const classInfo = this.code.classes.workspaceClasses.get(className);
           const methodFile = classInfo?.externalMethodFiles.get(methodScope);
           if (methodFile === undefined) {
             // The methodScope must be an external method file: the
@@ -419,7 +417,7 @@ export class Workspace {
             );
           }
           const ast = findFunctionInBody(
-            this.ctx.fileASTCache.get(methodFile.fileName)?.body,
+            this.code.fileASTCache.get(methodFile.fileName)?.body,
             name
           );
           if (!ast) {

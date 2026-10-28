@@ -62,7 +62,7 @@ export type ToNumblWorker =
 /** Structured error, formatted on the main thread with `formatDiagnostic`. */
 export interface WorkerDiagnostic {
   message: string;
-  errorType: "syntax" | "semantic" | "runtime" | "unknown";
+  errorType: "syntax" | "runtime" | "unknown";
   file: string | null;
   line: number | null;
   snippet: string | null;

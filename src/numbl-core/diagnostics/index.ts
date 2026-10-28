@@ -6,17 +6,15 @@
 import {
   RuntimeError,
   offsetToColumn,
-  offsetToLine,
   type CallFrame,
 } from "../runtime/error.js";
 import { SyntaxError } from "../parser/errors.js";
-import { SemanticError } from "../lowering/errors.js";
 import type { WorkspaceFile } from "../workspace/index.js";
 import { CompilationErrors } from "./errors.js";
 
 interface DiagnosticInfo {
   message: string;
-  errorType: "syntax" | "semantic" | "runtime" | "unknown";
+  errorType: "syntax" | "runtime" | "unknown";
   file: string | null;
   line: number | null;
   snippet: string | null;
@@ -152,41 +150,6 @@ function diagnoseError(
     };
   }
 
-  // ── SemanticError (with span) ─────────────────────────────────────────────
-  if (error instanceof SemanticError && error.span !== null) {
-    // Resolve file/line/column from span if not already set
-    const file = error.file ?? error.span.file;
-    const src = file
-      ? getSourceForFile(file, mainFileName, mainSource, wsFiles)
-      : null;
-    const line =
-      error.line ?? (src ? offsetToLine(src, error.span.start) : null);
-    const column =
-      error.column ?? (src ? offsetToColumn(src, error.span.start) : undefined);
-    const snippet =
-      src && line !== null ? extractSnippetByLine(src, line, 2, column) : null;
-    return {
-      message: error.message,
-      errorType: "semantic",
-      file,
-      line,
-      snippet,
-      callStack: null,
-    };
-  }
-
-  // ── SemanticError (without span) ─────────────────────────────────────────
-  if (error instanceof SemanticError) {
-    return {
-      message: error.message,
-      errorType: "semantic",
-      file: null,
-      line: null,
-      snippet: null,
-      callStack: null,
-    };
-  }
-
   // ── Unexpected errors ─────────────────────────────────────────────────────
   const message = error instanceof Error ? error.message : String(error);
   return {
@@ -268,7 +231,6 @@ export function formatDiagnostic(
   // No call stack — simple format
   const labels: Record<DiagnosticInfo["errorType"], string> = {
     syntax: "SyntaxError",
-    semantic: "SemanticError",
     runtime: "RuntimeError",
     unknown: "Error",
   };

@@ -30,7 +30,7 @@ import {
 } from "../functionResolve.js";
 import { parseMFile, type AbstractSyntaxTree } from "../parser/index.js";
 import { SyntaxError } from "../parser/errors.js";
-import type { ClassInfo } from "../lowering/classInfo.js";
+import type { ClassInfo } from "../workspace/classInfo.js";
 import {
   getInterpreterSpecialBuiltin,
   FALL_THROUGH,
@@ -108,21 +108,21 @@ function callInterpreterSpecial(
       rt: this.rt,
       optimization: this.optimization,
       lookupWorkspaceFile: n => {
-        const entry = this.ctx.registry.filesByFuncName.get(n);
+        const entry = this.code.filesByFuncName.get(n);
         if (entry)
           return {
             path: entry.fileName,
             kind: "function",
             source: entry.source,
           };
-        const classInfo = this.ctx.getClassInfo(n);
+        const classInfo = this.code.classes.get(n);
         if (classInfo)
           return {
             path: classInfo.fileName,
             kind: "class",
             source: classInfo.source,
           };
-        const jsEntry = this.ctx.registry.jsUserFunctionsByName.get(n);
+        const jsEntry = this.code.jsUserFunctionsByName.get(n);
         if (jsEntry)
           return {
             path: jsEntry.fileName,
@@ -163,7 +163,7 @@ function paramsInFile(
   fileName: string,
   funcName: string
 ): string[] | undefined {
-  const ast = interp.ctx.getCachedAST(fileName);
+  const ast = interp.code.getCachedAST(fileName);
   for (const stmt of ast.body) {
     if (stmt.type === "Function" && stmt.name === funcName) return stmt.params;
   }
@@ -196,7 +196,7 @@ export function declaredNargin(
     case "localFunction": {
       const { source } = target;
       if (source.from === "main") {
-        params = this.mainLocalFunctions.get(target.name)?.params;
+        params = this.code.mainLocalFunctions.get(target.name)?.params;
       } else if (source.from === "workspaceFile") {
         params =
           this.findFunctionInWorkspaceFile(source.wsName, target.name)
@@ -221,9 +221,9 @@ export function declaredNargin(
         this.findFunctionInWorkspaceFile(target.name, primaryName)?.params ??
         undefined;
       if (params === undefined) {
-        const entry = this.ctx.registry.filesByFuncName.get(target.name);
+        const entry = this.code.filesByFuncName.get(target.name);
         if (entry) {
-          const ast = this.ctx.getCachedAST(entry.fileName);
+          const ast = this.code.getCachedAST(entry.fileName);
           for (const stmt of ast.body) {
             if (stmt.type === "Function") {
               params = stmt.params;
@@ -235,7 +235,7 @@ export function declaredNargin(
       break;
     }
     case "privateFunction": {
-      const entry = this.ctx.getPrivateFileEntry(
+      const entry = this.code.getPrivateFileEntry(
         target.callerFile,
         target.name
       );
@@ -285,7 +285,7 @@ export function interpretJsUserFunction(
   args: unknown[],
   nargout: number
 ): unknown {
-  const entry = this.ctx.registry.jsUserFunctionsByName.get(target.name);
+  const entry = this.code.jsUserFunctionsByName.get(target.name);
   if (!entry) {
     throw new RuntimeError(`JS user function '${target.name}' not found`);
   }
@@ -328,7 +328,7 @@ export function interpretLocalFunction(
   const { source } = target;
 
   if (source.from === "main") {
-    const fn = this.mainLocalFunctions.get(target.name);
+    const fn = this.findMainLocalFunction(target.name);
     if (!fn)
       throw new RuntimeError(`Local function '${target.name}' not found`);
     return this.callUserFunction(fn, args, nargout);
@@ -359,7 +359,7 @@ export function interpretLocalFunction(
         `Local function '${target.name}' not found in class file '${source.className}'`
       );
     // Use the external method file as context if methodScope points to one
-    const classInfo = this.ctx.getClassInfo(source.className);
+    const classInfo = this.code.classes.get(source.className);
     const extFile = classInfo?.externalMethodFiles.get(
       source.methodScope ?? ""
     );
@@ -374,7 +374,7 @@ export function interpretLocalFunction(
   }
 
   if (source.from === "privateFile") {
-    const ast = this.ctx.getCachedAST(source.callerFile);
+    const ast = this.code.getCachedAST(source.callerFile);
     for (const stmt of ast.body) {
       if (stmt.type === "Function" && stmt.name === target.name) {
         const fn = funcDefFromStmt(stmt);
@@ -417,9 +417,9 @@ export function interpretWorkspaceFunction(
   // file is a local one — calling it in place of running the script binds no
   // arguments, so its body fails on the first parameter read.
   if (!fn) {
-    const entry = this.ctx.registry.filesByFuncName.get(target.name);
+    const entry = this.code.filesByFuncName.get(target.name);
     if (entry) {
-      const ast = this.ctx.getCachedAST(entry.fileName);
+      const ast = this.code.getCachedAST(entry.fileName);
       for (const stmt of ast.body) {
         if (stmt.type === "Function") {
           fn = funcDefFromStmt(stmt);
@@ -430,7 +430,7 @@ export function interpretWorkspaceFunction(
     }
   }
   if (!fn) {
-    const entry = this.ctx.registry.filesByFuncName.get(target.name);
+    const entry = this.code.filesByFuncName.get(target.name);
     if (entry) {
       // No top-level function in the file → it's a script. MATLAB runs a
       // script invoked by name in the *caller's* workspace (variables are
@@ -444,7 +444,7 @@ export function interpretWorkspaceFunction(
         err.identifier = "MATLAB:scriptNotAFunction";
         throw err;
       }
-      const ast = this.ctx.getCachedAST(entry.fileName);
+      const ast = this.code.getCachedAST(entry.fileName);
       this.withFileContext(entry.fileName, undefined, undefined, () => {
         for (const stmt of ast.body) {
           if (stmt.type === "Function") continue;
@@ -474,8 +474,11 @@ export function interpretClassMethod(
   nargout: number
 ): unknown {
   const { className, methodName } = target;
-  const definingClass = this.ctx.findDefiningClass(className, methodName);
-  const classInfo = this.ctx.getClassInfo(definingClass);
+  const definingClass = this.code.classes.findDefiningClass(
+    className,
+    methodName
+  );
+  const classInfo = this.code.classes.get(definingClass);
   if (!classInfo) throw new RuntimeError(`Class '${definingClass}' not found`);
 
   if (methodName === classInfo.constructorName) {
@@ -538,11 +541,11 @@ export function interpretPrivateFunction(
   args: unknown[],
   nargout: number
 ): unknown {
-  const entry = this.ctx.getPrivateFileEntry(target.callerFile, target.name);
+  const entry = this.code.getPrivateFileEntry(target.callerFile, target.name);
   if (!entry)
     throw new RuntimeError(`Private function '${target.name}' not found`);
 
-  const ast = this.ctx.getCachedAST(entry.fileName);
+  const ast = this.code.getCachedAST(entry.fileName);
   for (const stmt of ast.body) {
     if (stmt.type === "Function" && stmt.name === target.name) {
       const fn = funcDefFromStmt(stmt);
@@ -599,7 +602,7 @@ export function interpretEnumMember(
   className: string,
   memberName: string
 ): RuntimeValue | null {
-  const classInfo = this.ctx.getClassInfo(className);
+  const classInfo = this.code.classes.get(className);
   if (!classInfo || !classInfo.enumMembers) return null;
   const memberDef = classInfo.enumMembers.find(m => m.name === memberName);
   if (!memberDef) return null;
@@ -678,7 +681,7 @@ export function instantiateClass(
   args: unknown[],
   nargout: number
 ): unknown {
-  const classInfo = this.ctx.getClassInfo(className);
+  const classInfo = this.code.classes.get(className);
   if (!classInfo) {
     return this.rt.callClassMethod(className, className, nargout, args);
   }
@@ -1103,13 +1106,27 @@ export function getWorkspaceFileName(
   this: Interpreter,
   funcName: string
 ): string {
-  const entry = this.ctx.registry.filesByFuncName.get(funcName);
+  const entry = this.code.filesByFuncName.get(funcName);
   return entry?.fileName ?? funcName + ".m";
 }
 
 export function getClassFileName(this: Interpreter, className: string): string {
-  const info = this.ctx.getClassInfo(className);
+  const info = this.code.classes.get(className);
   return info?.fileName ?? className + ".m";
+}
+
+export function findMainLocalFunction(
+  this: Interpreter,
+  funcName: string
+): FunctionDef | null {
+  const cacheKey = `main:${funcName}`;
+  const cached = this.functionDefCache.get(cacheKey);
+  if (cached) return cached;
+  const stmt = this.code.mainLocalFunctions.get(funcName);
+  if (!stmt) return null;
+  const fn = funcDefFromStmt(stmt);
+  this.functionDefCache.set(cacheKey, fn);
+  return fn;
 }
 
 export function findFunctionInWorkspaceFile(
@@ -1121,10 +1138,10 @@ export function findFunctionInWorkspaceFile(
   const cached = this.functionDefCache.get(cacheKey);
   if (cached) return cached;
 
-  const entry = this.ctx.registry.filesByFuncName.get(wsName);
+  const entry = this.code.filesByFuncName.get(wsName);
   if (!entry) return null;
 
-  const ast = this.ctx.getCachedAST(entry.fileName);
+  const ast = this.code.getCachedAST(entry.fileName);
   for (const stmt of ast.body) {
     if (stmt.type === "Function" && stmt.name === funcName) {
       const fn = funcDefFromStmt(stmt);
@@ -1145,13 +1162,13 @@ export function findFunctionInClassFile(
   const cached = this.functionDefCache.get(cacheKey);
   if (cached) return cached;
 
-  const classInfo = this.ctx.getClassInfo(className);
+  const classInfo = this.code.classes.get(className);
   if (!classInfo) return null;
 
   // If methodScope is an external method, look ONLY in that file's subfunctions
   if (methodScope && classInfo.externalMethodFiles.has(methodScope)) {
     const mf = classInfo.externalMethodFiles.get(methodScope)!;
-    const methodAst = this.ctx.getCachedAST(mf.fileName);
+    const methodAst = this.code.getCachedAST(mf.fileName);
     for (const stmt of methodAst.body) {
       if (stmt.type === "Function" && stmt.name === funcName) {
         const fn = funcDefFromStmt(stmt);
@@ -1163,7 +1180,7 @@ export function findFunctionInClassFile(
   }
 
   // Look in main classdef file's subfunctions
-  const ast = this.ctx.getCachedAST(classInfo.fileName);
+  const ast = this.code.getCachedAST(classInfo.fileName);
   for (const stmt of ast.body) {
     if (stmt.type === "Function" && stmt.name === funcName) {
       const fn = funcDefFromStmt(stmt);
@@ -1175,7 +1192,7 @@ export function findFunctionInClassFile(
   // If no methodScope specified, also search all external method files
   if (!methodScope) {
     for (const [, mf] of classInfo.externalMethodFiles) {
-      const methodAst = this.ctx.getCachedAST(mf.fileName);
+      const methodAst = this.code.getCachedAST(mf.fileName);
       for (const stmt of methodAst.body) {
         if (stmt.type === "Function" && stmt.name === funcName) {
           const fn = funcDefFromStmt(stmt);
@@ -1213,7 +1230,7 @@ export function findMethodInClass(
   }
 
   for (const sc of classInfo.superClasses) {
-    const parentInfo = this.ctx.getClassInfo(sc);
+    const parentInfo = this.code.classes.get(sc);
     const fn = parentInfo && this.findMethodInClass(parentInfo, methodName);
     if (fn) return fn;
   }
@@ -1229,14 +1246,14 @@ export function findExternalMethod(
   const mf = classInfo.externalMethodFiles.get(methodName);
   if (!mf) {
     for (const sc of classInfo.superClasses) {
-      const parentInfo = this.ctx.getClassInfo(sc);
+      const parentInfo = this.code.classes.get(sc);
       const fn = parentInfo && this.findExternalMethod(parentInfo, methodName);
       if (fn) return fn;
     }
     return null;
   }
 
-  const ast = this.ctx.getCachedAST(mf.fileName);
+  const ast = this.code.getCachedAST(mf.fileName);
   // Dispatch is by file name: the method is the file's primary (first
   // top-level) function regardless of its internal name. MATLAB tolerates a
   // function whose declared name differs from the file name (e.g. a
@@ -1282,7 +1299,7 @@ export function collectClassProperties(
   const propertyNames: string[] = [...classInfo.propertyNames];
   const propertyDefaults = new Map(classInfo.propertyDefaults);
 
-  for (const parentInfo of this.ctx.classLineage(classInfo).slice(1)) {
+  for (const parentInfo of this.code.classes.lineage(classInfo).slice(1)) {
     for (const propName of parentInfo.propertyNames) {
       if (!propertyNames.includes(propName)) {
         propertyNames.push(propName);
@@ -1305,11 +1322,11 @@ function classPublicProperties(
   interp: Interpreter,
   className: string
 ): string[] | undefined {
-  const self = interp.ctx.getClassInfo(className);
+  const self = interp.code.classes.get(className);
   if (!self) return undefined;
   const out: string[] = [];
   const seen = new Set<string>();
-  for (const info of interp.ctx.classLineage(self)) {
+  for (const info of interp.code.classes.lineage(self)) {
     const ast = info.ast;
     if (ast) {
       for (const member of ast.members) {
@@ -1358,11 +1375,11 @@ function classPublicMethods(
   interp: Interpreter,
   className: string
 ): Set<string> | undefined {
-  const self = interp.ctx.getClassInfo(className);
+  const self = interp.code.classes.get(className);
   if (!self) return undefined;
   const out = new Set<string>();
   if (self.constructorName) out.add(self.constructorName);
-  for (const info of interp.ctx.classLineage(self)) {
+  for (const info of interp.code.classes.lineage(self)) {
     const ast = info.ast;
     if (ast) {
       for (const member of ast.members) {
@@ -1390,7 +1407,7 @@ function classPublicMethods(
     for (const n of info.externalMethodFiles.keys())
       if (n !== info.name || info.qualifiedName === className) out.add(n);
   }
-  if (interp.ctx.isHandleClass(self))
+  if (interp.code.classes.isHandleClass(self))
     for (const n of HANDLE_CLASS_METHODS) out.add(n);
   return out;
 }
@@ -1399,7 +1416,7 @@ export function isHandleClass(
   this: Interpreter,
   classInfo: ClassInfo
 ): boolean {
-  return this.ctx.isHandleClass(classInfo);
+  return this.code.classes.isHandleClass(classInfo);
 }
 
 // ── eval in local scope ──────────────────────────────────────────────────

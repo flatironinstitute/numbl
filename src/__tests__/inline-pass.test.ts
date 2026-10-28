@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { parseMFile } from "../numbl-core/parser/index.js";
-import { LoweringContext } from "../numbl-core/lowering/loweringContext.js";
+import { CodeIndex } from "../numbl-core/workspace/codeIndex.js";
 import { Workspace, Lowerer, tensorDouble } from "../numbl-core/jit/index.js";
 import { specializeUserFunction } from "../numbl-core/jit/lowering/specialize.js";
 import { inlineFunc } from "../numbl-core/jit/codegen/inlinePass.js";
@@ -11,13 +11,12 @@ import type { IRFunc, IRStmt } from "../numbl-core/jit/lowering/ir.js";
 function lowerFn(source: string, shape: number[]): IRFunc {
   const fileName = "f.m";
   const ast = parseMFile(source, fileName);
-  const ctx = new LoweringContext(source, fileName);
-  ctx.fileASTCache.set(fileName, ast);
+  const code = new CodeIndex(fileName, source);
+  code.setMainFile(ast);
   const decl = ast.body.find(s => s.type === "Function");
   if (decl?.type !== "Function") throw new Error("no function");
-  ctx.registerLocalFunctionAST(decl);
-  ctx.buildFunctionIndex();
-  const ws = Workspace.fromExistingContext(ctx, fileName, [
+  code.buildFunctionIndex();
+  const ws = Workspace.fromCodeIndex(code, fileName, [
     { name: fileName, source, ast },
   ]);
   const lowerer = new Lowerer(ws);

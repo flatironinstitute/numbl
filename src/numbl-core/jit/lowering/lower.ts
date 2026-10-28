@@ -242,7 +242,7 @@ export class Lowerer {
   /** Look up a registered class (workspace or local) by name.
    *  Re-throws the saved `UnsupportedConstruct` if numbl knew the
    *  class but mtoc2's `registerClassDef` rejected it in the JIT
-   *  bridge's `fromExistingContext` mode — surfacing the error at
+   *  bridge's `fromCodeIndex` mode — surfacing the error at
    *  the first actual use rather than at workspace finalize. */
   classReg(name: string): ClassRegistration | undefined {
     return this.workspace.requireClass(name);

@@ -8,8 +8,8 @@ Numbl is a numerical computing environment compatible with MATLAB syntax, writte
 source .m ──► Lexer ──► Parser ──► AST
                                     │
                                     ▼
-                           LoweringContext
-                     (workspace / function resolver)
+                              CodeIndex
+                 (workspace functions, classes, index)
                                     │
                                     ▼
                             Interpreter
@@ -53,6 +53,6 @@ A single entry point (the `executeCode` function) accepts source, options, and a
 - [plotting.md](plotting.md) — graphics instructions and the plot viewer.
 - [uihtml.md](uihtml.md) — interactive HTML figures and the two-way data/event bridge to the interpreter.
 - [testing.md](testing.md) — unit and integration test suites.
-- [diagnostics-and-extensions.md](diagnostics-and-extensions.md) — error reporting, external-access directives, JS user functions.
+- [diagnostics-and-extensions.md](diagnostics-and-extensions.md) — error reporting, JS user functions.
 
 When adding a new topic file, link it from this list.

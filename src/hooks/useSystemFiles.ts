@@ -82,7 +82,7 @@ export function useSystemFiles() {
    * Build workspace files (text) for workers. Loads all content from DB.
    * Names use the absolute VFS path ("/system/...") so they line up with
    * the absolute system search path passed by the workers — without that,
-   * `getRelativePath` in the lowering context can't strip the search-path
+   * `getRelativePath` in the code index can't strip the search-path
    * prefix and the mip files get treated as deeply-nested non-namespace
    * files and dropped.
    *

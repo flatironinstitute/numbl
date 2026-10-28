@@ -16,9 +16,25 @@ import { toNumber } from "../../runtime/convert.js";
 import type { JitType } from "../../jitTypes.js";
 import { registerIBuiltin } from "./types.js";
 import { parseMFile, type Stmt, type Expr } from "../../parser/index.js";
-import { BUILTIN_CONSTANTS } from "../../lowering/constants.js";
 import { getIBuiltin } from "./types.js";
 import { allocFloat64Array } from "../../runtime/alloc.js";
+
+/** Names of built-in constants, excluded from `symvar` results. */
+const BUILTIN_CONSTANTS = new Set([
+  "pi",
+  "inf",
+  "Inf",
+  "nan",
+  "NaN",
+  "realmax",
+  "realmin",
+  "intmax",
+  "intmin",
+  "i",
+  "j",
+  "true",
+  "false",
+]);
 
 // ── strsplit ────────────────────────────────────────────────────────────
 
