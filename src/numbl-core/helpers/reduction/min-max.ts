@@ -352,13 +352,8 @@ export function minMaxImpl(
       const d = firstReduceDim(v.shape);
       if (d === 0) {
         // Vector: full scan (direct, no index array needed).
-        // Fast path: single-output, real, Float64 → tensorOps.realFlatReduce.
-        if (
-          nargout <= 1 &&
-          !v.imag &&
-          v.data instanceof Float64Array &&
-          (name === "min" || name === "max")
-        ) {
+        // Fast path: single-output, real → tensorOps.realFlatReduce.
+        if (nargout <= 1 && !v.imag && (name === "min" || name === "max")) {
           const out = allocFloat64Array(1);
           const op = name === "min" ? OpReduce.MIN : OpReduce.MAX;
           tensorOps.realFlatReduce(op, v.data.length, v.data, out);

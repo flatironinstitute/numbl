@@ -348,9 +348,7 @@ function normImplTensor(v: RuntimeTensor, args: RuntimeValue[]): RuntimeValue {
       const result = bridge.svd(R, tm, 2 * cols, false, false);
       return RTV.num(result.S[0]);
     }
-    const f64 =
-      v.data instanceof Float64Array ? v.data : allocFloat64Array(v.data);
-    const result = bridge.svd(f64, rows, cols, false, false);
+    const result = bridge.svd(v.data, rows, cols, false, false);
     return RTV.num(result.S[0]);
   }
   throw unknownNormError();

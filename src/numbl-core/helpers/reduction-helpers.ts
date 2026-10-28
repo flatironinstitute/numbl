@@ -516,12 +516,12 @@ export function accumKernel(
 ): ReductionKernel {
   return {
     reduceAll: v => {
-      if (opCode !== undefined && v.data instanceof Float64Array) {
+      if (opCode !== undefined) {
         const out = allocFloat64Array(1);
         tensorOps.realFlatReduce(opCode, v.data.length, v.data, out);
         const re = finalizeFn ? finalizeFn(out[0], v.data.length) : out[0];
         let result: RuntimeValue = RTV.num(re);
-        if (v.imag && v.imag instanceof Float64Array) {
+        if (v.imag) {
           tensorOps.realFlatReduce(opCode, v.imag.length, v.imag, out);
           const im = finalizeFn ? finalizeFn(out[0], v.imag.length) : out[0];
           if (im !== 0) result = RTV.complex(re, im);

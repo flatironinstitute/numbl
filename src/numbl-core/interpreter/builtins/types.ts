@@ -87,7 +87,7 @@ export function applyUnaryElemwise(
     if (!v.imag) {
       // Tensor-ops fast path (native if available, TS fallback otherwise).
       const opCode = nativeUnaryOpCode.get(realFn);
-      if (opCode !== undefined && v.data instanceof Float64Array) {
+      if (opCode !== undefined) {
         const out = allocFloat64Array(n);
         tensorOps.realUnaryElemwise(opCode, n, v.data, out);
         return RTV.tensorRaw(out, v.shape.slice());
@@ -99,12 +99,7 @@ export function applyUnaryElemwise(
     // Complex tensor path.
     const opCode = nativeUnaryOpCode.get(realFn);
     // tensorOps.complexUnaryElemwise supports all ops except ABS.
-    if (
-      opCode !== undefined &&
-      opCode !== OpUnary.ABS &&
-      v.data instanceof Float64Array &&
-      v.imag instanceof Float64Array
-    ) {
+    if (opCode !== undefined && opCode !== OpUnary.ABS) {
       const outRe = allocFloat64Array(n);
       const outIm = allocFloat64Array(n);
       tensorOps.complexUnaryElemwise(opCode, n, v.data, v.imag, outRe, outIm);
@@ -162,7 +157,7 @@ function applyUnaryElemwiseMaybeComplex(
     if (!v.imag) {
       // Tensor-ops fast path: compute the whole buffer via the ops layer,
       // then scan for NaN (indicates out-of-domain, patch with complex fallback).
-      if (nativeOpCode !== undefined && v.data instanceof Float64Array) {
+      if (nativeOpCode !== undefined) {
         const nativeOut = allocFloat64Array(n);
         tensorOps.realUnaryElemwise(nativeOpCode, n, v.data, nativeOut);
         let firstNaN = -1;
@@ -239,18 +234,12 @@ function applyUnaryRealResult(
 
   if (isRuntimeTensor(v)) {
     const n = v.data.length;
-    // Fast path for abs (realFn = Math.abs) on Float64 data.
-    if (realFn === Math.abs && v.data instanceof Float64Array) {
-      if (!v.imag) {
-        const out = allocFloat64Array(n);
-        tensorOps.realUnaryElemwise(OpUnary.ABS, n, v.data, out);
-        return RTV.tensorRaw(out, v.shape.slice());
-      }
-      if (v.imag instanceof Float64Array) {
-        const out = allocFloat64Array(n);
-        tensorOps.complexAbs(n, v.data, v.imag, out);
-        return RTV.tensorRaw(out, v.shape.slice());
-      }
+    // Fast path for abs (realFn = Math.abs).
+    if (realFn === Math.abs) {
+      const out = allocFloat64Array(n);
+      if (!v.imag) tensorOps.realUnaryElemwise(OpUnary.ABS, n, v.data, out);
+      else tensorOps.complexAbs(n, v.data, v.imag, out);
+      return RTV.tensorRaw(out, v.shape.slice());
     }
     const out = allocFloat64Array(n);
     if (!v.imag) {

@@ -1073,9 +1073,7 @@ builtin({
     if (hasImagValue(A)) throw complexUnsupported("poly")();
 
     const At = A as RuntimeTensor;
-    const f64 =
-      At.data instanceof Float64Array ? At.data : allocFloat64Array(At.data);
-    const { wr } = getLapackBridge().eig(f64, n, false, false, true);
+    const { wr } = getLapackBridge().eig(At.data, n, false, false, true);
     let coeffs = allocFloat64Array(n + 1);
     coeffs[0] = 1;
     for (let i = 0; i < n; i++) {

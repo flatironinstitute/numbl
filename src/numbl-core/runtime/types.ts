@@ -1,4 +1,3 @@
-// Determine float precision from environment variable
 import {
   Refcounted,
   type RefcountRuntime,
@@ -6,10 +5,6 @@ import {
   decref,
 } from "./refcount.js";
 import { allocFloat64Array } from "./alloc.js";
-
-const useFloat32 = import.meta.env?.NUMBL_USE_FLOAT32 === "true" ? true : false;
-
-export const USE_FLOAT32 = useFloat32;
 
 export type RuntimeValue =
   | number

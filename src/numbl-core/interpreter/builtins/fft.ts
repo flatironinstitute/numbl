@@ -247,14 +247,14 @@ function applyFFTAlongDim(
   // Try native batch FFT
   const bridge = getLapackBridge();
   if (bridge.fftAlongDim) {
-    const inRe64 =
-      inData instanceof Float64Array ? inData : allocFloat64Array(inData);
-    const inIm64: Float64Array | null = inImag
-      ? inImag instanceof Float64Array
-        ? inImag
-        : allocFloat64Array(inImag)
-      : null;
-    const result = bridge.fftAlongDim(inRe64, inIm64, shape, dim, n, inverse);
+    const result = bridge.fftAlongDim(
+      inData,
+      inImag ?? null,
+      shape,
+      dim,
+      n,
+      inverse
+    );
     if (result) {
       const outRe = result.re,
         outIm = result.im;
