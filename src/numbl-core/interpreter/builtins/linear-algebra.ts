@@ -1,10 +1,8 @@
 /**
- * Interpreter IBuiltins for linear algebra functions:
- * norm, vecnorm, dot, det, trace, cross, inv, svd, qr, lu, eig, chol,
- * linsolve, cond, rank, pinv, kron, blkdiag, pagemtimes, pagetranspose.
- *
- * These delegate to the same runtime implementations as the legacy builtins
- * but provide JitType-level resolve() for the interpreter/JIT pipeline.
+ * Linear algebra builtins: norm, vecnorm, dot, det, trace, cross, inv,
+ * expm, svd, null, bandwidth, istriu, istril, isbanded, qr, qrupdate, lu,
+ * eig, chol, linsolve, cond, rcond, rank, pinv, kron, blkdiag, pagemtimes,
+ * pagetranspose, qz.
  */
 
 import type { RuntimeValue, RuntimeTensor } from "../../runtime/types.js";
@@ -14,26 +12,32 @@ import {
   isRuntimeNumber,
   isRuntimeString,
   isRuntimeTensor,
+  isRuntimeCell,
+  isRuntimeStruct,
+  isRuntimeStructArray,
 } from "../../runtime/types.js";
 import {
   RTV,
   RuntimeError,
   tensorSize2D,
-  toNumber,
   colMajorIndex,
 } from "../../runtime/index.js";
-import { rstr } from "../../runtime/runtime.js";
-import type { JitType } from "../../jitTypes.js";
+import { builtin } from "./builtin.js";
+import { boolToNumber, builtinError, realScalarArg } from "./args.js";
 import {
-  defineBuiltin,
-  registerIBuiltin,
-  getIBuiltin,
-  inferJitType,
-} from "./types.js";
+  errorFn,
+  scalarTensor,
+  floatMatrixArg,
+  denseFloatMatrixArg,
+  numericMatrixArg,
+  denseNumericMatrixArg,
+  realScalarOr,
+  dimArgOr,
+  outputs,
+} from "./linalg-args.js";
 import { getLapackBridge } from "../../native/lapack-bridge.js";
 import {
   toF64,
-  parseEconArgRuntime,
   parseStringArgLower,
   buildDiagMatrix,
   buildEigenvectorMatrix,
@@ -50,6 +54,7 @@ import { mAdd, mSub, mMul, mLeftDiv } from "../../helpers/arithmetic.js";
 import { allocFloat64Array, withScratch } from "../../runtime/alloc.js";
 import type { RuntimeSparseMatrix } from "../../runtime/types.js";
 import { sparseTranspose } from "../../helpers/sparse-arithmetic.js";
+import { emitWarning } from "../../helpers/warn.js";
 import {
   sparseKron,
   sparseChol,
@@ -67,17 +72,6 @@ import {
   denseToSparse,
 } from "../../helpers/sparse-direct.js";
 
-const SPARSE_TYPE: JitType = { kind: "sparse_matrix", isComplex: false };
-
-/** Coerce a numeric value to CSC for sparse-producing builtins. */
-function toSparseOperand(v: RuntimeValue, name: string): RuntimeSparseMatrix {
-  if (isRuntimeSparseMatrix(v)) return v;
-  if (isRuntimeNumber(v) || typeof v === "boolean")
-    return denseToSparse(RTV.tensor(allocFloat64Array([Number(v)]), [1, 1]));
-  if (isRuntimeTensor(v)) return denseToSparse(v);
-  throw new RuntimeError(`${name}: arguments must be numeric`);
-}
-
 function speyeSparse(n: number): RuntimeSparseMatrix {
   const ir = new Int32Array(n);
   const jc = new Int32Array(n + 1);
@@ -89,67 +83,72 @@ function speyeSparse(n: number): RuntimeSparseMatrix {
   return RTV.sparseMatrix(n, n, ir, jc, pr);
 }
 
-// ── Type helpers ──────────────────────────────────────────────────────────
+// ── MATLAB errors ─────────────────────────────────────────────────────────
 
-/** Check if arg is a numeric type that could be a matrix */
-function isNumericJitType(t: JitType): boolean {
-  return (
-    t.kind === "number" ||
-    t.kind === "boolean" ||
-    t.kind === "complex_or_number" ||
-    t.kind === "tensor" ||
-    t.kind === "sparse_matrix"
-  );
+const squareError = errorFn("MATLAB:square", "Matrix must be square.");
+const mustBeFloatError = errorFn(
+  "MATLAB:math:mustBeFloat",
+  "Invalid data type. Argument must be double or single."
+);
+const svdTypeError = errorFn(
+  "MATLAB:svd:inputType",
+  "First input must be single or double."
+);
+const svdSparseError = errorFn(
+  "MATLAB:svd:noSVDsparse",
+  "SVD does not support sparse matrices. Use SVDS to compute a subset of the singular values and vectors of a sparse matrix."
+);
+const floatOrLogicalError = errorFn(
+  "MATLAB:math:mustBeFloatOrLogical",
+  "Invalid data type. Argument must be double, single, or logical."
+);
+
+/** True for a real numeric scalar equal to 0 (the legacy economy flag of
+ *  qr and svd). */
+function isRealZero(v: RuntimeValue): boolean {
+  if (isText(v)) return false;
+  try {
+    return realScalarArg(v) === 0;
+  } catch {
+    return false;
+  }
 }
 
-/** Return a "scalar number" JitType */
-const NUM: JitType = { kind: "number" };
-const COMPLEX_OR_NUM: JitType = { kind: "complex_or_number" };
-
-/** Return a tensor type with unknown shape, optionally complex */
-function tensorType(isComplex?: boolean, shape?: number[]): JitType {
-  return {
-    kind: "tensor",
-    isComplex: isComplex ?? false,
-    ...(shape ? { shape } : {}),
-  };
+/** True for a string scalar or char value. */
+function isText(v: RuntimeValue): boolean {
+  return isRuntimeString(v) || isRuntimeChar(v);
 }
 
 // ── norm ──────────────────────────────────────────────────────────────────
 
-defineBuiltin({
+const normTypeError = errorFn(
+  "MATLAB:norm:inputType",
+  "First argument must be single or double."
+);
+const unknownNormError = errorFn(
+  "MATLAB:norm:unknownNorm",
+  "When the first input is a matrix, the second input must be 1, 2, inf, or 'fro'.  When the first input is a vector, the second input must be a positive real-valued scalar, inf, -inf, or 'fro'."
+);
+
+builtin({
   name: "norm",
-  cases: [
-    {
-      match: (argTypes, nargout) => {
-        if (nargout > 1 || argTypes.length < 1 || argTypes.length > 2)
-          return null;
-        if (!isNumericJitType(argTypes[0])) return null;
-        return [NUM];
-      },
-      apply: args => {
-        // norm returns a scalar but normImplTensor may allocate scratch
-        // for matrix-norm via SVD or other paths — release on return.
-        return withScratch(() => normApply(args));
-      },
-    },
-  ],
+  nargin: [1, 2],
+  // normImplTensor may allocate scratch (e.g. the SVD for the 2-norm); the
+  // result is a scalar, so release it on return.
+  apply: args => withScratch(() => normApply(args)),
 });
 
 function normApply(args: RuntimeValue[]): RuntimeValue {
-  if (args.length < 1)
-    throw new RuntimeError("norm requires at least 1 argument");
-  const v = args[0];
+  const v = boolToNumber(args[0]);
   if (isRuntimeNumber(v)) return RTV.num(Math.abs(v));
   if (isRuntimeComplexNumber(v)) return RTV.num(Math.hypot(v.re, v.im));
-  if (isRuntimeSparseMatrix(v)) {
-    const fast = sparseNormFast(v, args[1]);
+  const A = floatMatrixArg(v, normTypeError);
+  if (isRuntimeSparseMatrix(A)) {
+    const fast = sparseNormFast(A, args[1]);
     if (fast !== null) return RTV.num(fast);
-    return normApply([sparseToDense(v), ...args.slice(1)]);
+    return normImplTensor(sparseToDense(A), args);
   }
-  if (!isRuntimeTensor(v))
-    throw new RuntimeError("norm: argument must be numeric");
-  return normImplTensor(v, args);
+  return normImplTensor(A, args);
 }
 
 /** O(nnz) matrix norms for sparse input (1, Inf, 'fro'); null otherwise. */
@@ -236,13 +235,13 @@ function normImplTensor(v: RuntimeTensor, args: RuntimeValue[]): RuntimeValue {
   let p: number | "fro" = 2;
   if (args.length >= 2) {
     const arg1 = args[1];
-    if (isRuntimeChar(arg1)) {
-      const s = arg1.value.toLowerCase();
+    if (isText(arg1)) {
+      const s = parseStringArgLower(arg1);
       if (s === "inf") p = Infinity;
       else if (s === "fro") p = "fro";
-      else throw new RuntimeError(`norm: invalid option '${arg1.value}'`);
+      else throw unknownNormError();
     } else {
-      p = toNumber(arg1);
+      p = realScalarOr(arg1, unknownNormError);
     }
   }
 
@@ -354,49 +353,56 @@ function normImplTensor(v: RuntimeTensor, args: RuntimeValue[]): RuntimeValue {
     const result = bridge.svd(f64, rows, cols, false, false);
     return RTV.num(result.S[0]);
   }
-  throw new RuntimeError("norm: for matrices, p must be 1, 2, Inf, or 'fro'");
+  throw unknownNormError();
 }
 
 // ── vecnorm ──────────────────────────────────────────────────────────────
 
-defineBuiltin({
+const vecnormTypeError = errorFn(
+  "MATLAB:vecnorm:inputType",
+  "Invalid data type. First argument must be single or double."
+);
+
+builtin({
   name: "vecnorm",
-  cases: [
-    {
-      match: (argTypes, nargout) => {
-        if (nargout > 1 || argTypes.length < 1 || argTypes.length > 3)
-          return null;
-        if (!isNumericJitType(argTypes[0])) return null;
-        const a = argTypes[0];
-        if (
-          a.kind === "number" ||
-          a.kind === "boolean" ||
-          a.kind === "complex_or_number"
+  nargin: [1, 3],
+  apply: args => {
+    const v = boolToNumber(args[0]);
+    let p = 2;
+    if (args.length >= 2)
+      p = realScalarOr(
+        args[1],
+        errorFn(
+          "MATLAB:vecnorm:unknownNorm",
+          "Second argument must be a positive real value or Inf."
         )
-          return [NUM];
-        return [{ kind: "tensor", isComplex: false }];
-      },
-      apply: args => {
-        if (args.length < 1)
-          throw new RuntimeError("vecnorm requires at least 1 argument");
-        const v = args[0];
-        let p = 2;
-        if (args.length >= 2) p = toNumber(args[1]);
-        if (isRuntimeNumber(v)) return RTV.num(Math.abs(v));
-        if (isRuntimeComplexNumber(v)) return RTV.num(Math.hypot(v.re, v.im));
-        if (!isRuntimeTensor(v))
-          throw new RuntimeError("vecnorm: argument must be numeric");
-        let dim: number;
-        if (args.length >= 3) {
-          dim = Math.round(toNumber(args[2]));
-        } else {
-          const idx = v.shape.findIndex((d: number) => d > 1);
-          dim = idx === -1 ? 1 : idx + 1;
-        }
-        return vecnormAlongDim(v, p, dim);
-      },
-    },
-  ],
+      );
+    const dimArg =
+      args.length >= 3
+        ? dimArgOr(
+            args[2],
+            errorFn(
+              "MATLAB:getdimarg:dimensionMustBePositiveInteger",
+              "Dimension argument must be a positive integer scalar within indexing range."
+            )
+          )
+        : undefined;
+    if (isRuntimeNumber(v)) return RTV.num(Math.abs(v));
+    if (isRuntimeComplexNumber(v)) return RTV.num(Math.hypot(v.re, v.im));
+    const A = floatMatrixArg(v, vecnormTypeError);
+    // Sparse input gives a sparse result, as in MATLAB.
+    const T = isRuntimeSparseMatrix(A) ? sparseToDense(A) : A;
+    let dim: number;
+    if (dimArg !== undefined) dim = dimArg;
+    else {
+      const idx = T.shape.findIndex((d: number) => d > 1);
+      dim = idx === -1 ? 1 : idx + 1;
+    }
+    const r = vecnormAlongDim(T, p, dim);
+    return isRuntimeSparseMatrix(A) && isRuntimeTensor(r)
+      ? denseToSparse(r)
+      : r;
+  },
 });
 
 function vecnormAlongDim(
@@ -479,248 +485,169 @@ function vecnormAlongDim(
 
 // ── dot ──────────────────────────────────────────────────────────────────
 
-/** Extract real/imag data and shape from a numeric runtime value, or null if
- *  the value is not numeric. */
-function toReImShape(
-  v: RuntimeValue
-): { re: Float64Array; im: Float64Array | null; shape: number[] } | null {
-  if (isRuntimeTensor(v)) {
-    return { re: v.data, im: v.imag ?? null, shape: v.shape };
+builtin({
+  name: "dot",
+  nargin: [2, 3],
+  mfile: true,
+  apply: args => {
+    const A = denseNumericMatrixArg(args[0]);
+    const B = denseNumericMatrixArg(args[1]);
+    const r =
+      args.length === 3
+        ? dotAlongDim(
+            A,
+            B,
+            dimArgOr(
+              args[2],
+              errorFn(
+                "MATLAB:getdimarg:invalidDim",
+                "Dimension argument must be a positive integer scalar, a vector of unique positive integers, or 'all'."
+              )
+            )
+          )
+        : dotDefault(A, B);
+    // dot of two sparse arrays is sparse, as in MATLAB.
+    if (isRuntimeSparseMatrix(args[0]) && isRuntimeSparseMatrix(args[1]))
+      return denseToSparse(
+        isRuntimeTensor(r)
+          ? r
+          : isRuntimeComplexNumber(r)
+            ? scalarTensor(r.re, r.im)
+            : scalarTensor(r as number)
+      );
+    return r;
+  },
+});
+
+/** dot(A, B, dim): sum(conj(A) .* B, dim). */
+function dotAlongDim(
+  A: RuntimeTensor,
+  B: RuntimeTensor,
+  dim: number
+): RuntimeValue {
+  if (A.data.length !== B.data.length)
+    throw new RuntimeError("dot: A and B must be the same size");
+  const aRe = A.data,
+    aIm = A.imag ?? null,
+    bRe = B.data,
+    bIm = B.imag ?? null;
+  const hasComplex = aIm !== null || bIm !== null;
+  const n = aRe.length;
+
+  // dim beyond the tensor rank: the reduction is over a singleton
+  // dimension, so the result is the element-wise product conj(A).*B.
+  const collapse = forEachSlice(A.shape, dim, () => {});
+  if (collapse === null) {
+    const outRe = allocFloat64Array(n);
+    const outIm = hasComplex ? allocFloat64Array(n) : null;
+    for (let i = 0; i < n; i++) {
+      const aRei = aRe[i],
+        aImi = aIm ? aIm[i] : 0;
+      const bRei = bRe[i],
+        bImi = bIm ? bIm[i] : 0;
+      outRe[i] = aRei * bRei + aImi * bImi;
+      if (outIm) outIm[i] = aRei * bImi - aImi * bRei;
+    }
+    return RTV.tensor(outRe, [...A.shape], outIm ?? undefined);
   }
-  if (isRuntimeNumber(v)) {
-    return { re: allocFloat64Array([v]), im: null, shape: [1, 1] };
-  }
-  if (isRuntimeComplexNumber(v)) {
-    return {
-      re: allocFloat64Array([v.re]),
-      im: allocFloat64Array([v.im]),
-      shape: [1, 1],
-    };
-  }
-  return null;
+
+  const outRe = allocFloat64Array(collapse.totalElems);
+  const outIm = hasComplex ? allocFloat64Array(collapse.totalElems) : null;
+  forEachSlice(A.shape, dim, (outIdx, srcIndices) => {
+    let sRe = 0,
+      sIm = 0;
+    for (let k = 0; k < srcIndices.length; k++) {
+      const idx = srcIndices[k];
+      const aRei = aRe[idx],
+        aImi = aIm ? aIm[idx] : 0;
+      const bRei = bRe[idx],
+        bImi = bIm ? bIm[idx] : 0;
+      sRe += aRei * bRei + aImi * bImi;
+      sIm += aRei * bImi - aImi * bRei;
+    }
+    outRe[outIdx] = sRe;
+    if (outIm) outIm[outIdx] = sIm;
+  });
+  return RTV.tensor(outRe, collapse.resultShape, outIm ?? undefined);
 }
 
-defineBuiltin({
-  name: "dot",
-  cases: [
-    {
-      // dot(A, B, dim): dot product along dimension `dim`, i.e.
-      // sum(conj(A) .* B, dim).
-      match: (argTypes, nargout) => {
-        if (nargout > 1 || argTypes.length !== 3) return null;
-        if (
-          !isNumericJitType(argTypes[0]) ||
-          !isNumericJitType(argTypes[1]) ||
-          !isNumericJitType(argTypes[2])
-        )
-          return null;
-        const hasComplex = argTypes.some(
-          t =>
-            t.kind === "complex_or_number" ||
-            (t.kind === "tensor" && t.isComplex)
-        );
-        return [tensorType(hasComplex)];
-      },
-      apply: args => {
-        const a = args[0],
-          b = args[1];
-        const dim = Math.round(toNumber(args[2]));
-        if (!(dim >= 1))
-          throw new RuntimeError("dot: dimension must be a positive integer");
+/** dot(A, B): along the first dimension for matrices, else over all
+ *  elements. */
+function dotDefault(A: RuntimeTensor, B: RuntimeTensor): RuntimeValue {
+  const aRe = A.data,
+    aIm = A.imag ?? null,
+    bRe = B.data,
+    bIm = B.imag ?? null;
+  if (aRe.length !== bRe.length)
+    throw new RuntimeError("dot: vectors must be same length");
 
-        const ad = toReImShape(a);
-        const bd = toReImShape(b);
-        if (!ad || !bd)
-          throw new RuntimeError("dot: arguments must be numeric");
-        if (ad.re.length !== bd.re.length)
-          throw new RuntimeError("dot: A and B must be the same size");
+  const hasComplex = aIm !== null || bIm !== null;
+  const rows = A.shape[0];
+  const cols = A.shape.length >= 2 ? A.shape[1] : 1;
+  const isMatrix = rows > 1 && cols > 1;
 
-        const aRe = ad.re,
-          aIm = ad.im,
-          bRe = bd.re,
-          bIm = bd.im;
-        const hasComplex = aIm !== null || bIm !== null;
-        const n = aRe.length;
+  if (isMatrix) {
+    const resultRe = allocFloat64Array(cols);
+    const resultIm = hasComplex ? allocFloat64Array(cols) : null;
+    for (let c = 0; c < cols; c++) {
+      let sRe = 0,
+        sIm = 0;
+      for (let r = 0; r < rows; r++) {
+        const idx = c * rows + r;
+        const aRei = aRe[idx],
+          aImi = aIm ? aIm[idx] : 0;
+        const bRei = bRe[idx],
+          bImi = bIm ? bIm[idx] : 0;
+        sRe += aRei * bRei + aImi * bImi;
+        sIm += aRei * bImi - aImi * bRei;
+      }
+      resultRe[c] = sRe;
+      if (resultIm) resultIm[c] = sIm;
+    }
+    return RTV.tensor(resultRe, [1, cols], resultIm ?? undefined);
+  }
 
-        // dim beyond the tensor rank: the reduction is over a singleton
-        // dimension, so the result is the element-wise product conj(A).*B.
-        const collapse = forEachSlice(ad.shape, dim, () => {});
-        if (collapse === null) {
-          const outRe = allocFloat64Array(n);
-          const outIm = hasComplex ? allocFloat64Array(n) : null;
-          for (let i = 0; i < n; i++) {
-            const aRei = aRe[i],
-              aImi = aIm ? aIm[i] : 0;
-            const bRei = bRe[i],
-              bImi = bIm ? bIm[i] : 0;
-            outRe[i] = aRei * bRei + aImi * bImi;
-            if (outIm) outIm[i] = aRei * bImi - aImi * bRei;
-          }
-          return RTV.tensor(outRe, [...ad.shape], outIm ?? undefined);
-        }
-
-        const outRe = allocFloat64Array(collapse.totalElems);
-        const outIm = hasComplex
-          ? allocFloat64Array(collapse.totalElems)
-          : null;
-        forEachSlice(ad.shape, dim, (outIdx, srcIndices) => {
-          let sRe = 0,
-            sIm = 0;
-          for (let k = 0; k < srcIndices.length; k++) {
-            const idx = srcIndices[k];
-            const aRei = aRe[idx],
-              aImi = aIm ? aIm[idx] : 0;
-            const bRei = bRe[idx],
-              bImi = bIm ? bIm[idx] : 0;
-            sRe += aRei * bRei + aImi * bImi;
-            sIm += aRei * bImi - aImi * bRei;
-          }
-          outRe[outIdx] = sRe;
-          if (outIm) outIm[outIdx] = sIm;
-        });
-        return RTV.tensor(outRe, collapse.resultShape, outIm ?? undefined);
-      },
-    },
-    {
-      match: (argTypes, nargout) => {
-        if (nargout > 1 || argTypes.length !== 2) return null;
-        if (!isNumericJitType(argTypes[0]) || !isNumericJitType(argTypes[1]))
-          return null;
-        const hasTensor = argTypes.some(t => t.kind === "tensor");
-        const hasComplex = argTypes.some(
-          t =>
-            t.kind === "complex_or_number" ||
-            (t.kind === "tensor" && t.isComplex)
-        );
-        if (hasTensor) return [hasComplex ? COMPLEX_OR_NUM : tensorType(false)];
-        return [hasComplex ? COMPLEX_OR_NUM : NUM];
-      },
-      apply: args => {
-        if (args.length !== 2)
-          throw new RuntimeError("dot requires 2 arguments");
-        const a = args[0],
-          b = args[1];
-        let aRe: Float64Array | null = null,
-          aIm: Float64Array | null = null;
-        let aShape: number[] = [1, 1];
-        let bRe: Float64Array | null = null,
-          bIm: Float64Array | null = null;
-
-        if (isRuntimeTensor(a)) {
-          aRe = a.data;
-          aIm = a.imag ?? null;
-          aShape = a.shape;
-        } else if (isRuntimeNumber(a)) {
-          aRe = allocFloat64Array([a]);
-        } else if (isRuntimeComplexNumber(a)) {
-          aRe = allocFloat64Array([a.re]);
-          aIm = allocFloat64Array([a.im]);
-        }
-
-        if (isRuntimeTensor(b)) {
-          bRe = b.data;
-          bIm = b.imag ?? null;
-        } else if (isRuntimeNumber(b)) {
-          bRe = allocFloat64Array([b]);
-        } else if (isRuntimeComplexNumber(b)) {
-          bRe = allocFloat64Array([b.re]);
-          bIm = allocFloat64Array([b.im]);
-        }
-
-        if (!aRe || !bRe)
-          throw new RuntimeError("dot: arguments must be numeric");
-        if (aRe.length !== bRe.length)
-          throw new RuntimeError("dot: vectors must be same length");
-
-        const hasComplex = aIm !== null || bIm !== null;
-        const rows = aShape[0];
-        const cols = aShape.length >= 2 ? aShape[1] : 1;
-        const isMatrix = rows > 1 && cols > 1;
-
-        if (isMatrix) {
-          const resultRe = allocFloat64Array(cols);
-          const resultIm = hasComplex ? allocFloat64Array(cols) : null;
-          for (let c = 0; c < cols; c++) {
-            let sRe = 0,
-              sIm = 0;
-            for (let r = 0; r < rows; r++) {
-              const idx = c * rows + r;
-              const aRei = aRe[idx],
-                aImi = aIm ? aIm[idx] : 0;
-              const bRei = bRe[idx],
-                bImi = bIm ? bIm[idx] : 0;
-              sRe += aRei * bRei + aImi * bImi;
-              sIm += aRei * bImi - aImi * bRei;
-            }
-            resultRe[c] = sRe;
-            if (resultIm) resultIm[c] = sIm;
-          }
-          return RTV.tensor(resultRe, [1, cols], resultIm ?? undefined);
-        }
-
-        if (!hasComplex) {
-          let s = 0;
-          for (let i = 0; i < aRe.length; i++) s += aRe[i] * bRe[i];
-          return RTV.num(s);
-        }
-        let sRe = 0,
-          sIm = 0;
-        for (let i = 0; i < aRe.length; i++) {
-          const aRei = aRe[i],
-            aImi = aIm ? aIm[i] : 0;
-          const bRei = bRe[i],
-            bImi = bIm ? bIm[i] : 0;
-          sRe += aRei * bRei + aImi * bImi;
-          sIm += aRei * bImi - aImi * bRei;
-        }
-        if (sIm === 0) return RTV.num(sRe);
-        return RTV.complex(sRe, sIm);
-      },
-    },
-  ],
-});
+  if (!hasComplex) {
+    let s = 0;
+    for (let i = 0; i < aRe.length; i++) s += aRe[i] * bRe[i];
+    return RTV.num(s);
+  }
+  let sRe = 0,
+    sIm = 0;
+  for (let i = 0; i < aRe.length; i++) {
+    const aRei = aRe[i],
+      aImi = aIm ? aIm[i] : 0;
+    const bRei = bRe[i],
+      bImi = bIm ? bIm[i] : 0;
+    sRe += aRei * bRei + aImi * bImi;
+    sIm += aRei * bImi - aImi * bRei;
+  }
+  if (sIm === 0) return RTV.num(sRe);
+  return RTV.complex(sRe, sIm);
+}
 
 // ── det ──────────────────────────────────────────────────────────────────
 
-defineBuiltin({
+builtin({
   name: "det",
-  cases: [
-    {
-      match: (argTypes, nargout) => {
-        if (argTypes.length !== 1 || nargout > 1) return null;
-        if (!isNumericJitType(argTypes[0])) return null;
-        const hasComplex =
-          argTypes[0].kind === "complex_or_number" ||
-          (argTypes[0].kind === "tensor" && argTypes[0].isComplex);
-        return [hasComplex ? COMPLEX_OR_NUM : NUM];
-      },
-      apply: args => {
-        if (args.length !== 1)
-          throw new RuntimeError("det requires 1 argument");
-        const A = args[0];
-        if (isRuntimeNumber(A)) return A;
-        if (typeof A === "boolean") return RTV.num(A ? 1 : 0);
-        if (!isRuntimeTensor(A))
-          throw new RuntimeError("det: argument must be a matrix");
-        const [m, n] = tensorSize2D(A);
-        if (m !== n) throw new RuntimeError("det: matrix must be square");
-        // detJS / detComplexJS allocate working buffers but return a scalar
-        // — wrap so those scratch allocations release on return.
-        return withScratch(() => {
-          if (A.imag) {
-            const [detRe, detIm] = detComplexJS(
-              toF64(A.data),
-              toF64(A.imag),
-              n
-            );
-            if (Math.abs(detIm) < 1e-15) return RTV.num(detRe);
-            return RTV.complex(detRe, detIm);
-          }
-          return RTV.num(detJS(toF64(A.data), n));
-        });
-      },
-    },
-  ],
+  nargin: 1,
+  apply: args => {
+    const v = boolToNumber(args[0]);
+    if (isRuntimeNumber(v) || isRuntimeComplexNumber(v)) return v;
+    const A = denseFloatMatrixArg(v, mustBeFloatError);
+    const [m, n] = tensorSize2D(A);
+    if (m !== n || A.shape.length > 2) throw squareError();
+    // detJS / detComplexJS allocate working buffers but return a scalar
+    // — wrap so those scratch allocations release on return.
+    return withScratch(() => {
+      if (A.imag) {
+        const [detRe, detIm] = detComplexJS(toF64(A.data), toF64(A.imag), n);
+        if (Math.abs(detIm) < 1e-15) return RTV.num(detRe);
+        return RTV.complex(detRe, detIm);
+      }
+      return RTV.num(detJS(toF64(A.data), n));
+    });
+  },
 });
 
 function detJS(data: Float32Array | Float64Array, n: number): number {
@@ -821,222 +748,188 @@ function detComplexJS(
 
 // ── trace ────────────────────────────────────────────────────────────────
 
-defineBuiltin({
+builtin({
   name: "trace",
-  cases: [
-    {
-      match: (argTypes, nargout) => {
-        if (argTypes.length !== 1 || nargout > 1) return null;
-        if (!isNumericJitType(argTypes[0])) return null;
-        const hasComplex =
-          argTypes[0].kind === "complex_or_number" ||
-          (argTypes[0].kind === "tensor" && argTypes[0].isComplex);
-        return [hasComplex ? COMPLEX_OR_NUM : NUM];
-      },
-      apply: args => {
-        if (args.length !== 1)
-          throw new RuntimeError("trace requires 1 argument");
-        const A = args[0];
-        if (isRuntimeNumber(A)) return A;
-        if (isRuntimeComplexNumber(A)) return A;
-        if (!isRuntimeTensor(A))
-          throw new RuntimeError("trace: argument must be a matrix");
-        const [rows, cols] = tensorSize2D(A);
-        const n = Math.min(rows, cols);
-        let sumRe = 0;
-        let sumIm = 0;
-        for (let i = 0; i < n; i++) {
-          sumRe += A.data[i + i * rows];
-          if (A.imag) sumIm += A.imag[i + i * rows];
-        }
-        if (A.imag && Math.abs(sumIm) >= 1e-15)
-          return RTV.complex(sumRe, sumIm);
-        return RTV.num(sumRe);
-      },
-    },
-  ],
+  nargin: 1,
+  mfile: true,
+  apply: args => {
+    const v = boolToNumber(args[0]);
+    if (isRuntimeNumber(v) || isRuntimeComplexNumber(v)) return v;
+    if (
+      isRuntimeCell(v) ||
+      isRuntimeStruct(v) ||
+      isRuntimeStructArray(v) ||
+      isRuntimeString(v)
+    )
+      throw builtinError(
+        "MATLAB:diag:inputType",
+        "Inputs must be numeric, char, or logical."
+      );
+    const A = denseNumericMatrixArg(v);
+    const [rows, cols] = tensorSize2D(A);
+    if (rows !== cols || A.shape.length > 2)
+      throw builtinError("MATLAB:trace:square", "Matrix must be square.");
+    let sumRe = 0;
+    let sumIm = 0;
+    for (let i = 0; i < rows; i++) {
+      sumRe += A.data[i + i * rows];
+      if (A.imag) sumIm += A.imag[i + i * rows];
+    }
+    if (A.imag && Math.abs(sumIm) >= 1e-15) return RTV.complex(sumRe, sumIm);
+    return RTV.num(sumRe);
+  },
 });
 
 // ── cross ────────────────────────────────────────────────────────────────
 
-defineBuiltin({
+builtin({
   name: "cross",
-  cases: [
-    {
-      match: (argTypes, nargout) => {
-        if (nargout > 1) return null;
-        if (argTypes.length !== 2 && argTypes.length !== 3) return null;
-        if (!isNumericJitType(argTypes[0]) || !isNumericJitType(argTypes[1]))
-          return null;
-        const isC = (t: JitType) =>
-          t.kind === "complex_or_number" ||
-          (t.kind === "tensor" && t.isComplex === true);
-        return [tensorType(isC(argTypes[0]) || isC(argTypes[1]))];
-      },
-      apply: args => {
-        if (args.length < 2 || args.length > 3)
-          throw new RuntimeError("cross requires 2 or 3 arguments");
-        const a = args[0],
-          b = args[1];
-        if (!isRuntimeTensor(a) || !isRuntimeTensor(b))
-          throw new RuntimeError("cross: arguments must be vectors or arrays");
-        const shape = a.shape;
-        if (
-          shape.length !== b.shape.length ||
-          shape.some((s, i) => s !== b.shape[i])
+  nargin: [2, 3],
+  mfile: true,
+  apply: args => {
+    const a = denseNumericMatrixArg(args[0]),
+      b = denseNumericMatrixArg(args[1]);
+    const shape = a.shape;
+    if (
+      shape.length !== b.shape.length ||
+      shape.some((s, i) => s !== b.shape[i])
+    )
+      throw new RuntimeError("cross: A and B must have the same size");
+    let dim: number;
+    if (args.length === 3) {
+      dim = dimArgOr(
+        args[2],
+        errorFn(
+          "MATLAB:size:invalidDim",
+          "Dimension argument must be a positive integer scalar or a vector of positive integers. When an empty dimension argument is specified, it must be a 0-by-0, 1-by-0, or 0-by-1 array."
         )
-          throw new RuntimeError("cross: A and B must have the same size");
-        let dim: number;
-        if (args.length === 3) {
-          dim = toNumber(args[2]);
-          if (!Number.isInteger(dim) || dim < 1)
-            throw new RuntimeError("cross: dim must be a positive integer");
-        } else {
-          dim = shape.indexOf(3) + 1;
-          if (dim === 0)
-            throw new RuntimeError(
-              "cross: A and B must have at least one dimension of length 3"
-            );
+      );
+    } else {
+      dim = shape.indexOf(3) + 1;
+      if (dim === 0)
+        throw new RuntimeError(
+          "cross: A and B must have at least one dimension of length 3"
+        );
+    }
+    const dimIdx = dim - 1;
+    if (dimIdx >= shape.length || shape[dimIdx] !== 3)
+      throw new RuntimeError(
+        `cross: size(A,${dim}) and size(B,${dim}) must be 3`
+      );
+    const totalLen = a.data.length;
+    const result = allocFloat64Array(totalLen);
+    const aIm = a.imag,
+      bIm = b.imag;
+    const resultIm = aIm || bIm ? allocFloat64Array(totalLen) : undefined;
+    const strides = new Array(shape.length);
+    strides[0] = 1;
+    for (let d = 1; d < shape.length; d++)
+      strides[d] = strides[d - 1] * shape[d - 1];
+    const dimStride = strides[dimIdx];
+    const outerStride =
+      dimIdx + 1 < shape.length ? strides[dimIdx + 1] : totalLen;
+    const innerSize = dimStride;
+    const numOuter = totalLen / outerStride;
+    for (let outer = 0; outer < numOuter; outer++) {
+      const blockBase = outer * outerStride;
+      for (let inner = 0; inner < innerSize; inner++) {
+        const base = blockBase + inner;
+        const i0 = base,
+          i1 = base + dimStride,
+          i2 = base + 2 * dimStride;
+        const ax = a.data[i0],
+          ay = a.data[i1],
+          az = a.data[i2];
+        const bx = b.data[i0],
+          by = b.data[i1],
+          bz = b.data[i2];
+        if (!resultIm) {
+          result[i0] = ay * bz - az * by;
+          result[i1] = az * bx - ax * bz;
+          result[i2] = ax * by - ay * bx;
+          continue;
         }
-        const dimIdx = dim - 1;
-        if (dimIdx >= shape.length || shape[dimIdx] !== 3)
-          throw new RuntimeError(
-            `cross: size(A,${dim}) and size(B,${dim}) must be 3`
-          );
-        const totalLen = a.data.length;
-        const result = allocFloat64Array(totalLen);
-        const aIm = a.imag,
-          bIm = b.imag;
-        const resultIm = aIm || bIm ? allocFloat64Array(totalLen) : undefined;
-        const strides = new Array(shape.length);
-        strides[0] = 1;
-        for (let d = 1; d < shape.length; d++)
-          strides[d] = strides[d - 1] * shape[d - 1];
-        const dimStride = strides[dimIdx];
-        const outerStride =
-          dimIdx + 1 < shape.length ? strides[dimIdx + 1] : totalLen;
-        const innerSize = dimStride;
-        const numOuter = totalLen / outerStride;
-        for (let outer = 0; outer < numOuter; outer++) {
-          const blockBase = outer * outerStride;
-          for (let inner = 0; inner < innerSize; inner++) {
-            const base = blockBase + inner;
-            const i0 = base,
-              i1 = base + dimStride,
-              i2 = base + 2 * dimStride;
-            const ax = a.data[i0],
-              ay = a.data[i1],
-              az = a.data[i2];
-            const bx = b.data[i0],
-              by = b.data[i1],
-              bz = b.data[i2];
-            if (!resultIm) {
-              result[i0] = ay * bz - az * by;
-              result[i1] = az * bx - ax * bz;
-              result[i2] = ax * by - ay * bx;
-              continue;
-            }
-            const axi = aIm ? aIm[i0] : 0,
-              ayi = aIm ? aIm[i1] : 0,
-              azi = aIm ? aIm[i2] : 0;
-            const bxi = bIm ? bIm[i0] : 0,
-              byi = bIm ? bIm[i1] : 0,
-              bzi = bIm ? bIm[i2] : 0;
-            // (p*q - r*s) for complex p, q, r, s (no conjugation, as MATLAB).
-            result[i0] = ay * bz - ayi * bzi - (az * by - azi * byi);
-            resultIm[i0] = ay * bzi + ayi * bz - (az * byi + azi * by);
-            result[i1] = az * bx - azi * bxi - (ax * bz - axi * bzi);
-            resultIm[i1] = az * bxi + azi * bx - (ax * bzi + axi * bz);
-            result[i2] = ax * by - axi * byi - (ay * bx - ayi * bxi);
-            resultIm[i2] = ax * byi + axi * by - (ay * bxi + ayi * bx);
-          }
-        }
-        return maybeComplexTensor(result, [...shape], resultIm);
-      },
-    },
-  ],
+        const axi = aIm ? aIm[i0] : 0,
+          ayi = aIm ? aIm[i1] : 0,
+          azi = aIm ? aIm[i2] : 0;
+        const bxi = bIm ? bIm[i0] : 0,
+          byi = bIm ? bIm[i1] : 0,
+          bzi = bIm ? bIm[i2] : 0;
+        // (p*q - r*s) for complex p, q, r, s (no conjugation, as MATLAB).
+        result[i0] = ay * bz - ayi * bzi - (az * by - azi * byi);
+        resultIm[i0] = ay * bzi + ayi * bz - (az * byi + azi * by);
+        result[i1] = az * bx - azi * bxi - (ax * bz - axi * bzi);
+        resultIm[i1] = az * bxi + azi * bx - (ax * bzi + axi * bz);
+        result[i2] = ax * by - axi * byi - (ay * bx - ayi * bxi);
+        resultIm[i2] = ax * byi + axi * by - (ay * bxi + ayi * bx);
+      }
+    }
+    const r = maybeComplexTensor(result, [...shape], resultIm);
+    // A sparse operand gives a sparse result, as in MATLAB.
+    return isRuntimeSparseMatrix(args[0]) || isRuntimeSparseMatrix(args[1])
+      ? denseToSparse(r)
+      : r;
+  },
 });
 
 // ── inv ──────────────────────────────────────────────────────────────────
 
-defineBuiltin({
+const invTypeError = errorFn(
+  "MATLAB:inv:inputType",
+  "Invalid data type. Input matrix must be double or single."
+);
+
+builtin({
   name: "inv",
-  cases: [
-    {
-      match: (argTypes, nargout) => {
-        if (argTypes.length !== 1 || nargout > 1) return null;
-        if (!isNumericJitType(argTypes[0])) return null;
-        const a = argTypes[0];
-        if (a.kind === "number" || a.kind === "boolean") return [NUM];
-        if (a.kind === "complex_or_number") return [COMPLEX_OR_NUM];
-        if (a.kind === "tensor")
-          return [{ kind: "tensor", isComplex: a.isComplex }];
-        if (a.kind === "sparse_matrix")
-          return [{ kind: "sparse_matrix", isComplex: a.isComplex }];
-        return null;
-      },
-      apply: function invApply(args): RuntimeValue {
-        if (args.length < 1) throw new RuntimeError("inv requires 1 argument");
-        const A = args[0];
-        if (isRuntimeSparseMatrix(A)) {
-          // Sparse inverse stays sparse (MATLAB). Real: solve against the
-          // identity with the sparse LU; complex: dense path, then sparsify.
-          if (!A.pi) return sparseInverse(A);
-          const dense = invApply([sparseToDense(A)]);
-          return isRuntimeTensor(dense) ? denseToSparse(dense) : dense;
-        }
-        if (isRuntimeComplexNumber(A)) {
-          const { re, im } = A;
-          if (re === 0 && im === 0)
-            throw new RuntimeError("inv: argument is singular");
-          // Smith's algorithm for 1/(re + im*i) to avoid spurious over/underflow.
-          if (Math.abs(re) >= Math.abs(im)) {
-            const r = im / re;
-            const d = re + im * r;
-            return RTV.complex(1 / d, -r / d);
-          }
-          const r = re / im;
-          const d = im + re * r;
-          return RTV.complex(r / d, -1 / d);
-        }
-        if (isRuntimeNumber(A)) {
-          if (A === 0) throw new RuntimeError("inv: argument is singular");
-          return RTV.num(1 / A);
-        }
-        if (!isRuntimeTensor(A))
-          throw new RuntimeError("inv: argument must be numeric");
-        const [m, n] = tensorSize2D(A);
-        if (m !== n) throw new RuntimeError("inv: matrix must be square");
-        const bridge = getLapackBridge();
-        if (A.imag !== undefined) {
-          const result = bridge.invComplex(toF64(A.data), toF64(A.imag), n);
-          return RTV.tensor(result.re, [n, n], result.im);
-        }
-        return RTV.tensor(bridge.inv(toF64(A.data), n), [n, n]);
-      },
-    },
-  ],
+  nargin: 1,
+  apply: args => invValue(args[0]),
 });
+
+function invValue(v: RuntimeValue): RuntimeValue {
+  const A = boolToNumber(v);
+  if (isRuntimeSparseMatrix(A)) {
+    // Sparse inverse stays sparse (MATLAB). Real: solve against the
+    // identity with the sparse LU; complex: dense path, then sparsify.
+    if (!A.pi) return sparseInverse(A);
+    const dense = invValue(sparseToDense(A));
+    return isRuntimeTensor(dense) ? denseToSparse(dense) : dense;
+  }
+  if (isRuntimeComplexNumber(A)) {
+    const { re, im } = A;
+    if (re === 0 && im === 0)
+      throw new RuntimeError("inv: argument is singular");
+    // Smith's algorithm for 1/(re + im*i) to avoid spurious over/underflow.
+    if (Math.abs(re) >= Math.abs(im)) {
+      const r = im / re;
+      const d = re + im * r;
+      return RTV.complex(1 / d, -r / d);
+    }
+    const r = re / im;
+    const d = im + re * r;
+    return RTV.complex(r / d, -1 / d);
+  }
+  if (isRuntimeNumber(A)) {
+    if (A === 0) throw new RuntimeError("inv: argument is singular");
+    return RTV.num(1 / A);
+  }
+  const T = denseFloatMatrixArg(A, invTypeError);
+  const [m, n] = tensorSize2D(T);
+  if (m !== n || T.shape.length > 2) throw squareError();
+  const bridge = getLapackBridge();
+  if (T.imag !== undefined) {
+    const result = bridge.invComplex(toF64(T.data), toF64(T.imag), n);
+    return RTV.tensor(result.re, [n, n], result.im);
+  }
+  return RTV.tensor(bridge.inv(toF64(T.data), n), [n, n]);
+}
 
 // ── expm ───────────────────────────────────────────────────────────────────
 
-defineBuiltin({
+builtin({
   name: "expm",
-  cases: [
-    {
-      match: (argTypes, nargout) => {
-        if (argTypes.length !== 1 || nargout > 1) return null;
-        if (!isNumericJitType(argTypes[0])) return null;
-        const a = argTypes[0];
-        if (a.kind === "number" || a.kind === "boolean") return [NUM];
-        if (a.kind === "complex_or_number") return [COMPLEX_OR_NUM];
-        if (a.kind === "tensor")
-          return [{ kind: "tensor", isComplex: a.isComplex }];
-        return null;
-      },
-      apply: args => expmApply(args),
-    },
-  ],
+  nargin: 1,
+  mfile: true,
+  apply: args => expmApply(args[0]),
 });
 
 /**
@@ -1047,19 +940,24 @@ defineBuiltin({
  * environment — unlike the textbook V*diag(exp(λ))/V form, which would
  * need a complex eigendecomposition (Node + native LAPACK only).
  */
-function expmApply(args: RuntimeValue[]): RuntimeValue {
-  if (args.length !== 1) throw new RuntimeError("expm requires 1 argument");
-  const A = args[0];
+function expmApply(v: RuntimeValue): RuntimeValue {
+  const a = boolToNumber(v);
   // Scalar fast paths: expm of a scalar is just exp of that scalar.
-  if (isRuntimeNumber(A)) return RTV.num(Math.exp(A));
-  if (isRuntimeComplexNumber(A)) {
-    const ex = Math.exp(A.re);
-    return RTV.complex(ex * Math.cos(A.im), ex * Math.sin(A.im));
+  if (isRuntimeNumber(a)) return RTV.num(Math.exp(a));
+  if (isRuntimeComplexNumber(a)) {
+    const ex = Math.exp(a.re);
+    return RTV.complex(ex * Math.cos(a.im), ex * Math.sin(a.im));
   }
-  if (!isRuntimeTensor(A))
-    throw new RuntimeError("expm: argument must be a numeric matrix");
+  const A = denseFloatMatrixArg(
+    a,
+    errorFn("MATLAB:expm:inputType", "Input must be single or double matrix.")
+  );
   const [m, n] = tensorSize2D(A);
-  if (m !== n) throw new RuntimeError("expm: input must be a square matrix");
+  if (m !== n || A.shape.length > 2)
+    throw builtinError(
+      "MATLAB:expm:inputMustBeSquare",
+      "Input must be square."
+    );
   if (n === 0) return A; // expm([]) = []
   if (n === 1) {
     const ex = Math.exp(A.data[0]);
@@ -1126,48 +1024,65 @@ function identityTensor(n: number): RuntimeValue {
 
 // ── svd ──────────────────────────────────────────────────────────────────
 
-registerIBuiltin({
+builtin({
   name: "svd",
-  resolve: (argTypes, nargout) => {
-    if (
-      nargout < 0 ||
-      nargout > 3 ||
-      argTypes.length < 1 ||
-      argTypes.length > 2
-    )
-      return null;
-    if (!isNumericJitType(argTypes[0])) return null;
-    const c = tensorType();
-    if (nargout <= 1)
-      return { outputTypes: [c], apply: (args, n) => svdApply(args, n) };
-    return { outputTypes: [c, c, c], apply: (args, n) => svdApply(args, n) };
+  nargin: [1, 3],
+  nargout: 3,
+  apply: (args, nargout) => {
+    let econ = false;
+    let form: "vector" | "matrix" | undefined;
+    const optError = errorFn(
+      "MATLAB:svd:invalidOption",
+      "Invalid option. Option must be: 'econ', 'matrix', or 'vector'."
+    );
+    for (let i = 1; i < args.length; i++) {
+      const o = args[i];
+      if (isText(o)) {
+        const s = parseStringArgLower(o);
+        if (s === "econ") econ = true;
+        else if (s === "vector" || s === "matrix") form = s;
+        else throw optError();
+      } else if (i === 1 && isRealZero(o)) econ = true;
+      else throw optError();
+    }
+    return svdApply(args[0], nargout, econ, form);
   },
 });
 
+/** svd(A): the singular values (a column vector by default for one output,
+ *  a diagonal matrix for three), or [U, S, V]. */
 function svdApply(
-  args: RuntimeValue[],
-  nargout: number
+  v: RuntimeValue,
+  nargout: number,
+  econ = false,
+  form?: "vector" | "matrix"
 ): RuntimeValue | RuntimeValue[] {
-  if (args.length < 1)
-    throw new RuntimeError("svd requires at least 1 argument");
-  const A = args[0];
-  if (isRuntimeNumber(A)) {
-    const val = Math.abs(A);
-    if (nargout <= 1) return RTV.tensor(allocFloat64Array([val]), [1, 1]);
-    return [
-      RTV.tensor(allocFloat64Array([A >= 0 ? 1 : -1]), [1, 1]),
-      RTV.tensor(allocFloat64Array([val]), [1, 1]),
-      RTV.tensor(allocFloat64Array([1]), [1, 1]),
-    ];
+  const a = boolToNumber(v);
+  const outForm = form ?? (nargout <= 1 ? "vector" : "matrix");
+  if (isRuntimeNumber(a)) {
+    const val = Math.abs(a);
+    const S = RTV.tensor(allocFloat64Array([val]), [1, 1]);
+    if (nargout <= 1) return S;
+    return outputs(
+      [
+        RTV.tensor(allocFloat64Array([a >= 0 ? 1 : -1]), [1, 1]),
+        S,
+        RTV.tensor(allocFloat64Array([1]), [1, 1]),
+      ],
+      nargout
+    );
   }
-  if (!isRuntimeTensor(A))
-    throw new RuntimeError("svd: argument must be numeric");
-  const econ = parseEconArgRuntime(args[1]);
+  const A = denseFloatMatrixArg(a, svdTypeError, svdSparseError);
   const [m, n] = tensorSize2D(A);
   const k = Math.min(m, n);
   const bridge = getLapackBridge();
   const uCols = econ ? k : m;
   const vCols = econ ? k : n;
+  const wantVectors = nargout >= 2;
+  const Sout = (S: Float64Array) =>
+    outForm === "vector"
+      ? RTV.tensor(S, [k, 1])
+      : buildDiagMatrix(S, undefined, econ ? k : [m, n]);
   if (A.imag) {
     const result = bridge.svdComplex(
       toF64(A.data),
@@ -1175,22 +1090,28 @@ function svdApply(
       m,
       n,
       econ,
-      nargout === 3
+      wantVectors
     );
-    if (nargout <= 1) return RTV.tensor(result.S, [k, 1]);
-    return [
-      RTV.tensor(result.URe!, [m, uCols], result.UIm!),
-      buildDiagMatrix(result.S, undefined, econ ? k : [m, n]),
-      RTV.tensor(result.VRe!, [n, vCols], result.VIm!),
-    ];
+    if (nargout <= 1) return Sout(result.S);
+    return outputs(
+      [
+        RTV.tensor(result.URe!, [m, uCols], result.UIm!),
+        Sout(result.S),
+        RTV.tensor(result.VRe!, [n, vCols], result.VIm!),
+      ],
+      nargout
+    );
   }
-  const result = bridge.svd(toF64(A.data), m, n, econ, nargout === 3);
-  if (nargout <= 1) return RTV.tensor(result.S, [k, 1]);
-  return [
-    RTV.tensor(result.U!, [m, uCols]),
-    buildDiagMatrix(result.S, undefined, econ ? k : [m, n]),
-    RTV.tensor(result.V!, [n, vCols]),
-  ];
+  const result = bridge.svd(toF64(A.data), m, n, econ, wantVectors);
+  if (nargout <= 1) return Sout(result.S);
+  return outputs(
+    [
+      RTV.tensor(result.U!, [m, uCols]),
+      Sout(result.S),
+      RTV.tensor(result.V!, [n, vCols]),
+    ],
+    nargout
+  );
 }
 
 // ── null ───────────────────────────────────────────────────────────────────
@@ -1198,33 +1119,30 @@ function svdApply(
 /** null(A): orthonormal basis (columns) for the null space of A, via SVD.
  *  null(A, tol) overrides the singular-value tolerance. */
 function nullApply(args: RuntimeValue[]): RuntimeValue {
-  let A = args[0];
-  if (isRuntimeNumber(A) || isRuntimeComplexNumber(A)) {
-    // Treat a scalar as a 1×1 matrix.
-    A = isRuntimeNumber(A)
-      ? RTV.tensor(allocFloat64Array([A as number]), [1, 1])
-      : RTV.tensor(
-          allocFloat64Array([(A as { re: number }).re]),
-          [1, 1],
-          allocFloat64Array([(A as { im: number }).im])
-        );
-  }
-  if (!isRuntimeTensor(A))
-    throw new RuntimeError("null: argument must be a numeric matrix");
+  const A = denseFloatMatrixArg(args[0], svdTypeError, svdSparseError);
   const [m, n] = tensorSize2D(A);
+  let tolArg: number | undefined;
+  if (args.length > 1) {
+    const err = errorFn(
+      "MATLAB:null:invalidSecondArgument",
+      'Second input must be the option "rational" or a real numeric scalar tolerance.'
+    );
+    if (isText(args[1])) {
+      if (parseStringArgLower(args[1]) !== "rational") throw err();
+      throw new RuntimeError("null: the 'rational' option is not supported");
+    }
+    tolArg = realScalarOr(args[1], err);
+  }
 
   // Full SVD: V is n×n; the trailing columns span the null space.
-  const [, Sdiag, V] = svdApply([A], 3) as RuntimeTensor[];
+  const [, Sdiag, V] = svdApply(A, 3) as RuntimeTensor[];
   const k = Math.min(m, n);
   const s: number[] = [];
   for (let i = 0; i < k; i++) s.push(Sdiag.data[colMajorIndex(i, i, m)]);
   const maxS = s.length > 0 ? Math.max(...s) : 0;
 
   // Tolerance: explicit second arg, else max(m,n)*eps(max singular value).
-  const tol =
-    args.length > 1 && args[1] !== undefined
-      ? toNumber(args[1])
-      : Math.max(m, n) * epsOf(maxS);
+  const tol = tolArg ?? Math.max(m, n) * epsOf(maxS);
   let r = 0;
   for (const sv of s) if (sv > tol) r++;
 
@@ -1242,24 +1160,22 @@ function nullApply(args: RuntimeValue[]): RuntimeValue {
   return RTV.tensor(out, [n, cols], outImag);
 }
 
-registerIBuiltin({
+builtin({
   name: "null",
-  resolve: (argTypes, nargout) => {
-    if (nargout > 1 || argTypes.length < 1 || argTypes.length > 2) return null;
-    if (!isNumericJitType(argTypes[0])) return null;
-    const isComplex = argTypes[0].kind === "tensor" && argTypes[0].isComplex;
-    return {
-      outputTypes: [tensorType(isComplex || undefined)],
-      apply: args => nullApply(args),
-    };
-  },
+  nargin: [1, 2],
+  mfile: true,
+  apply: args => nullApply(args),
 });
 
 // ── bandwidth ───────────────────────────────────────────────────────────────
 
 /** Lower/upper bandwidth of a matrix: the max distance below/above the
  *  diagonal at which a nonzero entry appears. */
-function computeBandwidth(A: RuntimeValue): [number, number] {
+function computeBandwidth(
+  v: RuntimeValue,
+  err: () => RuntimeError
+): [number, number] {
+  const A = boolToNumber(v);
   let lower = 0;
   let upper = 0;
   const note = (i: number, j: number) => {
@@ -1287,14 +1203,19 @@ function computeBandwidth(A: RuntimeValue): [number, number] {
     }
     return [lower, upper];
   }
-  throw new RuntimeError("bandwidth: first argument must be a numeric matrix");
+  throw err();
 }
+
+const bandwidthTypeError = errorFn(
+  "MATLAB:bandwidth:inputType",
+  "Invalid data type. Arguments must be double, single or logical matrices."
+);
 
 function bandwidthApply(
   args: RuntimeValue[],
   nargout: number
 ): RuntimeValue | RuntimeValue[] {
-  const [lower, upper] = computeBandwidth(args[0]);
+  const [lower, upper] = computeBandwidth(args[0], bandwidthTypeError);
   if (args.length >= 2 && args[1] !== undefined) {
     const type = parseStringArgLower(args[1]);
     if (type === "lower") return RTV.num(lower);
@@ -1306,21 +1227,19 @@ function bandwidthApply(
   return RTV.num(lower);
 }
 
-registerIBuiltin({
+builtin({
   name: "bandwidth",
-  resolve: (argTypes, nargout) => {
-    if (nargout > 2 || argTypes.length < 1 || argTypes.length > 2) return null;
-    if (!isNumericJitType(argTypes[0])) return null;
-    const outs = nargout >= 2 ? [NUM, NUM] : [NUM];
-    return { outputTypes: outs, apply: (args, n) => bandwidthApply(args, n) };
-  },
+  nargin: [1, 2],
+  nargout: 2,
+  apply: (args, nargout) => bandwidthApply(args, nargout),
 });
 
 // ── istriu / istril / isbanded ──────────────────────────────────────────────
 
 /** True when every nonzero lies on or above (upper) / below (lower) the
  *  diagonal. Numeric check: explicitly stored zeros do not count. */
-function isTriangularValue(A: RuntimeValue, upper: boolean): boolean {
+function isTriangularValue(v: RuntimeValue, upper: boolean): boolean {
+  const A = boolToNumber(v);
   if (isRuntimeNumber(A) || isRuntimeComplexNumber(A)) return true;
   if (isRuntimeSparseMatrix(A))
     return upper ? sparseIsUpper(A) : sparseIsLower(A);
@@ -1335,113 +1254,114 @@ function isTriangularValue(A: RuntimeValue, upper: boolean): boolean {
       }
     return true;
   }
-  throw new RuntimeError("istriu: argument must be a numeric matrix");
+  throw floatOrLogicalError();
 }
 
 for (const [name, upper] of [
   ["istriu", true],
   ["istril", false],
 ] as const) {
-  registerIBuiltin({
+  builtin({
     name,
     help: {
       signatures: [`tf = ${name}(A)`],
       description: `True if A is ${upper ? "upper" : "lower"} triangular (all entries ${upper ? "below" : "above"} the main diagonal are zero). Works for dense and sparse matrices.`,
     },
-    resolve: (argTypes, nargout) => {
-      if (nargout > 1 || argTypes.length !== 1) return null;
-      if (!isNumericJitType(argTypes[0])) return null;
-      return {
-        outputTypes: [{ kind: "boolean" }],
-        apply: args => RTV.logical(isTriangularValue(args[0], upper)),
-      };
-    },
+    nargin: 1,
+    apply: args => RTV.logical(isTriangularValue(args[0], upper)),
   });
 }
 
-registerIBuiltin({
+builtin({
   name: "isbanded",
   help: {
     signatures: ["tf = isbanded(A, lower, upper)"],
     description:
       "True if A has lower bandwidth at most `lower` and upper bandwidth at most `upper`. Works for dense and sparse matrices.",
   },
-  resolve: (argTypes, nargout) => {
-    if (nargout > 1 || argTypes.length !== 3) return null;
-    if (!isNumericJitType(argTypes[0])) return null;
-    return {
-      outputTypes: [{ kind: "boolean" }],
-      apply: args => {
-        const lo = toNumber(args[1]);
-        const up = toNumber(args[2]);
-        if (lo < 0 || up < 0 || !Number.isInteger(lo) || !Number.isInteger(up))
-          throw new RuntimeError(
-            "isbanded: bandwidths must be nonnegative integers"
-          );
-        const [l, u] = computeBandwidth(args[0]);
-        return RTV.logical(l <= lo && u <= up);
-      },
+  nargin: 3,
+  apply: args => {
+    const typeError = errorFn(
+      "MATLAB:isbanded:inputType",
+      "Inputs must be double, single, or logical."
+    );
+    const boundError = errorFn(
+      "MATLAB:isbanded:nonNegIntScalar",
+      "Second and third inputs must be nonnegative integer scalars."
+    );
+    const bound = (v: RuntimeValue) => {
+      if (isRuntimeChar(v) || isRuntimeString(v)) throw typeError();
+      const b = realScalarOr(v, boundError);
+      if (!(Number.isInteger(b) && b >= 0)) throw boundError();
+      return b;
     };
+    const lo = bound(args[1]);
+    const up = bound(args[2]);
+    const [l, u] = computeBandwidth(args[0], typeError);
+    return RTV.logical(l <= lo && u <= up);
   },
 });
 
 // ── qr ──────────────────────────────────────────────────────────────────
 
-registerIBuiltin({
+builtin({
   name: "qr",
-  resolve: (argTypes, nargout) => {
-    if (
-      nargout < 0 ||
-      nargout > 3 ||
-      argTypes.length < 1 ||
-      argTypes.length > 2
-    )
-      return null;
-    if (!isNumericJitType(argTypes[0])) return null;
-    const isComplex = argTypes[0].kind === "tensor" && argTypes[0].isComplex;
-    const t = tensorType(isComplex || undefined);
-    if (nargout <= 1)
-      return { outputTypes: [t], apply: (args, n) => qrApply(args, n) };
-    if (nargout === 3)
-      return {
-        outputTypes: [t, t, t],
-        apply: (args, n) => qrApply(args, n),
-      };
-    return { outputTypes: [t, t], apply: (args, n) => qrApply(args, n) };
+  nargin: [1, 3],
+  nargout: 3,
+  apply: (args, nargout) => {
+    // Options: 0 (economy size, permutation vector), "econ" (economy
+    // size), "vector" / "matrix" (permutation form).
+    let econ = false;
+    let permVector = false;
+    for (let i = 1; i < args.length; i++) {
+      const o = args[i];
+      if (isText(o)) {
+        const s = parseStringArgLower(o);
+        if (s === "econ") econ = true;
+        else if (s === "vector") permVector = true;
+        else if (s === "matrix") permVector = false;
+        else
+          throw builtinError(
+            "MATLAB:qr:unknownOption",
+            "Option must be 'econ', 'matrix', or 'vector'."
+          );
+      } else if (i === 1 && isRealZero(o)) {
+        econ = true;
+        permVector = true;
+      } else if (isRuntimeSparseMatrix(args[0])) {
+        throw new RuntimeError("qr: sparse input is not supported");
+      } else {
+        throw builtinError(
+          "MATLAB:qr:notSupportFill",
+          "Right-hand side matrix is only supported if the first input matrix is sparse."
+        );
+      }
+    }
+    if (isRuntimeSparseMatrix(args[0]))
+      throw new RuntimeError("qr: sparse input is not supported");
+    const A = denseFloatMatrixArg(
+      args[0],
+      errorFn(
+        "MATLAB:qr:inputType",
+        "Invalid data type. First argument must be double or single."
+      )
+    );
+    return qrApply(A, nargout, econ, permVector);
   },
 });
 
 function qrApply(
-  args: RuntimeValue[],
-  nargout: number
+  A: RuntimeTensor,
+  nargout: number,
+  econ: boolean,
+  permVector: boolean
 ): RuntimeValue | RuntimeValue[] {
-  if (args.length < 1)
-    throw new RuntimeError("qr requires at least 1 argument");
-  const A = args[0];
-  if (isRuntimeNumber(A)) {
-    const val = A;
-    const s = val >= 0 ? 1 : -1;
-    if (nargout <= 1) return RTV.tensor(allocFloat64Array([s * val]), [1, 1]);
-    if (nargout === 3)
-      return [
-        RTV.tensor(allocFloat64Array([s]), [1, 1]),
-        RTV.tensor(allocFloat64Array([s * val]), [1, 1]),
-        RTV.tensor(allocFloat64Array([1]), [1, 1]),
-      ];
-    return [
-      RTV.tensor(allocFloat64Array([s]), [1, 1]),
-      RTV.tensor(allocFloat64Array([s * val]), [1, 1]),
-    ];
-  }
-  if (!isRuntimeTensor(A))
-    throw new RuntimeError("qr: argument must be numeric");
-  const econ = parseEconArgRuntime(args[1]);
   const [m, n] = tensorSize2D(A);
   const k = Math.min(m, n);
 
   // 3-output: column-pivoted QR → [Q, R, E]
   if (nargout === 3) {
-    return qrPivotApply(A, m, n, k, econ);
+    return qrPivotApply(A, m, n, k, econ, permVector);
   }
 
   const bridge = getLapackBridge();
@@ -1472,11 +1392,11 @@ function qrApply(
 function permResult(
   jpvt: Float64Array | Int32Array,
   n: number,
-  econ: boolean
+  asVector: boolean
 ): RuntimeValue {
   const perm = allocFloat64Array(n);
   for (let i = 0; i < n; i++) perm[i] = jpvt[i];
-  if (econ) return RTV.tensor(perm, [1, n]);
+  if (asVector) return RTV.tensor(perm, [1, n]);
   // Non-economy: return n×n permutation matrix
   const mat = allocFloat64Array(n * n);
   for (let j = 0; j < n; j++) mat[colMajorIndex(jpvt[j] - 1, j, n)] = 1;
@@ -1488,7 +1408,8 @@ function qrPivotApply(
   m: number,
   n: number,
   k: number,
-  econ: boolean
+  econ: boolean,
+  permVector: boolean
 ): RuntimeValue[] {
   const bridge = getLapackBridge();
   const rRows = econ ? k : m;
@@ -1504,51 +1425,39 @@ function qrPivotApply(
     return [
       RTV.tensor(result.QRe, [m, qCols], result.QIm),
       RTV.tensor(result.RRe, [rRows, n], result.RIm),
-      permResult(result.jpvt, n, econ),
+      permResult(result.jpvt, n, permVector),
     ];
   }
   const result = bridge.qrPivot(toF64(A.data), m, n, econ);
   return [
     RTV.tensor(result.Q, [m, qCols]),
     RTV.tensor(result.R, [rRows, n]),
-    permResult(result.jpvt, n, econ),
+    permResult(result.jpvt, n, permVector),
   ];
 }
 
 // ── qrupdate ────────────────────────────────────────────────────────────
 
-registerIBuiltin({
+builtin({
   name: "qrupdate",
   help: {
     signatures: ["[Q1, R1] = qrupdate(Q, R, u, v)"],
     description:
       "Rank-1 update of a full QR factorization: if A = Q*R (Q m-by-m), returns Q1, R1 with Q1*R1 = A + u*v'. Uses Givens rotations, O(m^2 + m*n).",
   },
-  resolve: (argTypes, nargout) => {
-    if (nargout > 2 || argTypes.length !== 4) return null;
-    if (!argTypes.every(isNumericJitType)) return null;
-    const isComplex = argTypes.some(
-      t =>
-        t.kind === "complex_or_number" || (t.kind === "tensor" && t.isComplex)
-    );
-    const t = tensorType(isComplex || undefined);
-    return {
-      outputTypes: nargout === 2 ? [t, t] : [t],
-      apply: (args, n) => {
-        const [Q1, R1] = qrupdateApply(args);
-        return n === 2 ? [Q1, R1] : Q1;
-      },
-    };
-  },
+  nargin: 4,
+  nargout: 2,
+  apply: (args, nargout) => outputs(qrupdateApply(args), nargout),
 });
 
 /** Dense split re/im copy of a numeric argument (im null if real). */
-function qrupdateArg(v: RuntimeValue): {
+function qrupdateArg(arg: RuntimeValue): {
   re: Float64Array;
   im: Float64Array | null;
   rows: number;
   cols: number;
 } {
+  const v = boolToNumber(arg);
   if (isRuntimeNumber(v))
     return { re: allocFloat64Array([v]), im: null, rows: 1, cols: 1 };
   if (isRuntimeComplexNumber(v))
@@ -1703,22 +1612,16 @@ function qrupdateApply(args: RuntimeValue[]): [RuntimeValue, RuntimeValue] {
 
 // ── lu ──────────────────────────────────────────────────────────────────
 
-registerIBuiltin({
+const invalidPermFlagError = errorFn(
+  "MATLAB:factorFlags:invalidPermFlag",
+  "Option must be 'matrix' or 'vector'."
+);
+
+builtin({
   name: "lu",
-  resolve: (argTypes, nargout) => {
-    if (nargout < 0 || nargout > 4) return null;
-    if (argTypes.length < 1 || argTypes.length > 3) return null;
-    if (!isNumericJitType(argTypes[0])) return null;
-    const sparse = argTypes[0].kind === "sparse_matrix";
-    if (!sparse && (nargout > 3 || argTypes.length > 2)) return null;
-    const t = sparse ? SPARSE_TYPE : tensorType();
-    const wrapped = (args: RuntimeValue[], n: number) =>
-      withScratch(() => luApply(args, n));
-    if (nargout <= 1) return { outputTypes: [t], apply: wrapped };
-    if (nargout === 2) return { outputTypes: [t, t], apply: wrapped };
-    if (nargout === 3) return { outputTypes: [t, t, t], apply: wrapped };
-    return { outputTypes: [t, t, t, t], apply: wrapped };
-  },
+  nargin: [1, 3],
+  nargout: 5,
+  apply: (args, nargout) => withScratch(() => luApply(args, nargout)),
 });
 
 /** Sparse LU: [L,U,P] = lu(S), [L,U,P,Q] = lu(S), with optional pivot
@@ -1736,9 +1639,8 @@ function sparseLuApply(
         throw new RuntimeError("lu: pivot threshold must be in [0, 1]");
       tol = opt;
     } else {
-      const form = parseLuOutputForm(opt);
-      if (form === null)
-        throw new RuntimeError("lu: outputForm must be 'matrix' or 'vector'");
+      const form = isText(opt) ? parseLuOutputForm(opt) : null;
+      if (form === null) throw invalidPermFlagError();
       outputForm = form;
     }
   }
@@ -1769,36 +1671,69 @@ function luApply(
   args: RuntimeValue[],
   nargout: number
 ): RuntimeValue | RuntimeValue[] {
-  if (args.length < 1)
-    throw new RuntimeError("lu requires at least 1 argument");
-  if (isRuntimeSparseMatrix(args[0]) && !args[0].pi)
-    return sparseLuApply(args[0], args, nargout);
-  if (isRuntimeSparseMatrix(args[0])) {
-    // Complex sparse: dense factorization, sparse factors.
-    const dense = luApply([sparseToDense(args[0]), ...args.slice(1)], nargout);
+  const S = args[0];
+  if (isRuntimeSparseMatrix(S)) {
+    if (nargout >= 5)
+      throw new RuntimeError(
+        "lu: the row-scaling output [L,U,P,Q,R] = lu(S) is not supported"
+      );
+    if (!S.pi) return sparseLuApply(S, args, nargout);
+    if (nargout >= 4)
+      throw new RuntimeError(
+        "lu: [L,U,P,Q] = lu(S) is not supported for complex sparse matrices"
+      );
+    // Complex sparse: dense factorization, sparse factors. Pivot
+    // thresholds only apply to the sparse factorization.
+    const dense = luDense(
+      sparseToDense(S),
+      luDenseForm(args.slice(1).filter(o => !isRuntimeNumber(o))),
+      nargout
+    );
     const toSp = (v: RuntimeValue) =>
       isRuntimeTensor(v) ? denseToSparse(v) : v;
     return Array.isArray(dense) ? dense.map(toSp) : toSp(dense);
   }
-  const outputForm = args.length >= 2 ? parseLuOutputForm(args[1]) : "matrix";
-  if (outputForm === null)
-    throw new RuntimeError("lu: outputForm must be 'matrix' or 'vector'");
-  const A = args[0];
-  if (isRuntimeNumber(A)) {
-    const val = A as number;
-    if (nargout <= 2) {
-      const L = RTV.tensor(allocFloat64Array([1]), [1, 1]);
-      const U = RTV.tensor(allocFloat64Array([val]), [1, 1]);
-      if (nargout <= 1) return L;
-      return [L, U];
-    }
+  if (nargout > 3)
+    throw builtinError(
+      "MATLAB:lu:DenseThreeOutputOnly",
+      "Fourth output only available for sparse input matrices."
+    );
+  return luDense(args[0], luDenseForm(args.slice(1)), nargout);
+}
+
+/** The output form of a dense lu: options must be 'matrix' or 'vector'. */
+function luDenseForm(opts: RuntimeValue[]): "matrix" | "vector" {
+  let form: "matrix" | "vector" = "matrix";
+  for (const opt of opts) {
+    const f = isText(opt) ? parseLuOutputForm(opt) : null;
+    if (f === null) throw invalidPermFlagError();
+    form = f;
+  }
+  return form;
+}
+
+function luDense(
+  v: RuntimeValue,
+  outputForm: "matrix" | "vector",
+  nargout: number
+): RuntimeValue | RuntimeValue[] {
+  const a = boolToNumber(v);
+  if (isRuntimeNumber(a)) {
     const L = RTV.tensor(allocFloat64Array([1]), [1, 1]);
-    const U = RTV.tensor(allocFloat64Array([val]), [1, 1]);
+    const U = RTV.tensor(allocFloat64Array([a]), [1, 1]);
+    // Y = L + U - I = U for a scalar.
+    if (nargout <= 1) return U;
+    if (nargout === 2) return [L, U];
     if (outputForm === "vector") return [L, U, RTV.num(1)];
     return [L, U, RTV.tensor(allocFloat64Array([1]), [1, 1])];
   }
-  if (!isRuntimeTensor(A))
-    throw new RuntimeError("lu: argument must be numeric");
+  const A = denseFloatMatrixArg(
+    a,
+    errorFn(
+      "MATLAB:lu:inputType",
+      "Invalid data type. First argument must be double or single."
+    )
+  );
   const [m, n] = tensorSize2D(A);
   const k = Math.min(m, n);
   const isComplex = A.imag !== undefined;
@@ -1897,38 +1832,28 @@ function ipivToPermVector(ipiv: Int32Array, m: number): Int32Array {
 
 // ── eig ──────────────────────────────────────────────────────────────────
 
-registerIBuiltin({
+const eigTypeError = errorFn(
+  "MATLAB:eig:inputType",
+  "Invalid data type. Input matrix must be double or single."
+);
+
+builtin({
   name: "eig",
-  resolve: (argTypes, nargout) => {
-    if (
-      nargout < 0 ||
-      nargout > 3 ||
-      argTypes.length < 1 ||
-      argTypes.length > 4
-    )
-      return null;
-    if (!isNumericJitType(argTypes[0])) return null;
-    const c = tensorType(true);
-    if (nargout <= 1)
-      return { outputTypes: [c], apply: (args, n) => eigApply(args, n) };
-    if (nargout === 2)
-      return { outputTypes: [c, c], apply: (args, n) => eigApply(args, n) };
-    return { outputTypes: [c, c, c], apply: (args, n) => eigApply(args, n) };
-  },
+  nargin: [1, 4],
+  nargout: 3,
+  apply: (args, nargout) => eigApply(args, nargout),
 });
 
 function eigApply(
   args: RuntimeValue[],
   nargout: number
 ): RuntimeValue | RuntimeValue[] {
-  if (args.length < 1)
-    throw new RuntimeError("eig requires at least 1 argument");
-  const A = args[0];
+  const a = boolToNumber(args[0]);
   const { B, balance, outputForm, algorithm } = parseEigOptionsRuntime(args);
   if (B !== undefined)
-    return eigGeneralizedApply(A, B, nargout, outputForm, algorithm);
-  if (isRuntimeNumber(A)) {
-    const val = A;
+    return eigGeneralizedApply(a, B, nargout, outputForm, algorithm);
+  if (isRuntimeNumber(a)) {
+    const val = a;
     if (nargout <= 1) return RTV.num(val);
     const V = RTV.tensor(allocFloat64Array([1]), [1, 1]);
     if (nargout === 2) {
@@ -1941,10 +1866,18 @@ function eigApply(
         : RTV.tensor(allocFloat64Array([val]), [1, 1]);
     return [V, D, RTV.tensor(allocFloat64Array([1]), [1, 1])];
   }
-  if (!isRuntimeTensor(A))
-    throw new RuntimeError("eig: argument must be numeric");
+  if (isRuntimeSparseMatrix(a) && nargout >= 2)
+    throw builtinError(
+      "MATLAB:eig:useEigsForSparseStandardVector",
+      "Too many output arguments. Only one output argument is supported when the input matrix is sparse. Use eigs to compute a subset of eigenvectors and eigenvalues of a sparse matrix."
+    );
+  const A = denseFloatMatrixArg(a, eigTypeError);
   const [m, n] = tensorSize2D(A);
-  if (m !== n) throw new RuntimeError("eig: input must be a square matrix");
+  if (m !== n || A.shape.length > 2)
+    throw builtinError(
+      "MATLAB:eig:inputMustBeSquareStandard",
+      "Input matrix must be square."
+    );
   const computeVL = nargout >= 3,
     computeVR = nargout >= 2;
   // Symmetric (Hermitian) input goes to the symmetric solver, which — unlike
@@ -2116,20 +2049,7 @@ function toSplitSquare(
   v: RuntimeValue,
   name: string
 ): { M: SplitMatrix; n: number } {
-  if (isRuntimeNumber(v))
-    return { M: { re: allocFloat64Array([v]), im: null }, n: 1 };
-  if (isRuntimeComplexNumber(v))
-    return {
-      M: { re: allocFloat64Array([v.re]), im: allocFloat64Array([v.im]) },
-      n: 1,
-    };
-  let t = v;
-  if (isRuntimeSparseMatrix(t))
-    t = sparseToDense(
-      t as import("../../runtime/types.js").RuntimeSparseMatrix
-    );
-  if (!isRuntimeTensor(t))
-    throw new RuntimeError(`eig: ${name} must be a numeric matrix`);
+  const t = denseFloatMatrixArg(v, eigTypeError);
   const [rows, cols] = tensorSize2D(t);
   if (rows !== cols)
     throw new RuntimeError(`eig: ${name} must be a square matrix`);
@@ -2474,24 +2394,16 @@ function eigGeneralizedQz(
 
 // ── chol ────────────────────────────────────────────────────────────────
 
-registerIBuiltin({
+const posdefError = errorFn(
+  "MATLAB:posdef",
+  "Matrix must be positive definite."
+);
+
+builtin({
   name: "chol",
-  resolve: (argTypes, nargout) => {
-    if (
-      nargout < 0 ||
-      nargout > 3 ||
-      argTypes.length < 1 ||
-      argTypes.length > 3
-    )
-      return null;
-    if (!isNumericJitType(argTypes[0])) return null;
-    const t = argTypes[0].kind === "sparse_matrix" ? SPARSE_TYPE : tensorType();
-    const wrapped = (args: RuntimeValue[], n: number) =>
-      withScratch(() => cholApply(args, n));
-    if (nargout <= 1) return { outputTypes: [t], apply: wrapped };
-    if (nargout === 2) return { outputTypes: [t, NUM], apply: wrapped };
-    return { outputTypes: [t, NUM, t], apply: wrapped };
-  },
+  nargin: [1, 3],
+  nargout: 3,
+  apply: (args, nargout) => withScratch(() => cholApply(args, nargout)),
 });
 
 /** Sparse Cholesky. Reads the upper triangle only (no symmetry check, as in
@@ -2502,7 +2414,7 @@ function sparseCholApply(
   outputForm: "matrix" | "vector",
   nargout: number
 ): RuntimeValue | RuntimeValue[] {
-  if (S.m !== S.n) throw new RuntimeError("chol: Matrix must be square.");
+  if (S.m !== S.n) throw squareError();
   const n = S.n;
   const perm = nargout >= 3 ? minimumDegreeOrdering(S) : identityPerm(n);
   const A = nargout >= 3 ? sparsePermute(S, perm, perm) : S;
@@ -2513,8 +2425,7 @@ function sparseCholApply(
       ? permVectorTensor(perm)
       : permutationMatrix(invertPerm(perm));
   if (!res.ok) {
-    if (nargout < 2)
-      throw new RuntimeError("chol: Matrix must be positive definite.");
+    if (nargout < 2) throw posdefError();
     if (nargout >= 3) return [R, RTV.num(res.p), permOut()];
     return [R, RTV.num(res.p)];
   }
@@ -2527,16 +2438,13 @@ function cholApply(
   args: RuntimeValue[],
   nargout: number
 ): RuntimeValue | RuntimeValue[] {
-  if (args.length < 1)
-    throw new RuntimeError("chol requires at least 1 argument");
-  let A = args[0];
-  const inputIsSparse = isRuntimeSparseMatrix(A);
+  const a = boolToNumber(args[0]);
+  const inputIsSparse = isRuntimeSparseMatrix(a);
   if (nargout >= 3 && !inputIsSparse)
-    throw new RuntimeError("Third output only available for sparse matrices.");
-  const sparseInput =
-    isRuntimeSparseMatrix(A) && !A.pi ? (A as RuntimeSparseMatrix) : null;
-  if (inputIsSparse && !sparseInput)
-    A = sparseToDense(A as RuntimeSparseMatrix);
+    throw builtinError(
+      "MATLAB:chol:DenseTwoOutputOnly",
+      "Third output only available for sparse matrices."
+    );
   let triangle: "upper" | "lower" = "upper";
   let outputForm: "matrix" | "vector" = "matrix";
   if (args.length === 2) {
@@ -2555,24 +2463,39 @@ function cholApply(
     outputForm = form as "matrix" | "vector";
   }
   const upper = triangle === "upper";
-  if (sparseInput)
-    return sparseCholApply(sparseInput, upper, outputForm, nargout);
-  if (isRuntimeNumber(A)) {
-    const val = A as number;
+  if (isRuntimeSparseMatrix(a) && !a.pi)
+    return sparseCholApply(a, upper, outputForm, nargout);
+  if (isRuntimeNumber(a)) {
+    const val = a;
     if (val <= 0) {
       if (nargout >= 2)
         return [RTV.tensor(allocFloat64Array([0]), [1, 1]), RTV.num(1)];
-      throw new RuntimeError("chol: Matrix must be positive definite.");
+      throw posdefError();
     }
     const r = Math.sqrt(val);
     if (nargout >= 2)
       return [RTV.tensor(allocFloat64Array([r]), [1, 1]), RTV.num(0)];
     return RTV.tensor(allocFloat64Array([r]), [1, 1]);
   }
-  if (!isRuntimeTensor(A))
-    throw new RuntimeError("chol: argument must be numeric");
+  // Complex sparse input takes the dense path.
+  const A = denseFloatMatrixArg(
+    a,
+    errorFn(
+      "MATLAB:chol:inputType",
+      "Invalid data type. First argument must be a double or single matrix."
+    )
+  );
   const [m, n] = tensorSize2D(A);
-  if (m !== n) throw new RuntimeError("chol: Matrix must be square.");
+  if (m !== n || A.shape.length > 2) throw squareError();
+  // LAPACK reads only the real part of the diagonal; MATLAB requires it to
+  // be real.
+  if (A.imag)
+    for (let i = 0; i < n; i++)
+      if (A.imag[i + i * n] !== 0)
+        throw builtinError(
+          "MATLAB:chol:matrixMustBePosDefWithRealDiag",
+          "Matrix must be positive definite with real diagonal."
+        );
   const isComplex = A.imag !== undefined;
   let R_re: Float64Array, R_im: Float64Array | undefined, info_val: number;
   const bridge = getLapackBridge();
@@ -2668,8 +2591,7 @@ function cholApply(
     }
     return [R, RTV.num(0)];
   }
-  if (info_val > 0)
-    throw new RuntimeError("chol: Matrix must be positive definite.");
+  if (info_val > 0) throw posdefError();
   return RTV.tensor(
     allocFloat64Array(R_re),
     [n, n],
@@ -2679,134 +2601,111 @@ function cholApply(
 
 // ── linsolve ────────────────────────────────────────────────────────────
 
-defineBuiltin({
+builtin({
   name: "linsolve",
-  cases: [
-    {
-      match: (argTypes, nargout) => {
-        if (argTypes.length !== 2 || nargout > 1) return null;
-        if (!isNumericJitType(argTypes[0]) || !isNumericJitType(argTypes[1]))
-          return null;
-        return [tensorType()];
-      },
-      apply: args => {
-        if (args.length < 2)
-          throw new RuntimeError("linsolve requires 2 arguments");
-        const rawA = args[0],
-          rawB = args[1];
-        const A = isRuntimeNumber(rawA)
-          ? RTV.tensor(allocFloat64Array([rawA]), [1, 1])
-          : rawA;
-        const B = isRuntimeNumber(rawB)
-          ? RTV.tensor(allocFloat64Array([rawB]), [1, 1])
-          : rawB;
-        if (!isRuntimeTensor(A) || !isRuntimeTensor(B))
-          throw new RuntimeError(
-            "linsolve: arguments must be numeric matrices"
-          );
-        const [m, n] = tensorSize2D(A);
-        const [Bm, p] = tensorSize2D(B);
-        if (Bm !== m)
-          throw new RuntimeError(
-            "linsolve: A and B must have the same number of rows"
-          );
-        if (A.imag || B.imag) {
-          const ARe = A.data,
-            AIm = A.imag ?? allocFloat64Array(A.data.length);
-          const BRe = B.data,
-            BIm = B.imag ?? allocFloat64Array(B.data.length);
-          const X = linsolveComplexLapack(ARe, AIm, m, n, BRe, BIm, p);
-          return RTV.tensor(X.re, [n, p], X.im);
-        }
-        const X = linsolveLapack(A.data, m, n, B.data, p);
-        return RTV.tensor(X, [n, p]);
-      },
-    },
-  ],
+  nargin: [2, 3],
+  nargout: 2,
+  apply: (args, nargout) => {
+    if (args.length > 2)
+      throw new RuntimeError(
+        "linsolve: the options structure (third argument) is not supported"
+      );
+    if (nargout > 1)
+      throw new RuntimeError(
+        "linsolve: the second output [X, r] = linsolve(...) is not supported"
+      );
+    const typeError = errorFn(
+      "MATLAB:linsolve:inputType",
+      "First and second arguments must be single or double."
+    );
+    const sparseError = errorFn(
+      "MATLAB:linsolve:sparseNotSupported",
+      "Linsolve is not supported for sparse inputs."
+    );
+    const A = denseFloatMatrixArg(args[0], typeError, sparseError);
+    const B = denseFloatMatrixArg(args[1], typeError, sparseError);
+    const [m, n] = tensorSize2D(A);
+    const [Bm, p] = tensorSize2D(B);
+    if (Bm !== m)
+      throw builtinError("MATLAB:dimagree", "Matrix dimensions must agree.");
+    if (A.imag || B.imag) {
+      const ARe = A.data,
+        AIm = A.imag ?? allocFloat64Array(A.data.length);
+      const BRe = B.data,
+        BIm = B.imag ?? allocFloat64Array(B.data.length);
+      const X = linsolveComplexLapack(ARe, AIm, m, n, BRe, BIm, p);
+      return RTV.tensor(X.re, [n, p], X.im);
+    }
+    const X = linsolveLapack(A.data, m, n, B.data, p);
+    return RTV.tensor(X, [n, p]);
+  },
 });
 
 // ── cond ────────────────────────────────────────────────────────────────
 
-defineBuiltin({
+builtin({
   name: "cond",
-  cases: [
-    {
-      match: (argTypes, nargout) => {
-        if (nargout > 1 || argTypes.length < 1 || argTypes.length > 2)
-          return null;
-        if (!isNumericJitType(argTypes[0])) return null;
-        return [NUM];
-      },
-      apply: args => {
-        if (args.length < 1 || args.length > 2)
-          throw new RuntimeError("cond requires 1 or 2 arguments");
-        const A = args[0];
-        if (isRuntimeNumber(A)) return RTV.num(A === 0 ? Infinity : 1);
-        if (isRuntimeComplexNumber(A))
-          return RTV.num(A.re === 0 && A.im === 0 ? Infinity : 1);
-        if (!isRuntimeTensor(A))
-          throw new RuntimeError("cond: argument must be numeric");
-        let p: number | string = 2;
-        if (args.length >= 2) {
-          const pArg = args[1];
-          if (isRuntimeString(pArg) || isRuntimeChar(pArg)) {
-            const pStr = parseStringArgLower(pArg);
-            if (pStr === "fro") p = "fro";
-            else throw new RuntimeError("cond: string argument must be 'fro'");
-          } else p = toNumber(pArg);
-        }
-        if (p === 2) {
-          const svdIb = getIBuiltin("svd")!;
-          const res = svdIb.resolve(args.map(inferJitType), 1);
-          if (!res) throw new RuntimeError("cond: svd resolve failed");
-          const sVec = res.apply([A], 1);
-          if (!isRuntimeTensor(sVec as RuntimeValue))
-            throw new RuntimeError("cond: unexpected svd result");
-          const s = (sVec as RuntimeTensor).data;
-          let sMax = -Infinity,
-            sMin = Infinity;
-          for (let i = 0; i < s.length; i++) {
-            if (s[i] > sMax) sMax = s[i];
-            if (s[i] < sMin) sMin = s[i];
-          }
-          if (sMin === 0) return RTV.num(Infinity);
-          return RTV.num(sMax / sMin);
-        }
-        const [rows, cols] = tensorSize2D(A);
-        if (rows !== cols)
-          throw new RuntimeError(
-            "cond: matrix must be square for non-2 condition number"
-          );
-        const normArg: RuntimeValue =
-          p === "fro" ? RTV.string("fro") : RTV.num(p as number);
-        const normA = toNumber(normApply([A, normArg]));
-        const invIb = getIBuiltin("inv")!;
-        const invRes = invIb.resolve(args.slice(0, 1).map(inferJitType), 1);
-        if (!invRes) throw new RuntimeError("cond: inv resolve failed");
-        const invA = invRes.apply([A], 1) as RuntimeValue;
-        const normInvA = toNumber(normApply([invA, normArg]));
-        return RTV.num(normA * normInvA);
-      },
-    },
-  ],
+  nargin: [1, 2],
+  mfile: true,
+  apply: args => {
+    const v = boolToNumber(args[0]);
+    let p: number | "fro" = 2;
+    if (args.length >= 2) {
+      const pArg = args[1];
+      if (isText(pArg)) {
+        const pStr = parseStringArgLower(pArg);
+        if (pStr === "fro") p = "fro";
+        else if (pStr === "inf") p = Infinity;
+        else throw unknownNormError();
+      } else p = realScalarOr(pArg, unknownNormError);
+    }
+    if (isRuntimeNumber(v)) return RTV.num(v === 0 ? Infinity : 1);
+    if (isRuntimeComplexNumber(v))
+      return RTV.num(v.re === 0 && v.im === 0 ? Infinity : 1);
+    const M = floatMatrixArg(v, svdTypeError);
+    if (isRuntimeSparseMatrix(M)) {
+      // MATLAB estimates the 1-norm condition number of a sparse matrix
+      // (condest); numbl computes it exactly.
+      emitWarning("Using CONDEST instead of COND for sparse matrix.");
+      return condNorm(sparseToDense(M), 1);
+    }
+    if (p === 2) {
+      const s = (svdApply(M, 1) as RuntimeTensor).data;
+      let sMax = -Infinity,
+        sMin = Infinity;
+      for (let i = 0; i < s.length; i++) {
+        if (s[i] > sMax) sMax = s[i];
+        if (s[i] < sMin) sMin = s[i];
+      }
+      if (sMin === 0) return RTV.num(Infinity);
+      return RTV.num(sMax / sMin);
+    }
+    const [rows, cols] = tensorSize2D(M);
+    if (rows !== cols)
+      throw builtinError(
+        "MATLAB:cond:normMismatchSizeA",
+        "A is rectangular.  Use the 2 norm."
+      );
+    return condNorm(M, p);
+  },
 });
+
+/** norm(A, p) * norm(inv(A), p) for a square matrix. */
+function condNorm(A: RuntimeTensor, p: number | "fro"): RuntimeValue {
+  const normArg: RuntimeValue = p === "fro" ? RTV.char("fro") : RTV.num(p);
+  const normA = normApply([A, normArg]) as number;
+  const normInvA = normApply([invValue(A), normArg]) as number;
+  return RTV.num(normA * normInvA);
+}
 
 // ── rcond ───────────────────────────────────────────────────────────────
 
-defineBuiltin({
+builtin({
   name: "rcond",
-  cases: [
-    {
-      match: (argTypes, nargout) => {
-        if (nargout > 1 || argTypes.length !== 1) return null;
-        if (!isNumericJitType(argTypes[0])) return null;
-        return [NUM];
-      },
-      // inv() allocates the full inverse; wrap so that scratch releases on
-      // return (the result is a scalar, so it survives).
-      apply: args => withScratch(() => rcondApply(args)),
-    },
-  ],
+  nargin: 1,
+  // inv() allocates the full inverse; wrap so that scratch releases on
+  // return (the result is a scalar, so it survives).
+  apply: args => withScratch(() => rcondApply(args[0])),
 });
 
 /**
@@ -2816,35 +2715,32 @@ defineBuiltin({
  * rather than Inf. (MATLAB's rcond uses an LU-based estimator; forming the
  * inverse here gives a value that agrees to several significant figures.)
  */
-function rcondApply(args: RuntimeValue[]): RuntimeValue {
-  if (args.length !== 1) throw new RuntimeError("rcond requires 1 argument");
-  const A = args[0];
+function rcondApply(v: RuntimeValue): RuntimeValue {
+  const a = boolToNumber(v);
   // Scalars: well-conditioned (1) unless zero, which is singular (0).
-  if (isRuntimeNumber(A)) return RTV.num(A === 0 ? 0 : 1);
-  if (typeof A === "boolean") return RTV.num(A ? 1 : 0);
-  if (isRuntimeComplexNumber(A))
-    return RTV.num(A.re === 0 && A.im === 0 ? 0 : 1);
-  if (isRuntimeSparseMatrix(A)) return rcondApply([sparseToDense(A)]);
-  if (!isRuntimeTensor(A))
-    throw new RuntimeError("rcond: argument must be numeric");
+  if (isRuntimeNumber(a)) return RTV.num(a === 0 ? 0 : 1);
+  if (isRuntimeComplexNumber(a))
+    return RTV.num(a.re === 0 && a.im === 0 ? 0 : 1);
+  const A = denseFloatMatrixArg(a, mustBeFloatError);
   const [rows, cols] = tensorSize2D(A);
-  if (rows !== cols) throw new RuntimeError("rcond: matrix must be square");
+  if (rows !== cols || A.shape.length > 2)
+    throw builtinError(
+      "MATLAB:rcond:notSquareMatrix",
+      "Input must be a square matrix."
+    );
   if (rows === 0) return RTV.num(Infinity); // rcond([]) = Inf
-  const normA = toNumber(normApply([A, RTV.num(1)]));
+  const normA = normApply([A, RTV.num(1)]) as number;
   if (!(normA > 0)) return RTV.num(0); // zero matrix (or NaN) → singular
   let invA: RuntimeValue;
   try {
-    const invIb = getIBuiltin("inv")!;
-    const invRes = invIb.resolve([inferJitType(A)], 1);
-    if (!invRes) throw new RuntimeError("rcond: inv resolve failed");
-    invA = invRes.apply([A], 1) as RuntimeValue;
+    invA = invValue(A);
   } catch (e) {
     // A singular matrix has rcond 0 (MATLAB does not error here).
     const msg = e instanceof Error ? e.message : String(e);
     if (/singular/i.test(msg)) return RTV.num(0);
     throw e;
   }
-  const normInvA = toNumber(normApply([invA, RTV.num(1)]));
+  const normInvA = normApply([invA, RTV.num(1)]) as number;
   if (!isFinite(normInvA) || normInvA === 0) return RTV.num(0);
   const rc = 1 / (normA * normInvA);
   return RTV.num(isFinite(rc) ? rc : 0);
@@ -2852,48 +2748,39 @@ function rcondApply(args: RuntimeValue[]): RuntimeValue {
 
 // ── rank ────────────────────────────────────────────────────────────────
 
-defineBuiltin({
+builtin({
   name: "rank",
-  cases: [
-    {
-      match: (argTypes, nargout) => {
-        if (nargout > 1 || argTypes.length < 1 || argTypes.length > 2)
-          return null;
-        if (!isNumericJitType(argTypes[0])) return null;
-        return [NUM];
-      },
-      apply: args => {
-        if (args.length < 1 || args.length > 2)
-          throw new RuntimeError("rank requires 1 or 2 arguments");
-        const A = args[0];
-        if (isRuntimeNumber(A)) return RTV.num(A === 0 ? 0 : 1);
-        if (isRuntimeComplexNumber(A))
-          return RTV.num(A.re === 0 && A.im === 0 ? 0 : 1);
-        if (!isRuntimeTensor(A))
-          throw new RuntimeError("rank: argument must be numeric");
-        const [rows, cols] = tensorSize2D(A);
-        const svdIb = getIBuiltin("svd")!;
-        const res = svdIb.resolve([inferJitType(A)], 1);
-        if (!res) throw new RuntimeError("rank: svd resolve failed");
-        const sVec = res.apply([A], 1) as RuntimeValue;
-        if (!isRuntimeTensor(sVec))
-          throw new RuntimeError("rank: unexpected svd result");
-        if (sVec.imag)
-          throw new RuntimeError("rank: singular values must be real");
-        const s = sVec.data;
-        let tol: number;
-        if (args.length >= 2) tol = toNumber(args[1]);
-        else {
-          let sMax = 0;
-          for (let i = 0; i < s.length; i++) if (s[i] > sMax) sMax = s[i];
-          tol = Math.max(rows, cols) * epsOf(sMax);
-        }
-        let k = 0;
-        for (let i = 0; i < s.length; i++) if (s[i] > tol) k++;
-        return RTV.num(k);
-      },
-    },
-  ],
+  nargin: [1, 2],
+  mfile: true,
+  apply: args => {
+    const tolArg =
+      args.length >= 2
+        ? realScalarOr(
+            args[1],
+            errorFn(
+              "MATLAB:rank:invalidSecondArgument",
+              "Second input must be a real numeric scalar tolerance."
+            )
+          )
+        : undefined;
+    const v = boolToNumber(args[0]);
+    if (isRuntimeNumber(v)) return RTV.num(v === 0 ? 0 : 1);
+    if (isRuntimeComplexNumber(v))
+      return RTV.num(v.re === 0 && v.im === 0 ? 0 : 1);
+    const A = denseFloatMatrixArg(v, svdTypeError, svdSparseError);
+    const [rows, cols] = tensorSize2D(A);
+    const s = (svdApply(A, 1) as RuntimeTensor).data;
+    let tol: number;
+    if (tolArg !== undefined) tol = tolArg;
+    else {
+      let sMax = 0;
+      for (let i = 0; i < s.length; i++) if (s[i] > sMax) sMax = s[i];
+      tol = Math.max(rows, cols) * epsOf(sMax);
+    }
+    let k = 0;
+    for (let i = 0; i < s.length; i++) if (s[i] > tol) k++;
+    return RTV.num(k);
+  },
 });
 
 function epsOf(x: number): number {
@@ -2902,483 +2789,399 @@ function epsOf(x: number): number {
   return Math.pow(2, Math.floor(Math.log2(ax)) - 52);
 }
 
-/** Coerce a real/complex scalar or dense tensor to a tensor (else throw). */
-function toNumericTensor(v: RuntimeValue, name: string): RuntimeTensor {
-  if (isRuntimeNumber(v)) return RTV.tensor(allocFloat64Array([v]), [1, 1]);
-  if (isRuntimeComplexNumber(v))
-    return RTV.tensor(
-      allocFloat64Array([v.re]),
-      [1, 1],
-      allocFloat64Array([v.im])
-    );
-  if (isRuntimeTensor(v)) return v;
-  throw new RuntimeError(`${name}: arguments must be numeric`);
-}
-
 // ── pinv ────────────────────────────────────────────────────────────────
 
-defineBuiltin({
+builtin({
   name: "pinv",
-  cases: [
-    {
-      match: (argTypes, nargout) => {
-        if (nargout > 1 || argTypes.length < 1 || argTypes.length > 2)
-          return null;
-        if (!isNumericJitType(argTypes[0])) return null;
-        const a = argTypes[0];
-        if (a.kind === "number" || a.kind === "boolean") return [NUM];
-        if (a.kind === "complex_or_number") return [a];
-        return [tensorType(a.kind === "tensor" && a.isComplex)];
-      },
-      apply: args =>
-        withScratch(() => {
-          if (args.length < 1 || args.length > 2)
-            throw new RuntimeError("pinv requires 1 or 2 arguments");
-          const A = args[0];
-          if (isRuntimeNumber(A)) return RTV.num(A === 0 ? 0 : 1 / A);
-          if (isRuntimeComplexNumber(A)) {
-            const d = A.re * A.re + A.im * A.im;
-            return d === 0 ? RTV.num(0) : RTV.complex(A.re / d, -A.im / d);
-          }
-          if (!isRuntimeTensor(A))
-            throw new RuntimeError("pinv: argument must be numeric");
-          const [m, n] = tensorSize2D(A);
-          const k = Math.min(m, n);
-          const tolArg =
-            args.length >= 2 && isRuntimeNumber(args[1]) ? args[1] : 0;
-          if (A.imag) {
-            // pinv(A) = V * diag(1./S) * U'  (U' is the conjugate transpose)
-            const { S, URe, UIm, VRe, VIm } = getLapackBridge().svdComplex(
-              toF64(A.data),
-              toF64(A.imag),
-              m,
-              n,
-              true,
-              true
-            );
-            const tol =
-              args.length >= 2
-                ? tolArg
-                : Math.max(m, n) * S[0] * 2.220446049250313e-16;
-            const re = allocFloat64Array(n * m);
-            const im = allocFloat64Array(n * m);
-            for (let i = 0; i < n; i++)
-              for (let j = 0; j < m; j++) {
-                let sr = 0,
-                  si = 0;
-                for (let l = 0; l < k; l++) {
-                  if (!(S[l] > tol)) continue;
-                  const vr = VRe![l * n + i] / S[l],
-                    vi = VIm![l * n + i] / S[l];
-                  const ur = URe![l * m + j],
-                    ui = -UIm![l * m + j];
-                  sr += vr * ur - vi * ui;
-                  si += vr * ui + vi * ur;
-                }
-                re[j * n + i] = sr;
-                im[j * n + i] = si;
-              }
-            return maybeComplexTensor(re, [n, m], im);
-          }
-          const { U, S, V } = getLapackBridge().svd(
-            toF64(A.data),
-            m,
-            n,
-            true,
-            true
-          ) as { U: Float64Array; S: Float64Array; V: Float64Array };
-          const tol =
-            args.length >= 2
-              ? tolArg
-              : Math.max(m, n) * S[0] * 2.220446049250313e-16;
-          const result = allocFloat64Array(n * m);
-          for (let i = 0; i < n; i++)
-            for (let j = 0; j < m; j++) {
-              let sum = 0;
-              for (let l = 0; l < k; l++)
-                if (S[l] > tol) sum += V[l * n + i] * (1 / S[l]) * U[l * m + j];
-              result[j * n + i] = sum;
+  nargin: [1, 2],
+  mfile: true,
+  apply: args =>
+    withScratch(() => {
+      const tolArg =
+        args.length >= 2
+          ? realScalarOr(
+              args[1],
+              errorFn(
+                "MATLAB:pinv:invalidSecondArgument",
+                "Second input must be a real numeric scalar tolerance."
+              )
+            )
+          : 0;
+      const v = boolToNumber(args[0]);
+      if (isRuntimeNumber(v)) return RTV.num(v === 0 ? 0 : 1 / v);
+      if (isRuntimeComplexNumber(v)) {
+        const d = v.re * v.re + v.im * v.im;
+        return d === 0 ? RTV.num(0) : RTV.complex(v.re / d, -v.im / d);
+      }
+      const A = denseFloatMatrixArg(v, svdTypeError, svdSparseError);
+      const [m, n] = tensorSize2D(A);
+      const k = Math.min(m, n);
+      if (A.imag) {
+        // pinv(A) = V * diag(1./S) * U'  (U' is the conjugate transpose)
+        const { S, URe, UIm, VRe, VIm } = getLapackBridge().svdComplex(
+          toF64(A.data),
+          toF64(A.imag),
+          m,
+          n,
+          true,
+          true
+        );
+        const tol =
+          args.length >= 2
+            ? tolArg
+            : Math.max(m, n) * S[0] * 2.220446049250313e-16;
+        const re = allocFloat64Array(n * m);
+        const im = allocFloat64Array(n * m);
+        for (let i = 0; i < n; i++)
+          for (let j = 0; j < m; j++) {
+            let sr = 0,
+              si = 0;
+            for (let l = 0; l < k; l++) {
+              if (!(S[l] > tol)) continue;
+              const vr = VRe![l * n + i] / S[l],
+                vi = VIm![l * n + i] / S[l];
+              const ur = URe![l * m + j],
+                ui = -UIm![l * m + j];
+              sr += vr * ur - vi * ui;
+              si += vr * ui + vi * ur;
             }
-          return RTV.tensor(result, [n, m]);
-        }),
-    },
-  ],
+            re[j * n + i] = sr;
+            im[j * n + i] = si;
+          }
+        return maybeComplexTensor(re, [n, m], im);
+      }
+      const { U, S, V } = getLapackBridge().svd(
+        toF64(A.data),
+        m,
+        n,
+        true,
+        true
+      ) as { U: Float64Array; S: Float64Array; V: Float64Array };
+      const tol =
+        args.length >= 2
+          ? tolArg
+          : Math.max(m, n) * S[0] * 2.220446049250313e-16;
+      const result = allocFloat64Array(n * m);
+      for (let i = 0; i < n; i++)
+        for (let j = 0; j < m; j++) {
+          let sum = 0;
+          for (let l = 0; l < k; l++)
+            if (S[l] > tol) sum += V[l * n + i] * (1 / S[l]) * U[l * m + j];
+          result[j * n + i] = sum;
+        }
+      return RTV.tensor(result, [n, m]);
+    }),
 });
 
 // ── kron ────────────────────────────────────────────────────────────────
 
-defineBuiltin({
+builtin({
   name: "kron",
-  cases: [
-    {
-      match: (argTypes, nargout) => {
-        if (nargout > 1 || argTypes.length !== 2) return null;
-        if (!isNumericJitType(argTypes[0]) || !isNumericJitType(argTypes[1]))
-          return null;
-        if (argTypes.some(t => t.kind === "sparse_matrix"))
-          return [
-            {
-              kind: "sparse_matrix",
-              isComplex: argTypes.some(
-                t => t.kind === "sparse_matrix" && t.isComplex
-              ),
-            },
-          ];
-        return [
-          tensorType(
-            argTypes.some(
-              t =>
-                t.kind === "complex_or_number" ||
-                (t.kind === "tensor" && t.isComplex)
-            )
-          ),
-        ];
-      },
-      apply: args => {
-        if (args.length !== 2)
-          throw new RuntimeError("kron requires 2 arguments");
-        // Sparse operand: the result is sparse with nnz(A)*nnz(B) entries.
-        if (isRuntimeSparseMatrix(args[0]) || isRuntimeSparseMatrix(args[1]))
-          return sparseKron(
-            toSparseOperand(args[0], "kron"),
-            toSparseOperand(args[1], "kron")
-          );
-        const A = toNumericTensor(args[0], "kron");
-        const B = toNumericTensor(args[1], "kron");
-        const [m, n] = tensorSize2D(A);
-        const [p, q] = tensorSize2D(B);
-        const rows = m * p,
-          cols = n * q;
-        const aIm = A.imag,
-          bIm = B.imag;
-        const result = allocFloat64Array(rows * cols);
-        const resultIm =
-          aIm || bIm ? allocFloat64Array(rows * cols) : undefined;
-        for (let ja = 0; ja < n; ja++)
-          for (let ia = 0; ia < m; ia++) {
-            const aVal = A.data[ia + ja * m];
-            const aIv = aIm ? aIm[ia + ja * m] : 0;
-            for (let jb = 0; jb < q; jb++)
-              for (let ib = 0; ib < p; ib++) {
-                const bVal = B.data[ib + jb * p];
-                const dst = ia * p + ib + (ja * q + jb) * rows;
-                if (!resultIm) {
-                  result[dst] = aVal * bVal;
-                  continue;
-                }
-                const bIv = bIm ? bIm[ib + jb * p] : 0;
-                result[dst] = aVal * bVal - aIv * bIv;
-                resultIm[dst] = aVal * bIv + aIv * bVal;
-              }
+  nargin: 2,
+  mfile: true,
+  apply: args => {
+    const A = numericMatrixArg(args[0]);
+    const B = numericMatrixArg(args[1]);
+    // Sparse operand: the result is sparse with nnz(A)*nnz(B) entries.
+    if (isRuntimeSparseMatrix(A) || isRuntimeSparseMatrix(B))
+      return sparseKron(
+        isRuntimeSparseMatrix(A) ? A : denseToSparse(A),
+        isRuntimeSparseMatrix(B) ? B : denseToSparse(B)
+      );
+    const [m, n] = tensorSize2D(A);
+    const [p, q] = tensorSize2D(B);
+    const rows = m * p,
+      cols = n * q;
+    const aIm = A.imag,
+      bIm = B.imag;
+    const result = allocFloat64Array(rows * cols);
+    const resultIm = aIm || bIm ? allocFloat64Array(rows * cols) : undefined;
+    for (let ja = 0; ja < n; ja++)
+      for (let ia = 0; ia < m; ia++) {
+        const aVal = A.data[ia + ja * m];
+        const aIv = aIm ? aIm[ia + ja * m] : 0;
+        for (let jb = 0; jb < q; jb++)
+          for (let ib = 0; ib < p; ib++) {
+            const bVal = B.data[ib + jb * p];
+            const dst = ia * p + ib + (ja * q + jb) * rows;
+            if (!resultIm) {
+              result[dst] = aVal * bVal;
+              continue;
+            }
+            const bIv = bIm ? bIm[ib + jb * p] : 0;
+            result[dst] = aVal * bVal - aIv * bIv;
+            resultIm[dst] = aVal * bIv + aIv * bVal;
           }
-        return maybeComplexTensor(result, [rows, cols], resultIm);
-      },
-    },
-  ],
+      }
+    return maybeComplexTensor(result, [rows, cols], resultIm);
+  },
 });
 
 // ── blkdiag ─────────────────────────────────────────────────────────────
 
-defineBuiltin({
+builtin({
   name: "blkdiag",
-  cases: [
-    {
-      match: (argTypes, nargout) => {
-        if (nargout > 1 || argTypes.length === 0) return null;
-        if (!argTypes.every(isNumericJitType)) return null;
-        return [
-          tensorType(
-            argTypes.some(
-              t =>
-                t.kind === "complex_or_number" ||
-                (t.kind === "tensor" && t.isComplex)
-            )
-          ),
-        ];
-      },
-      apply: args => {
-        if (args.length === 0)
-          throw new RuntimeError("blkdiag requires at least 1 argument");
-        const blocks = args.map(a =>
-          isRuntimeSparseMatrix(a)
-            ? sparseToDense(a)
-            : toNumericTensor(a, "blkdiag")
-        );
-        const anyComplex = blocks.some(b => b.imag);
-        let totalRows = 0,
-          totalCols = 0;
-        const dims: [number, number][] = [];
-        for (const block of blocks) {
-          const [m, n] = tensorSize2D(block);
-          dims.push([m, n]);
-          totalRows += m;
-          totalCols += n;
+  mfile: true,
+  apply: args => {
+    if (args.some(a => isRuntimeChar(a)))
+      throw new RuntimeError("blkdiag: char input is not supported");
+    const blocks = args.map(a => denseNumericMatrixArg(a));
+    const anyComplex = blocks.some(b => b.imag);
+    let totalRows = 0,
+      totalCols = 0;
+    const dims: [number, number][] = [];
+    for (const block of blocks) {
+      const [m, n] = tensorSize2D(block);
+      dims.push([m, n]);
+      totalRows += m;
+      totalCols += n;
+    }
+    const result = allocFloat64Array(totalRows * totalCols);
+    const resultIm = anyComplex
+      ? allocFloat64Array(totalRows * totalCols)
+      : undefined;
+    let rowOffset = 0,
+      colOffset = 0;
+    for (let k = 0; k < blocks.length; k++) {
+      const [m, n] = dims[k];
+      const data = blocks[k].data;
+      const imag = blocks[k].imag;
+      for (let j = 0; j < n; j++)
+        for (let i = 0; i < m; i++) {
+          const dst = rowOffset + i + (colOffset + j) * totalRows;
+          result[dst] = data[i + j * m];
+          if (resultIm && imag) resultIm[dst] = imag[i + j * m];
         }
-        const result = allocFloat64Array(totalRows * totalCols);
-        const resultIm = anyComplex
-          ? allocFloat64Array(totalRows * totalCols)
-          : undefined;
-        let rowOffset = 0,
-          colOffset = 0;
-        for (let k = 0; k < blocks.length; k++) {
-          const [m, n] = dims[k];
-          const data = blocks[k].data;
-          const imag = blocks[k].imag;
-          for (let j = 0; j < n; j++)
-            for (let i = 0; i < m; i++) {
-              const dst = rowOffset + i + (colOffset + j) * totalRows;
-              result[dst] = data[i + j * m];
-              if (resultIm && imag) resultIm[dst] = imag[i + j * m];
-            }
-          rowOffset += m;
-          colOffset += n;
-        }
-        return maybeComplexTensor(result, [totalRows, totalCols], resultIm);
-      },
-    },
-  ],
+      rowOffset += m;
+      colOffset += n;
+    }
+    const r = maybeComplexTensor(result, [totalRows, totalCols], resultIm);
+    // A sparse block gives a sparse result, as in MATLAB.
+    return args.some(a => isRuntimeSparseMatrix(a)) ? denseToSparse(r) : r;
+  },
 });
 
 // ── pagemtimes ──────────────────────────────────────────────────────────
 
-defineBuiltin({
+builtin({
   name: "pagemtimes",
-  cases: [
-    {
-      match: (argTypes, nargout) => {
-        if (nargout > 1) return null;
-        if (argTypes.length !== 2 && argTypes.length !== 4) return null;
-        const xIdx = 0,
-          yIdx = argTypes.length === 4 ? 2 : 1;
-        if (
-          !isNumericJitType(argTypes[xIdx]) ||
-          !isNumericJitType(argTypes[yIdx])
-        )
-          return null;
-        const isC = (t: JitType) =>
-          t.kind === "complex_or_number" ||
-          (t.kind === "tensor" && t.isComplex === true);
-        return [tensorType(isC(argTypes[xIdx]) || isC(argTypes[yIdx]))];
-      },
-      apply: args => {
-        // Delegate to legacy apply — the full implementation is complex
-        let X: RuntimeValue, Y: RuntimeValue;
-        let transpX = "none",
-          transpY = "none";
-        if (args.length === 2) {
-          X = args[0];
-          Y = args[1];
-        } else if (args.length === 4) {
-          X = args[0];
-          Y = args[2];
-          if (
-            !(isRuntimeString(args[1]) || isRuntimeChar(args[1])) ||
-            !(isRuntimeString(args[3]) || isRuntimeChar(args[3]))
-          )
-            throw new RuntimeError(
-              "pagemtimes: transpose options must be strings"
-            );
-          transpX = rstr(
-            args[1] as
-              | import("../../runtime/types.js").RuntimeString
-              | import("../../runtime/types.js").RuntimeChar
-          );
-          transpY = rstr(
-            args[3] as
-              | import("../../runtime/types.js").RuntimeString
-              | import("../../runtime/types.js").RuntimeChar
-          );
-        } else throw new RuntimeError("pagemtimes requires 2 or 4 arguments");
-
-        const xT = toNumericTensor(X, "pagemtimes");
-        const yT = toNumericTensor(Y, "pagemtimes");
-
-        const xShape = xT.shape.length < 2 ? [1, xT.shape[0] || 1] : xT.shape;
-        const yShape = yT.shape.length < 2 ? [1, yT.shape[0] || 1] : yT.shape;
-        let xRows = xShape[0],
-          xCols = xShape[1];
-        let yRows = yShape[0],
-          yCols = yShape[1];
-        if (transpX === "transpose" || transpX === "ctranspose")
-          [xRows, xCols] = [xCols, xRows];
-        if (transpY === "transpose" || transpY === "ctranspose")
-          [yRows, yCols] = [yCols, yRows];
-        if (xCols !== yRows)
+  nargin: [2, 4],
+  apply: args => {
+    let X: RuntimeValue, Y: RuntimeValue;
+    let transpX = "none",
+      transpY = "none";
+    if (args.length === 2) {
+      X = args[0];
+      Y = args[1];
+    } else if (args.length === 4) {
+      X = args[0];
+      Y = args[2];
+      const opt = (v: RuntimeValue) => {
+        const s = isText(v) ? parseStringArgLower(v) : "";
+        if (s !== "none" && s !== "transpose" && s !== "ctranspose")
           throw new RuntimeError(
-            `pagemtimes: inner matrix dimensions must agree: ${xCols} vs ${yRows}`
+            "pagemtimes: transpose options must be 'none', 'transpose', or 'ctranspose'"
           );
+        return s;
+      };
+      transpX = opt(args[1]);
+      transpY = opt(args[3]);
+    } else
+      throw builtinError(
+        "MATLAB:pagemtimes:threeInputNotSupported",
+        "Incorrect number of input arguments. Specify either two or four input arguments."
+      );
 
-        const xExtra = xShape.slice(2),
-          yExtra = yShape.slice(2);
-        const maxExtraDims = Math.max(xExtra.length, yExtra.length);
-        const outExtra: number[] = [];
-        for (let d = 0; d < maxExtraDims; d++) {
-          const xd = d < xExtra.length ? xExtra[d] : 1;
-          const yd = d < yExtra.length ? yExtra[d] : 1;
-          if (xd !== yd && xd !== 1 && yd !== 1)
-            throw new RuntimeError(
-              "pagemtimes: dimensions beyond first two must be compatible"
-            );
-          outExtra.push(Math.max(xd, yd));
+    const typeError = errorFn(
+      "MATLAB:pagemtimes:invalidArray",
+      "Invalid data types. Input arrays must be double or single."
+    );
+    const sparseError = errorFn(
+      "MATLAB:pagemtimes:sparseNotSupported",
+      "Sparse inputs are not supported."
+    );
+    const xT = denseFloatMatrixArg(X, typeError, sparseError);
+    const yT = denseFloatMatrixArg(Y, typeError, sparseError);
+
+    const xShape = xT.shape.length < 2 ? [1, xT.shape[0] || 1] : xT.shape;
+    const yShape = yT.shape.length < 2 ? [1, yT.shape[0] || 1] : yT.shape;
+    let xRows = xShape[0],
+      xCols = xShape[1];
+    let yRows = yShape[0],
+      yCols = yShape[1];
+    if (transpX === "transpose" || transpX === "ctranspose")
+      [xRows, xCols] = [xCols, xRows];
+    if (transpY === "transpose" || transpY === "ctranspose")
+      [yRows, yCols] = [yCols, yRows];
+    if (xCols !== yRows)
+      throw new RuntimeError(
+        `pagemtimes: inner matrix dimensions must agree: ${xCols} vs ${yRows}`
+      );
+
+    const xExtra = xShape.slice(2),
+      yExtra = yShape.slice(2);
+    const maxExtraDims = Math.max(xExtra.length, yExtra.length);
+    const outExtra: number[] = [];
+    for (let d = 0; d < maxExtraDims; d++) {
+      const xd = d < xExtra.length ? xExtra[d] : 1;
+      const yd = d < yExtra.length ? yExtra[d] : 1;
+      if (xd !== yd && xd !== 1 && yd !== 1)
+        throw new RuntimeError(
+          "pagemtimes: dimensions beyond first two must be compatible"
+        );
+      outExtra.push(Math.max(xd, yd));
+    }
+    const outShape = [xRows, yCols, ...outExtra];
+    const pageSize = xRows * yCols;
+    const xPageSize = xShape[0] * xShape[1],
+      yPageSize = yShape[0] * yShape[1];
+    const totalPages = outExtra.reduce((a, b) => a * b, 1);
+    const isComplex = !!(xT.imag || yT.imag);
+    const result = allocFloat64Array(pageSize * totalPages);
+    const resultIm = isComplex
+      ? allocFloat64Array(pageSize * totalPages)
+      : undefined;
+    const xExtraStrides: number[] = [],
+      yExtraStrides: number[] = [];
+    let xStride = 1,
+      yStride = 1;
+    for (let d = 0; d < maxExtraDims; d++) {
+      xExtraStrides.push(xStride);
+      yExtraStrides.push(yStride);
+      xStride *= d < xExtra.length ? xExtra[d] : 1;
+      yStride *= d < yExtra.length ? yExtra[d] : 1;
+    }
+    // Copy one page into (re, im) buffers in op(X) layout, applying the
+    // requested transpose / conjugate transpose.
+    const loadPage = (
+      T: RuntimeTensor,
+      shp: number[],
+      off: number,
+      mode: string,
+      re: Float64Array,
+      im: Float64Array | undefined
+    ) => {
+      const r = shp[0],
+        c = shp[1];
+      const tr = mode === "transpose" || mode === "ctranspose";
+      const sgn = mode === "ctranspose" ? -1 : 1;
+      for (let j = 0; j < c; j++)
+        for (let i = 0; i < r; i++) {
+          const src = off + i + j * r;
+          const dst = tr ? j + i * c : i + j * r;
+          re[dst] = T.data[src];
+          if (im) im[dst] = T.imag ? sgn * T.imag[src] : 0;
         }
-        const outShape = [xRows, yCols, ...outExtra];
-        const pageSize = xRows * yCols;
-        const xPageSize = xShape[0] * xShape[1],
-          yPageSize = yShape[0] * yShape[1];
-        const totalPages = outExtra.reduce((a, b) => a * b, 1);
-        const isComplex = !!(xT.imag || yT.imag);
-        const result = allocFloat64Array(pageSize * totalPages);
-        const resultIm = isComplex
-          ? allocFloat64Array(pageSize * totalPages)
-          : undefined;
-        const xExtraStrides: number[] = [],
-          yExtraStrides: number[] = [];
-        let xStride = 1,
-          yStride = 1;
-        for (let d = 0; d < maxExtraDims; d++) {
-          xExtraStrides.push(xStride);
-          yExtraStrides.push(yStride);
-          xStride *= d < xExtra.length ? xExtra[d] : 1;
-          yStride *= d < yExtra.length ? yExtra[d] : 1;
-        }
-        // Copy one page into (re, im) buffers in op(X) layout, applying the
-        // requested transpose / conjugate transpose.
-        const loadPage = (
-          T: RuntimeTensor,
-          shp: number[],
-          off: number,
-          mode: string,
-          re: Float64Array,
-          im: Float64Array | undefined
-        ) => {
-          const r = shp[0],
-            c = shp[1];
-          const tr = mode === "transpose" || mode === "ctranspose";
-          const sgn = mode === "ctranspose" ? -1 : 1;
-          for (let j = 0; j < c; j++)
-            for (let i = 0; i < r; i++) {
-              const src = off + i + j * r;
-              const dst = tr ? j + i * c : i + j * r;
-              re[dst] = T.data[src];
-              if (im) im[dst] = T.imag ? sgn * T.imag[src] : 0;
+    };
+    const aRe = allocFloat64Array(xPageSize),
+      bRe = allocFloat64Array(yPageSize);
+    const aIm = isComplex ? allocFloat64Array(xPageSize) : undefined,
+      bIm = isComplex ? allocFloat64Array(yPageSize) : undefined;
+    for (let p = 0; p < totalPages; p++) {
+      let xPageIdx = 0,
+        yPageIdx = 0,
+        rem = p;
+      for (let d = maxExtraDims - 1; d >= 0; d--) {
+        const outD = outExtra[d],
+          idx = rem % outD;
+        rem = (rem - idx) / outD;
+        const xd = d < xExtra.length ? xExtra[d] : 1;
+        const yd = d < yExtra.length ? yExtra[d] : 1;
+        xPageIdx += (xd === 1 ? 0 : idx) * xExtraStrides[d];
+        yPageIdx += (yd === 1 ? 0 : idx) * yExtraStrides[d];
+      }
+      loadPage(xT, xShape, xPageIdx * xPageSize, transpX, aRe, aIm);
+      loadPage(yT, yShape, yPageIdx * yPageSize, transpY, bRe, bIm);
+      const outOff = p * pageSize;
+      const aR = xRows,
+        aC = xCols,
+        bR = yRows;
+      for (let j = 0; j < yCols; j++)
+        for (let i = 0; i < aR; i++) {
+          let sr = 0,
+            si = 0;
+          for (let kk = 0; kk < aC; kk++) {
+            const ar = aRe[i + kk * aR],
+              br = bRe[kk + j * bR];
+            if (aIm && bIm) {
+              const ai = aIm[i + kk * aR],
+                bi = bIm[kk + j * bR];
+              sr += ar * br - ai * bi;
+              si += ar * bi + ai * br;
+            } else {
+              sr += ar * br;
             }
-        };
-        const aRe = allocFloat64Array(xPageSize),
-          bRe = allocFloat64Array(yPageSize);
-        const aIm = isComplex ? allocFloat64Array(xPageSize) : undefined,
-          bIm = isComplex ? allocFloat64Array(yPageSize) : undefined;
-        for (let p = 0; p < totalPages; p++) {
-          let xPageIdx = 0,
-            yPageIdx = 0,
-            rem = p;
-          for (let d = maxExtraDims - 1; d >= 0; d--) {
-            const outD = outExtra[d],
-              idx = rem % outD;
-            rem = (rem - idx) / outD;
-            const xd = d < xExtra.length ? xExtra[d] : 1;
-            const yd = d < yExtra.length ? yExtra[d] : 1;
-            xPageIdx += (xd === 1 ? 0 : idx) * xExtraStrides[d];
-            yPageIdx += (yd === 1 ? 0 : idx) * yExtraStrides[d];
           }
-          loadPage(xT, xShape, xPageIdx * xPageSize, transpX, aRe, aIm);
-          loadPage(yT, yShape, yPageIdx * yPageSize, transpY, bRe, bIm);
-          const outOff = p * pageSize;
-          const aR = xRows,
-            aC = xCols,
-            bR = yRows;
-          for (let j = 0; j < yCols; j++)
-            for (let i = 0; i < aR; i++) {
-              let sr = 0,
-                si = 0;
-              for (let kk = 0; kk < aC; kk++) {
-                const ar = aRe[i + kk * aR],
-                  br = bRe[kk + j * bR];
-                if (aIm && bIm) {
-                  const ai = aIm[i + kk * aR],
-                    bi = bIm[kk + j * bR];
-                  sr += ar * br - ai * bi;
-                  si += ar * bi + ai * br;
-                } else {
-                  sr += ar * br;
-                }
-              }
-              result[outOff + i + j * aR] = sr;
-              if (resultIm) resultIm[outOff + i + j * aR] = si;
-            }
+          result[outOff + i + j * aR] = sr;
+          if (resultIm) resultIm[outOff + i + j * aR] = si;
         }
-        while (outShape.length > 2 && outShape[outShape.length - 1] === 1)
-          outShape.pop();
-        return maybeComplexTensor(result, outShape, resultIm);
-      },
-    },
-  ],
+    }
+    while (outShape.length > 2 && outShape[outShape.length - 1] === 1)
+      outShape.pop();
+    return maybeComplexTensor(result, outShape, resultIm);
+  },
 });
 
 // ── pagetranspose ───────────────────────────────────────────────────────
 
-defineBuiltin({
+builtin({
   name: "pagetranspose",
-  cases: [
-    {
-      match: (argTypes, nargout) => {
-        if (nargout > 1 || argTypes.length !== 1) return null;
-        if (argTypes[0].kind !== "tensor") return null;
-        return [tensorType(argTypes[0].isComplex)];
-      },
-      apply: args => {
-        if (args.length !== 1)
-          throw new RuntimeError("pagetranspose requires exactly 1 argument");
-        const X = args[0];
-        if (!isRuntimeTensor(X))
-          throw new RuntimeError(
-            "pagetranspose: input must be a numeric array"
-          );
-        const xShape = X.shape;
-        const rows = xShape[0],
-          cols = xShape.length >= 2 ? xShape[1] : 1;
-        const extraDims = xShape.slice(2);
-        const totalPages = extraDims.reduce((a: number, b: number) => a * b, 1);
-        const pageSize = rows * cols;
-        const outData = allocFloat64Array(X.data.length);
-        const xIm = X.imag;
-        const outIm = xIm ? allocFloat64Array(X.data.length) : undefined;
-        const outShape = [cols, rows, ...extraDims];
-        for (let p = 0; p < totalPages; p++) {
-          const inOff = p * pageSize,
-            outOff = p * pageSize;
-          for (let j = 0; j < cols; j++)
-            for (let i = 0; i < rows; i++) {
-              outData[outOff + j + i * cols] = X.data[inOff + i + j * rows];
-              if (outIm)
-                outIm[outOff + j + i * cols] = xIm![inOff + i + j * rows];
-            }
+  nargin: 1,
+  mfile: true,
+  apply: (args, _nargout, ctx) => {
+    const X = args[0];
+    if (
+      !(
+        typeof X === "number" ||
+        typeof X === "boolean" ||
+        isRuntimeComplexNumber(X) ||
+        isRuntimeTensor(X) ||
+        isRuntimeSparseMatrix(X)
+      )
+    )
+      throw new RuntimeError(
+        "pagetranspose: input must be a numeric or logical array"
+      );
+    // Pages of a 2-D array: the array itself.
+    if (!isRuntimeTensor(X) || X.shape.length <= 2)
+      return ctx.rt.transpose(X) as RuntimeValue;
+    const xShape = X.shape;
+    const rows = xShape[0],
+      cols = xShape[1];
+    const extraDims = xShape.slice(2);
+    const totalPages = extraDims.reduce((a: number, b: number) => a * b, 1);
+    const pageSize = rows * cols;
+    const outData = allocFloat64Array(X.data.length);
+    const xIm = X.imag;
+    const outIm = xIm ? allocFloat64Array(X.data.length) : undefined;
+    const outShape = [cols, rows, ...extraDims];
+    for (let p = 0; p < totalPages; p++) {
+      const inOff = p * pageSize,
+        outOff = p * pageSize;
+      for (let j = 0; j < cols; j++)
+        for (let i = 0; i < rows; i++) {
+          outData[outOff + j + i * cols] = X.data[inOff + i + j * rows];
+          if (outIm) outIm[outOff + j + i * cols] = xIm![inOff + i + j * rows];
         }
-        while (outShape.length > 2 && outShape[outShape.length - 1] === 1)
-          outShape.pop();
-        return RTV.tensor(outData, outShape, outIm);
-      },
-    },
-  ],
+    }
+    while (outShape.length > 2 && outShape[outShape.length - 1] === 1)
+      outShape.pop();
+    const out = RTV.tensor(outData, outShape, outIm);
+    if (X._isLogical) out._isLogical = true;
+    return out;
+  },
 });
 
 // ── qz ──────────────────────────────────────────────────────────────────
 
-registerIBuiltin({
+builtin({
   name: "qz",
-  resolve: (argTypes, nargout) => {
-    if (nargout !== 4 && nargout !== 6) return null;
-    if (argTypes.length < 2 || argTypes.length > 3) return null;
-    if (!isNumericJitType(argTypes[0]) || !isNumericJitType(argTypes[1]))
-      return null;
-    const c = tensorType(true);
-    const types = nargout === 4 ? [c, c, c, c] : [c, c, c, c, c, c];
-    return { outputTypes: types, apply: (args, n) => qzApply(args, n) };
-  },
+  nargin: [2, 3],
+  nargout: 6,
+  apply: (args, nargout) => outputs(qzApply(args, nargout), nargout),
 });
 
 function qzApply(args: RuntimeValue[], nargout: number): RuntimeValue[] {
-  if (args.length < 2)
-    throw new RuntimeError("qz requires at least 2 arguments");
   let mode: "real" | "complex" = "complex";
   if (args.length >= 3) {
     const modeStr = parseStringArgLower(args[2]);
@@ -3386,17 +3189,19 @@ function qzApply(args: RuntimeValue[], nargout: number): RuntimeValue[] {
     else if (modeStr === "real") mode = "real";
     else throw new RuntimeError(`qz: unknown mode '${modeStr}'`);
   }
-  const A = args[0],
-    B = args[1];
-  if (!isRuntimeTensor(A) || !isRuntimeTensor(B))
-    throw new RuntimeError("qz: arguments must be numeric matrices");
+  const sparseError = errorFn(
+    "MATLAB:qz:noQZsparse",
+    "Sparse matrices not supported."
+  );
+  const A = denseFloatMatrixArg(args[0], mustBeFloatError, sparseError);
+  const B = denseFloatMatrixArg(args[1], mustBeFloatError, sparseError);
   const [mA, nA] = tensorSize2D(A);
   const [mB, nB] = tensorSize2D(B);
   if (mA !== nA) throw new RuntimeError("qz: A must be a square matrix");
   if (mB !== nB) throw new RuntimeError("qz: B must be a square matrix");
   if (mA !== mB) throw new RuntimeError("qz: A and B must be the same size");
   const n = mA;
-  const computeEigvecs = nargout >= 6;
+  const computeEigvecs = nargout >= 5;
   const isComplex = !!(A.imag || B.imag) || mode === "complex";
   const bridge = getLapackBridge();
   if (isComplex) {
@@ -3410,7 +3215,7 @@ function qzApply(args: RuntimeValue[], nargout: number): RuntimeValue[] {
     const BBout = RTV.tensor(result.BBRe, [n, n], result.BBIm);
     const Qout = RTV.tensor(result.QRe, [n, n], result.QIm);
     const Zout = RTV.tensor(result.ZRe, [n, n], result.ZIm);
-    if (nargout === 4) return [AAout, BBout, Qout, Zout];
+    if (!computeEigvecs) return [AAout, BBout, Qout, Zout];
     const { VRe, VIm, WRe, WIm } = result;
     if (!VRe || !VIm || !WRe || !WIm)
       throw new RuntimeError("qz: failed to compute generalized eigenvectors");
@@ -3428,7 +3233,7 @@ function qzApply(args: RuntimeValue[], nargout: number): RuntimeValue[] {
   const BBout = RTV.tensor(result.BB, [n, n]);
   const Qout = RTV.tensor(result.Q, [n, n]);
   const Zout = RTV.tensor(result.Z, [n, n]);
-  if (nargout === 4) return [AAout, BBout, Qout, Zout];
+  if (!computeEigvecs) return [AAout, BBout, Qout, Zout];
   const { alphai, V, W } = result;
   if (!V || !W)
     throw new RuntimeError("qz: failed to compute generalized eigenvectors");

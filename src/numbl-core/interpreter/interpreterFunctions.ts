@@ -209,6 +209,28 @@ export function declaredNargin(
   return body ? narginFromParams(body.fn.params) : undefined;
 }
 
+/** Declared output count of the user function `name` resolves to in the
+ *  current scope (backs `nargout(@name)` and `nargout('name')`), negated
+ *  when the last output is `varargout`. Undefined as for declaredNargin. */
+export function declaredNargout(
+  this: Interpreter,
+  name: string
+): number | undefined {
+  const r = resolveName(name, this.currentScope(), { variables: false });
+  const outputs =
+    r.kind === "nested"
+      ? r.fn.outputs
+      : (() => {
+          const target = targetOf(r);
+          const body = target && functionBodyFor(this.code, target);
+          return body ? body.fn.outputs : undefined;
+        })();
+  if (outputs === undefined) return undefined;
+  const hasVarargout =
+    outputs.length > 0 && outputs[outputs.length - 1] === "varargout";
+  return hasVarargout ? -outputs.length : outputs.length;
+}
+
 // ── Target interpretation ────────────────────────────────────────────────
 
 export function interpretTarget(

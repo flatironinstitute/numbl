@@ -51,72 +51,65 @@ import {
 } from "../../helpers/sparse-direct.js";
 import { emitWarning } from "../../helpers/warn.js";
 import { getLapackBridge } from "../../native/lapack-bridge.js";
-import { registerIBuiltin } from "./types.js";
+import { builtin } from "./builtin.js";
+import { builtinError, realScalarArg } from "./args.js";
+import { errorFn, floatMatrixArg } from "./linalg-args.js";
 
 type Sp = RuntimeSparseMatrix;
 
-function toSparseArg(v: RuntimeValue, name: string): Sp {
-  if (isRuntimeSparseMatrix(v)) return v;
-  if (isRuntimeTensor(v)) return denseToSparse(v);
-  if (isRuntimeNumber(v))
-    return denseToSparse(RTV.tensor(allocFloat64Array([v]), [1, 1]));
-  if (isRuntimeLogical(v))
-    return denseToSparse(RTV.tensor(allocFloat64Array([v ? 1 : 0]), [1, 1]));
-  throw new RuntimeError(`${name}: argument must be a numeric matrix`);
+/** A double or logical matrix argument as CSC. */
+function toSparseArg(v: RuntimeValue): Sp {
+  const a = floatMatrixArg(
+    v,
+    errorFn(
+      "MATLAB:math:mustBeFloatOrLogical",
+      "Invalid data type. Argument must be double, single, or logical."
+    )
+  );
+  return isRuntimeSparseMatrix(a) ? a : denseToSparse(a);
 }
-
-const ROW_VECTOR = { kind: "tensor" as const, isComplex: false };
 
 // ── Orderings ─────────────────────────────────────────────────────────────
 
-registerIBuiltin({
+builtin({
   name: "symrcm",
   help: {
     signatures: ["p = symrcm(A)"],
     description:
       "Reverse Cuthill-McKee ordering of the pattern of A + A'. A(p,p) tends to have a smaller bandwidth than A.",
   },
-  resolve: (argTypes, nargout) => {
-    if (argTypes.length !== 1 || nargout > 1) return null;
-    return {
-      outputTypes: [ROW_VECTOR],
-      apply: args =>
-        permVectorTensor(reverseCuthillMcKee(toSparseArg(args[0], "symrcm"))),
-    };
-  },
+  nargin: 1,
+  apply: args => permVectorTensor(reverseCuthillMcKee(toSparseArg(args[0]))),
 });
 
-registerIBuiltin({
+builtin({
   name: "amd",
   help: {
     signatures: ["p = amd(A)"],
     description:
       "Minimum degree ordering of the pattern of A + A'. chol(A(p,p)) tends to be sparser than chol(A). numbl uses an exact minimum degree ordering, so p can differ from MATLAB's approximate minimum degree permutation.",
   },
-  resolve: (argTypes, nargout) => {
-    if (argTypes.length < 1 || argTypes.length > 2 || nargout > 1) return null;
-    return {
-      outputTypes: [ROW_VECTOR],
-      apply: args =>
-        permVectorTensor(minimumDegreeOrdering(toSparseArg(args[0], "amd"))),
-    };
-  },
+  // amd(A, opts): the options are accepted and ignored.
+  nargin: [1, 2],
+  apply: args => permVectorTensor(minimumDegreeOrdering(toSparseArg(args[0]))),
 });
 
-registerIBuiltin({
+builtin({
   name: "colamd",
   help: {
     signatures: ["p = colamd(A)"],
     description:
       "Column ordering for LU: minimum degree ordering of the pattern of A'*A. lu(A(:,p)) tends to produce sparser factors than lu(A).",
   },
-  resolve: (argTypes, nargout) => {
-    if (argTypes.length < 1 || argTypes.length > 2 || nargout > 1) return null;
-    return {
-      outputTypes: [ROW_VECTOR],
-      apply: args =>
-        permVectorTensor(columnOrdering(toSparseArg(args[0], "colamd"))),
-    };
+  // colamd(A, knobs): the knobs are accepted and ignored.
+  nargin: [1, 2],
+  nargout: 2,
+  apply: (args, nargout) => {
+    if (nargout >= 2)
+      throw new RuntimeError(
+        "colamd: the statistics output [p, stats] = colamd(...) is not supported"
+      );
+    return permVectorTensor(columnOrdering(toSparseArg(args[0])));
   },
 });
 
@@ -171,7 +164,7 @@ function sparseFromLinearIndices(
 }
 
 function registerSprand(name: string, gen: () => number): void {
-  registerIBuiltin({
+  builtin({
     name,
     help: {
       signatures: [`R = ${name}(m, n, density)`, `R = ${name}(S)`],
@@ -180,38 +173,35 @@ function registerSprand(name: string, gen: () => number): void {
         (name === "sprand" ? "uniformly" : "normally") +
         ` distributed nonzeros, or a matrix with the pattern of S and random values.`,
     },
-    resolve: (argTypes, nargout) => {
-      if (nargout > 1) return null;
-      if (argTypes.length !== 1 && argTypes.length < 3) return null;
-      return {
-        outputTypes: [{ kind: "sparse_matrix", isComplex: false }],
-        apply: args => {
-          if (args.length === 1) {
-            const S = toSparseArg(args[0], name);
-            const pr = allocFloat64Array(S.pr.length);
-            for (let k = 0; k < pr.length; k++) pr[k] = gen();
-            return RTV.sparseMatrix(
-              S.m,
-              S.n,
-              new Int32Array(S.ir),
-              new Int32Array(S.jc),
-              pr
-            );
-          }
-          if (args.length > 3)
-            throw new RuntimeError(
-              `${name}: the reciprocal-condition form ${name}(m, n, density, rc) is not supported`
-            );
-          const m = Math.round(toNumber(args[0]));
-          const n = Math.round(toNumber(args[1]));
-          const density = toNumber(args[2]);
-          if (!(density >= 0 && density <= 1))
-            throw new RuntimeError(`${name}: density must be in [0, 1]`);
-          const total = m * n;
-          const k = Math.min(total, Math.round(density * total));
-          return sparseFromLinearIndices(m, n, sampleDistinct(total, k), gen);
-        },
-      };
+    nargin: [1, 4],
+    mfile: true,
+    apply: args => {
+      if (args.length === 1) {
+        const S = toSparseArg(args[0]);
+        const pr = allocFloat64Array(S.pr.length);
+        for (let k = 0; k < pr.length; k++) pr[k] = gen();
+        return RTV.sparseMatrix(
+          S.m,
+          S.n,
+          new Int32Array(S.ir),
+          new Int32Array(S.jc),
+          pr
+        );
+      }
+      if (args.length === 2)
+        throw builtinError(`MATLAB:${name}:TwoInputs`, "Invalid syntax.");
+      if (args.length > 3)
+        throw new RuntimeError(
+          `${name}: the reciprocal-condition form ${name}(m, n, density, rc) is not supported`
+        );
+      const m = Math.round(realScalarArg(args[0]));
+      const n = Math.round(realScalarArg(args[1]));
+      const density = realScalarArg(args[2]);
+      if (!(density >= 0 && density <= 1))
+        throw new RuntimeError(`${name}: density must be in [0, 1]`);
+      const total = m * n;
+      const k = Math.min(total, Math.round(density * total));
+      return sparseFromLinearIndices(m, n, sampleDistinct(total, k), gen);
     },
   });
 }
@@ -219,63 +209,62 @@ function registerSprand(name: string, gen: () => number): void {
 registerSprand("sprand", rngRandom);
 registerSprand("sprandn", boxMullerRandom);
 
-registerIBuiltin({
+builtin({
   name: "sprandsym",
   help: {
     signatures: ["R = sprandsym(n, density)", "R = sprandsym(S)"],
     description:
       "Symmetric random n-by-n sparse matrix with approximately density*n*n normally distributed nonzeros, or a symmetric matrix with the pattern of the lower triangle of S.",
   },
-  resolve: (argTypes, nargout) => {
-    if (nargout > 1 || argTypes.length < 1 || argTypes.length > 2) return null;
-    return {
-      outputTypes: [{ kind: "sparse_matrix", isComplex: false }],
-      apply: args => {
-        let n: number;
-        let lowerIdx: Int32Array;
-        if (args.length === 1) {
-          const S = toSparseArg(args[0], "sprandsym");
-          if (S.m !== S.n)
-            throw new RuntimeError("sprandsym: S must be square");
-          n = S.n;
-          const idx: number[] = [];
-          for (let j = 0; j < n; j++)
-            for (let k = S.jc[j]; k < S.jc[j + 1]; k++)
-              if (S.ir[k] >= j) idx.push(j * n + S.ir[k]);
-          lowerIdx = Int32Array.from(idx);
-        } else {
-          n = Math.round(toNumber(args[0]));
-          const density = toNumber(args[1]);
-          if (!(density >= 0 && density <= 1))
-            throw new RuntimeError("sprandsym: density must be in [0, 1]");
-          // Sample within the lower triangle (including the diagonal); each
-          // off-diagonal entry is mirrored, so about density*n*n total.
-          const tri = (n * (n + 1)) / 2;
-          const k = Math.min(tri, Math.round((density * n * n) / 2));
-          const triIdx = sampleDistinct(tri, k);
-          const lin: number[] = [];
-          for (let t = 0; t < triIdx.length; t++) {
-            // Map triangle index -> (row >= col) in column-major order.
-            let r = triIdx[t];
-            let col = 0;
-            while (r >= n - col) {
-              r -= n - col;
-              col++;
-            }
-            lin.push(col * n + col + r);
-          }
-          lowerIdx = Int32Array.from(lin).sort();
+  nargin: [1, 4],
+  mfile: true,
+  apply: args => {
+    if (args.length > 2)
+      throw new RuntimeError(
+        "sprandsym: the condition-number forms sprandsym(n, density, rc, ...) are not supported"
+      );
+    let n: number;
+    let lowerIdx: Int32Array;
+    if (args.length === 1) {
+      const S = toSparseArg(args[0]);
+      if (S.m !== S.n) throw new RuntimeError("sprandsym: S must be square");
+      n = S.n;
+      const idx: number[] = [];
+      for (let j = 0; j < n; j++)
+        for (let k = S.jc[j]; k < S.jc[j + 1]; k++)
+          if (S.ir[k] >= j) idx.push(j * n + S.ir[k]);
+      lowerIdx = Int32Array.from(idx);
+    } else {
+      n = Math.round(realScalarArg(args[0]));
+      const density = realScalarArg(args[1]);
+      if (!(density >= 0 && density <= 1))
+        throw new RuntimeError("sprandsym: density must be in [0, 1]");
+      // Sample within the lower triangle (including the diagonal); each
+      // off-diagonal entry is mirrored, so about density*n*n total.
+      const tri = (n * (n + 1)) / 2;
+      const k = Math.min(tri, Math.round((density * n * n) / 2));
+      const triIdx = sampleDistinct(tri, k);
+      const lin: number[] = [];
+      for (let t = 0; t < triIdx.length; t++) {
+        // Map triangle index -> (row >= col) in column-major order.
+        let r = triIdx[t];
+        let col = 0;
+        while (r >= n - col) {
+          r -= n - col;
+          col++;
         }
-        const lower = sparseFromLinearIndices(n, n, lowerIdx, boxMullerRandom);
-        // Mirror: S = L + L' - diag(L).
-        const Lt = sparseTranspose(lower);
-        const dense = sparseToDense(lower).data;
-        const denseT = sparseToDense(Lt).data;
-        for (let i = 0; i < dense.length; i++) dense[i] += denseT[i];
-        for (let i = 0; i < n; i++) dense[i + i * n] /= 2;
-        return denseDataToSparse(dense, n, n);
-      },
-    };
+        lin.push(col * n + col + r);
+      }
+      lowerIdx = Int32Array.from(lin).sort();
+    }
+    const lower = sparseFromLinearIndices(n, n, lowerIdx, boxMullerRandom);
+    // Mirror: S = L + L' - diag(L).
+    const Lt = sparseTranspose(lower);
+    const dense = sparseToDense(lower).data;
+    const denseT = sparseToDense(Lt).data;
+    for (let i = 0; i < dense.length; i++) dense[i] += denseT[i];
+    for (let i = 0; i < n; i++) dense[i + i * n] /= 2;
+    return denseDataToSparse(dense, n, n);
   },
 });
 
@@ -388,7 +377,7 @@ function denseIsTriangular(
   return true;
 }
 
-registerIBuiltin({
+builtin({
   name: "decomposition",
   help: {
     signatures: [
@@ -401,12 +390,13 @@ registerIBuiltin({
     description:
       "Factor a square matrix once and reuse the factors: dA \\ b and b / dA solve with the stored factorization. type is 'auto' (default), 'chol', 'lu', or 'triangular'; other MATLAB types fall back to LU. Sparse matrices use the sparse Cholesky / LU with a fill-reducing ordering. Properties: MatrixSize, Type, Datatype, IsReal, IsConjugateTransposed, ScaleFactor, CheckCondition.",
   },
-  resolve: (argTypes, nargout) => {
-    if (argTypes.length < 1 || nargout > 1) return null;
-    return {
-      outputTypes: [{ kind: "unknown" }],
-      apply: args => buildDecomposition(args),
-    };
+  mfile: true,
+  apply: args => {
+    if (args.length === 0)
+      throw new RuntimeError(
+        "decomposition: the empty form decomposition() is not supported"
+      );
+    return buildDecomposition(args);
   },
 });
 
@@ -438,8 +428,8 @@ function buildDecomposition(args: RuntimeValue[]): RuntimeValue {
       if (i + 1 >= args.length)
         throw new RuntimeError(`decomposition: missing value for '${s}'`);
       const v = args[i + 1];
-      if (s === "checkcondition") checkCondition = toNumber(v) !== 0;
-      if (s === "lupivottolerance") luTol = toNumber(v);
+      if (s === "checkcondition") checkCondition = realScalarArg(v) !== 0;
+      if (s === "lupivottolerance") luTol = realScalarArg(v);
       i += 2;
       continue;
     }
@@ -483,10 +473,10 @@ function buildDecomposition(args: RuntimeValue[]): RuntimeValue {
       );
     S = A;
     n = A.n;
-  } else if (isRuntimeTensor(A) || isRuntimeNumber(A)) {
-    const t = isRuntimeNumber(A)
-      ? RTV.tensor(allocFloat64Array([A]), [1, 1])
-      : A;
+  } else if (isRuntimeTensor(A) || isRuntimeNumber(A) || isRuntimeLogical(A)) {
+    const t = isRuntimeTensor(A)
+      ? A
+      : RTV.tensor(allocFloat64Array([Number(A)]), [1, 1]);
     if (t.imag)
       throw new RuntimeError(
         "decomposition: complex matrices are not supported"
@@ -590,25 +580,20 @@ function decompositionRcond(d: RuntimeClassInstance): number {
   return typeof rc === "number" ? rc : 1;
 }
 
-registerIBuiltin({
+builtin({
   name: "isIllConditioned",
   help: {
     signatures: ["tf = isIllConditioned(dA)"],
     description:
       "True if the matrix stored in a decomposition object is ill conditioned (reciprocal condition estimate below eps).",
   },
-  resolve: (argTypes, nargout) => {
-    if (argTypes.length !== 1 || nargout > 1) return null;
-    return {
-      outputTypes: [{ kind: "boolean" }],
-      apply: args => {
-        if (!isDecomposition(args[0]))
-          throw new RuntimeError(
-            "isIllConditioned: argument must be a decomposition object"
-          );
-        return RTV.logical(decompositionRcond(args[0]) < Number.EPSILON);
-      },
-    };
+  nargin: 1,
+  apply: args => {
+    if (!isDecomposition(args[0]))
+      throw new RuntimeError(
+        "isIllConditioned: argument must be a decomposition object"
+      );
+    return RTV.logical(decompositionRcond(args[0]) < Number.EPSILON);
   },
 });
 

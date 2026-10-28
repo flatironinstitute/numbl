@@ -7,9 +7,10 @@
  *   - `size(A, k)`      → scalar (k-th dim, 1-based).
  *   - `[d1, d2, ...]    → one scalar per requested output. Each output
  *     = size(A)`          slot i (0-based) returns `A.dims[i]` when
- *                         i < ndim and 1 otherwise — matches numbl,
- *                         which does NOT collapse trailing dims into
- *                         the last output (unlike MATLAB).
+ *                         i < ndim and 1 otherwise, except the last,
+ *                         which is the product of the remaining dims
+ *                         (as in MATLAB: `[r, c] = size(zeros(2,3,4))`
+ *                         gives c = 12).
  *
  * Multi-output combined with the `dim` arg is rejected — numbl
  * silently drops the extra outputs in that combo (leaves them
@@ -84,21 +85,29 @@ export const size: Builtin = {
     const ndim = a.dims.length;
     if (nargout >= 2) {
       // One scalar per output slot. Each slot i is A.dims[i] when
-      // i < ndim, else 1. When the static shape is known, propagate
-      // the exact value (and sign); otherwise nonneg.
+      // i < ndim, else 1; the last slot is the product of the dims from
+      // i on. When those dims are statically known, propagate the exact
+      // value (and sign); otherwise nonneg.
       const out: NumericType[] = [];
       for (let i = 0; i < nargout; i++) {
-        if (a.shape !== undefined) {
-          const v = i < ndim ? a.shape[i] : 1;
-          out.push(scalarDouble(signFromNumber(v), v));
-        } else if (i < ndim && a.dims[i].kind === "exact") {
-          const v = (a.dims[i] as { kind: "exact"; value: number }).value;
-          out.push(scalarDouble(signFromNumber(v), v));
-        } else if (i >= ndim) {
+        if (i >= ndim) {
           out.push(scalarDouble("positive", 1));
-        } else {
-          out.push(scalarDouble("nonneg"));
+          continue;
         }
+        const last = i === nargout - 1 ? ndim : i + 1;
+        let v: number | undefined = 1;
+        for (let k = i; k < last && v !== undefined; k++) {
+          const d = a.dims[k];
+          if (a.shape !== undefined) v *= a.shape[k];
+          else if (d.kind === "exact")
+            v *= (d as { kind: "exact"; value: number }).value;
+          else v = undefined;
+        }
+        out.push(
+          v !== undefined
+            ? scalarDouble(signFromNumber(v), v)
+            : scalarDouble("nonneg")
+        );
       }
       return out;
     }
@@ -129,14 +138,19 @@ export const size: Builtin = {
     }
     // Multi-output: emit a comma-expression that writes each requested
     // dim through its out-pointer. Each slot i is `(double)A.dims[i]`
-    // when i < ndim, else `1.0`. The framework's wrapping `;` makes
-    // the comma-expression a complete statement.
+    // when i < ndim, else `1.0`; the last slot is the product of the
+    // remaining dims. The framework's wrapping `;` makes the
+    // comma-expression a complete statement.
     if (nargout >= 2) {
       const outs = outArgsC ?? [];
       const ndim = a.dims.length;
       const writes: string[] = [];
       for (let i = 0; i < nargout; i++) {
-        const rhs = i < ndim ? `(double)${argsC[0]}.dims[${i}]` : `1.0`;
+        const last = i === nargout - 1 ? ndim : i + 1;
+        const factors: string[] = [];
+        for (let k = i; k < last; k++)
+          factors.push(`(double)${argsC[0]}.dims[${k}]`);
+        const rhs = factors.length > 0 ? factors.join(" * ") : `1.0`;
         writes.push(`(*${outs[i]} = ${rhs})`);
       }
       return `((void)(${writes.join(", ")}))`;
@@ -179,12 +193,17 @@ export const size: Builtin = {
     }
     // Multi-output: return a JS array literal `[d1, d2, ...]` the
     // framework destructures into the out-targets. Each slot i is
-    // `<arg>.shape[i] ?? 1`.
+    // `<arg>.shape[i] ?? 1`; the last slot is the product of the
+    // remaining dims.
     if (nargout >= 2) {
       const ndim = a.dims.length;
       const dims: string[] = [];
       for (let i = 0; i < nargout; i++) {
-        dims.push(i < ndim ? `${argsJs[0]}.shape[${i}]` : `1`);
+        const last = i === nargout - 1 ? ndim : i + 1;
+        const factors: string[] = [];
+        for (let k = i; k < last; k++)
+          factors.push(`(${argsJs[0]}.shape[${k}] ?? 1)`);
+        dims.push(factors.length > 0 ? factors.join(" * ") : `1`);
       }
       return `[${dims.join(", ")}]`;
     }

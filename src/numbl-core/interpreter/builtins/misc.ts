@@ -15,9 +15,11 @@ import {
 } from "../../runtime/types.js";
 import type { RuntimeValue, RuntimeStruct } from "../../runtime/types.js";
 import { RTV, RuntimeError } from "../../runtime/index.js";
-import { toNumber } from "../../runtime/convert.js";
+
 import { toString } from "../../runtime/convert.js";
-import { registerIBuiltin, getIBuiltinNargin } from "./types.js";
+import { getIBuiltinNargin, getIBuiltin } from "./types.js";
+import { builtin } from "./builtin.js";
+import { builtinError, realScalarArg } from "./args.js";
 import { tryDatetimeDurationBinop } from "./datetime.js";
 import { tryDecompositionDivide } from "./sparse-solvers.js";
 import {
@@ -46,63 +48,65 @@ import { parseShapeArgs } from "../../helpers/shape-utils.js";
 
 // ── substruct ────────────────────────────────────────────────────────────
 
-registerIBuiltin({
+builtin({
   name: "substruct",
-  resolve: () => ({
-    outputTypes: [{ kind: "unknown" }],
-    apply: args => {
-      if (args.length < 2 || args.length % 2 !== 0)
+  mfile: true,
+  apply: args => {
+    if (args.length < 2)
+      throw builtinError(
+        "MATLAB:substruct:nargin",
+        "SUBSTRUCT takes at least two arguments."
+      );
+    if (args.length % 2 !== 0)
+      throw builtinError(
+        "MATLAB:substruct:narginOdd",
+        "SUBSTRUCT takes an even number of arguments."
+      );
+    const elements: RuntimeStruct[] = [];
+    for (let i = 0; i < args.length; i += 2) {
+      const typeArg = args[i];
+      const subsArg = args[i + 1];
+      if (!isRuntimeChar(typeArg) && !isRuntimeString(typeArg))
+        throw new RuntimeError("substruct: type must be a string");
+      const typeStr = isRuntimeChar(typeArg)
+        ? typeArg.value
+        : isRuntimeString(typeArg)
+          ? typeArg
+          : "";
+      if (typeStr !== "." && typeStr !== "()" && typeStr !== "{}")
         throw new RuntimeError(
-          "substruct requires pairs of (type, subs) arguments"
+          `substruct: type must be '.', '()', or '{}', got '${typeStr}'`
         );
-      const elements: RuntimeStruct[] = [];
-      for (let i = 0; i < args.length; i += 2) {
-        const typeArg = args[i];
-        const subsArg = args[i + 1];
-        if (!isRuntimeChar(typeArg) && !isRuntimeString(typeArg))
-          throw new RuntimeError("substruct: type must be a string");
-        const typeStr = isRuntimeChar(typeArg)
-          ? typeArg.value
-          : isRuntimeString(typeArg)
-            ? typeArg
-            : "";
-        if (typeStr !== "." && typeStr !== "()" && typeStr !== "{}")
-          throw new RuntimeError(
-            `substruct: type must be '.', '()', or '{}', got '${typeStr}'`
-          );
-        let subs: RuntimeValue;
-        if (typeStr === ".") {
-          subs = subsArg;
-        } else {
-          subs = isRuntimeCell(subsArg) ? subsArg : RTV.cell([subsArg], [1, 1]);
-        }
-        elements.push(RTV.struct({ type: RTV.char(typeStr), subs }));
+      let subs: RuntimeValue;
+      if (typeStr === ".") {
+        subs = subsArg;
+      } else {
+        subs = isRuntimeCell(subsArg) ? subsArg : RTV.cell([subsArg], [1, 1]);
       }
-      return RTV.structArray(["type", "subs"], elements);
-    },
-  }),
+      elements.push(RTV.struct({ type: RTV.char(typeStr), subs }));
+    }
+    return RTV.structArray(["type", "subs"], elements);
+  },
 });
 
 // ── odeset ───────────────────────────────────────────────────────────────
 
-registerIBuiltin({
+builtin({
   name: "odeset",
-  resolve: () => ({
-    outputTypes: [{ kind: "struct" }],
-    apply: args => {
-      const fields = new Map<string, RuntimeValue>();
-      if (args.length % 2 !== 0)
-        throw new RuntimeError("odeset: expected name-value pairs");
-      for (let i = 0; i < args.length; i += 2) {
-        const key = args[i];
-        if (!isRuntimeChar(key) && !isRuntimeString(key))
-          throw new RuntimeError("odeset: option name must be a string");
-        const name = isRuntimeChar(key) ? key.value : (key as string);
-        fields.set(name, args[i + 1]);
-      }
-      return RTV.struct(Object.fromEntries(fields));
-    },
-  }),
+  mfile: true,
+  apply: args => {
+    const fields = new Map<string, RuntimeValue>();
+    if (args.length % 2 !== 0)
+      throw new RuntimeError("odeset: expected name-value pairs");
+    for (let i = 0; i < args.length; i += 2) {
+      const key = args[i];
+      if (!isRuntimeChar(key) && !isRuntimeString(key))
+        throw new RuntimeError("odeset: option name must be a string");
+      const name = isRuntimeChar(key) ? key.value : (key as string);
+      fields.set(name, args[i + 1]);
+    }
+    return RTV.struct(Object.fromEntries(fields));
+  },
 });
 
 // ── weboptions ──────────────────────────────────────────────────────────
@@ -122,184 +126,200 @@ const WEBOPTIONS_DEFAULTS: Record<string, RuntimeValue> = {
   CertificateFilename: RTV.char("default"),
 };
 
-registerIBuiltin({
+builtin({
   name: "weboptions",
-  resolve: () => ({
-    outputTypes: [{ kind: "struct" }],
-    apply: args => {
-      const fields = new Map<string, RuntimeValue>();
-      // Start with defaults
-      for (const [k, v] of Object.entries(WEBOPTIONS_DEFAULTS)) {
-        fields.set(k, v);
-      }
-      if (args.length % 2 !== 0)
-        throw new RuntimeError("weboptions: expected name-value pairs");
-      for (let i = 0; i < args.length; i += 2) {
-        const key = args[i];
-        if (!isRuntimeChar(key) && !isRuntimeString(key))
-          throw new RuntimeError("weboptions: option name must be a string");
-        const name = isRuntimeChar(key) ? key.value : (key as string);
-        if (!(name in WEBOPTIONS_DEFAULTS))
-          throw new RuntimeError(`weboptions: unknown option '${name}'`);
-        fields.set(name, args[i + 1]);
-      }
-      return RTV.struct(Object.fromEntries(fields));
-    },
-  }),
+  mfile: true,
+  apply: args => {
+    const fields = new Map<string, RuntimeValue>();
+    // Start with defaults
+    for (const [k, v] of Object.entries(WEBOPTIONS_DEFAULTS)) {
+      fields.set(k, v);
+    }
+    if (args.length % 2 !== 0)
+      throw new RuntimeError("weboptions: expected name-value pairs");
+    for (let i = 0; i < args.length; i += 2) {
+      const key = args[i];
+      if (!isRuntimeChar(key) && !isRuntimeString(key))
+        throw new RuntimeError("weboptions: option name must be a string");
+      const name = isRuntimeChar(key) ? key.value : (key as string);
+      if (!(name in WEBOPTIONS_DEFAULTS))
+        throw new RuntimeError(`weboptions: unknown option '${name}'`);
+      fields.set(name, args[i + 1]);
+    }
+    return RTV.struct(Object.fromEntries(fields));
+  },
 });
 
 // ── odeget ───────────────────────────────────────────────────────────────
 
-registerIBuiltin({
+builtin({
   name: "odeget",
-  resolve: () => ({
-    outputTypes: [{ kind: "unknown" }],
-    apply: args => {
-      if (args.length < 2)
-        throw new RuntimeError("odeget: requires 2 arguments (options, name)");
-      const opts = args[0];
-      const key = args[1];
-      if (!isRuntimeChar(key) && !isRuntimeString(key))
-        throw new RuntimeError("odeget: option name must be a string");
-      const name = isRuntimeChar(key) ? key.value : (key as string);
-      if (
-        opts &&
-        typeof opts === "object" &&
-        "kind" in opts &&
-        opts.kind === "struct"
-      ) {
-        const val = (
-          opts as { kind: "struct"; fields: Map<string, RuntimeValue> }
-        ).fields.get(name);
-        if (val !== undefined) return val;
-      }
-      // Return empty if not found (matches MATLAB)
-      return RTV.tensor(allocFloat64Array(0), [0, 0]);
-    },
-  }),
+  // odeget(options, name, default): the default is returned when the
+  // option is missing or empty.
+  nargin: [2, 3],
+  mfile: true,
+  apply: args => {
+    const fallback = args.length >= 3 ? args[2] : undefined;
+    const opts = args[0];
+    const key = args[1];
+    if (!isRuntimeChar(key) && !isRuntimeString(key))
+      throw new RuntimeError("odeget: option name must be a string");
+    const name = isRuntimeChar(key) ? key.value : (key as string);
+    if (
+      opts &&
+      typeof opts === "object" &&
+      "kind" in opts &&
+      opts.kind === "struct"
+    ) {
+      const val = (
+        opts as { kind: "struct"; fields: Map<string, RuntimeValue> }
+      ).fields.get(name);
+      if (val !== undefined && !(fallback !== undefined && isEmptyValue(val)))
+        return val;
+    }
+    // Return the default, or empty if none (matches MATLAB)
+    return fallback ?? RTV.tensor(allocFloat64Array(0), [0, 0]);
+  },
 });
+
+/** True for an empty array value ([] , '', {}). */
+function isEmptyValue(v: RuntimeValue): boolean {
+  if (isRuntimeTensor(v)) return v.data.length === 0;
+  if (isRuntimeChar(v)) return v.value.length === 0;
+  if (isRuntimeCell(v)) return v.data.length === 0;
+  return false;
+}
 
 // ── peaks ────────────────────────────────────────────────────────────────
 
-registerIBuiltin({
+builtin({
   name: "peaks",
-  resolve: () => ({
-    outputTypes: [{ kind: "tensor", isComplex: false }],
-    apply: args => {
-      const n =
-        args.length > 0
-          ? isRuntimeNumber(args[0])
-            ? (args[0] as number)
-            : toNumber(args[0])
-          : 49;
-      const data = allocFloat64Array(n * n);
-      for (let j = 0; j < n; j++) {
-        const y = -3 + (6 * j) / (n - 1);
-        for (let i = 0; i < n; i++) {
-          const x = -3 + (6 * i) / (n - 1);
-          const x2 = x * x;
-          const y2 = y * y;
-          const z =
-            3 * Math.pow(1 - x, 2) * Math.exp(-x2 - Math.pow(y + 1, 2)) -
-            10 * (x / 5 - x * x2 - Math.pow(y, 5)) * Math.exp(-x2 - y2) -
-            (1 / 3) * Math.exp(-Math.pow(x + 1, 2) - y2);
-          data[j * n + i] = z;
-        }
+  nargin: [0, 2],
+  nargout: 3,
+  mfile: true,
+  apply: (args, nargout) => {
+    if (args.length > 1)
+      throw new RuntimeError("peaks: the peaks(X, Y) form is not supported");
+    if (
+      args.length === 1 &&
+      !(
+        isRuntimeNumber(args[0]) ||
+        isRuntimeLogical(args[0]) ||
+        (isRuntimeTensor(args[0]) && args[0].data.length === 1)
+      )
+    )
+      throw new RuntimeError("peaks: the peaks(V) form is not supported");
+    const n = args.length > 0 ? realScalarArg(args[0]) : 49;
+    const data = allocFloat64Array(n * n);
+    // X(:, j) varies along columns, Y(i, :) along rows (meshgrid).
+    const X = allocFloat64Array(n * n);
+    const Y = allocFloat64Array(n * n);
+    for (let j = 0; j < n; j++) {
+      const x = -3 + (6 * j) / (n - 1);
+      for (let i = 0; i < n; i++) {
+        const y = -3 + (6 * i) / (n - 1);
+        X[j * n + i] = x;
+        Y[j * n + i] = y;
+        const x2 = x * x;
+        const y2 = y * y;
+        const z =
+          3 * Math.pow(1 - x, 2) * Math.exp(-x2 - Math.pow(y + 1, 2)) -
+          10 * (x / 5 - x * x2 - Math.pow(y, 5)) * Math.exp(-x2 - y2) -
+          (1 / 3) * Math.exp(-Math.pow(x + 1, 2) - y2);
+        data[j * n + i] = z;
       }
-      return RTV.tensor(data, [n, n]);
-    },
-  }),
+    }
+    const Z = RTV.tensor(data, [n, n]);
+    if (nargout <= 1) return Z;
+    return [RTV.tensor(X, [n, n]), RTV.tensor(Y, [n, n]), Z].slice(0, nargout);
+  },
 });
 
 // ── now ──────────────────────────────────────────────────────────────────
 
-registerIBuiltin({
+builtin({
   name: "now",
-  resolve: () => ({
-    outputTypes: [{ kind: "number" }],
-    apply: () => {
-      // MATLAB serial date number: days since Jan 0, year 0000
-      // Jan 1, 1970 = MATLAB day 719529
-      const matlabEpoch = 719529;
-      return matlabEpoch + Date.now() / 86400000;
-    },
-  }),
+  nargin: 0,
+  mfile: true,
+  apply: () => {
+    // MATLAB serial date number: days since Jan 0, year 0000
+    // Jan 1, 1970 = MATLAB day 719529
+    const matlabEpoch = 719529;
+    return matlabEpoch + Date.now() / 86400000;
+  },
 });
 
 // ── datestr ──────────────────────────────────────────────────────────────
 
-registerIBuiltin({
+builtin({
   name: "datestr",
-  resolve: () => ({
-    outputTypes: [{ kind: "char" }],
-    apply: args => {
-      if (args.length < 1)
-        throw new RuntimeError("datestr requires at least 1 argument");
-      const datenum = toNumber(args[0]);
-      // Convert MATLAB serial date to JS Date
-      const matlabEpoch = 719529;
-      const ms = (datenum - matlabEpoch) * 86400000;
-      const d = new Date(ms);
-      const months = [
-        "Jan",
-        "Feb",
-        "Mar",
-        "Apr",
-        "May",
-        "Jun",
-        "Jul",
-        "Aug",
-        "Sep",
-        "Oct",
-        "Nov",
-        "Dec",
-      ];
-      const day = String(d.getUTCDate()).padStart(2, "0");
-      const mon = months[d.getUTCMonth()];
-      const year = d.getUTCFullYear();
-      const hh = String(d.getUTCHours()).padStart(2, "0");
-      const mm = String(d.getUTCMinutes()).padStart(2, "0");
-      const ss = String(d.getUTCSeconds()).padStart(2, "0");
-      return RTV.char(`${day}-${mon}-${year} ${hh}:${mm}:${ss}`);
-    },
-  }),
+  nargin: [1, Infinity],
+  mfile: true,
+  apply: args => {
+    if (args.length > 1)
+      throw new RuntimeError(
+        "datestr: format and pivot-year arguments are not supported"
+      );
+    const datenum = realScalarArg(args[0]);
+    // Convert MATLAB serial date to JS Date
+    const matlabEpoch = 719529;
+    const ms = (datenum - matlabEpoch) * 86400000;
+    const d = new Date(ms);
+    const months = [
+      "Jan",
+      "Feb",
+      "Mar",
+      "Apr",
+      "May",
+      "Jun",
+      "Jul",
+      "Aug",
+      "Sep",
+      "Oct",
+      "Nov",
+      "Dec",
+    ];
+    const day = String(d.getUTCDate()).padStart(2, "0");
+    const mon = months[d.getUTCMonth()];
+    const year = d.getUTCFullYear();
+    const hh = String(d.getUTCHours()).padStart(2, "0");
+    const mm = String(d.getUTCMinutes()).padStart(2, "0");
+    const ss = String(d.getUTCSeconds()).padStart(2, "0");
+    return RTV.char(`${day}-${mon}-${year} ${hh}:${mm}:${ss}`);
+  },
 });
 
 // ── lastwarn ─────────────────────────────────────────────────────────────
 
-registerIBuiltin({
+builtin({
   name: "lastwarn",
-  resolve: () => ({
-    outputTypes: [{ kind: "char" }],
-    apply: () => RTV.char(""),
-  }),
+  // lastwarn(msg [, id]) sets the last warning; numbl does not track
+  // warnings, so it always reports an empty message and identifier.
+  nargin: [0, 2],
+  nargout: 2,
+  apply: (args, nargout) => {
+    if (args.length > 0 && nargout === 0) return;
+    if (nargout <= 1) return RTV.char("");
+    return [RTV.char(""), RTV.char("")];
+  },
 });
 
 // ── verLessThan ──────────────────────────────────────────────────────────
 
-registerIBuiltin({
+builtin({
   name: "verLessThan",
-  resolve: () => ({
-    outputTypes: [{ kind: "boolean" }],
-    apply: args => {
-      if (args.length !== 2)
-        throw new RuntimeError("verLessThan requires 2 arguments");
-      return false; // numbl aims to be like modern MATLAB
-    },
-  }),
+  nargin: 2,
+  mfile: true,
+  apply: () => false, // numbl aims to be like modern MATLAB
 });
 
 // ── usejava ──────────────────────────────────────────────────────────────
 
-registerIBuiltin({
+builtin({
   name: "usejava",
-  resolve: argTypes => {
-    if (argTypes.length !== 1) return null;
-    return {
-      outputTypes: [{ kind: "boolean" }],
-      apply: () => false,
-    };
-  },
+  nargin: 1,
+  mfile: true,
+  apply: () => false,
 });
 
 // ── clear / clc stubs ────────────────────────────────────────────────────
@@ -307,37 +327,77 @@ registerIBuiltin({
 // the no-op IBuiltin only covers reserved-word forms (`clear functions`,
 // `clear global`, …) which fall through from the special handler.
 
-for (const name of ["clear", "clc"]) {
-  registerIBuiltin({
-    name,
-    resolve: () => ({
-      outputTypes: [],
-      apply: () => undefined as unknown as RuntimeValue,
-    }),
-  });
-}
+builtin({ name: "clear", nargout: 0, apply: () => {} });
+builtin({ name: "clc", nargin: 0, nargout: 0, apply: () => {} });
 
 // ── nargin ──────────────────────────────────────────────────────────────
 
-registerIBuiltin({
+const narginoutBadInput = () =>
+  builtinError(
+    "MATLAB:narginout:BadInput",
+    "Argument must be either a character vector, string scalar, or a function handle."
+  );
+const notValidMfile = () =>
+  builtinError("MATLAB:narginout:notValidMfile", "Not a valid MATLAB file.");
+
+// nargin / nargout with no argument (inside a function) and nargin('name')
+// for user functions are interpreter specials, which need the caller's
+// scope. These builtins cover nargin(@f) and the remaining forms.
+builtin({
   name: "nargin",
-  resolve: argTypes => {
-    if (argTypes.length > 1) return null;
-    return {
-      outputTypes: [{ kind: "number" }],
-      apply: args => {
-        if (args.length === 1 && isRuntimeFunction(args[0])) {
-          const handle = args[0];
-          if (handle.nargin !== undefined) return handle.nargin;
-          if (handle.impl === "builtin" && handle.name) {
-            const n = getIBuiltinNargin(handle.name);
-            if (n !== undefined) return n;
-          }
-          return 0;
-        }
-        return 0;
-      },
-    };
+  nargin: 1,
+  apply: args => {
+    const v = args[0];
+    if (isRuntimeFunction(v)) {
+      if (v.nargin !== undefined) return v.nargin;
+      if (v.impl === "builtin" && v.name) {
+        const n = getIBuiltinNargin(v.name);
+        if (n !== undefined) return n;
+      }
+      return 0;
+    }
+    if (isRuntimeChar(v) || isRuntimeString(v)) {
+      const n = getIBuiltinNargin(toString(v));
+      if (n !== undefined) return n;
+      throw notValidMfile();
+    }
+    throw narginoutBadInput();
+  },
+});
+
+/** MATLAB's nargout for a builtin: its maximum output count, or -1 when
+ *  unbounded. Legacy builtins without arity metadata report -1. */
+function builtinNargout(name: string): number | undefined {
+  const ib = getIBuiltin(name);
+  if (!ib) return undefined;
+  if (!ib.direct) return -1;
+  const max = ib.direct.nargout[1];
+  return max === Infinity ? -1 : max;
+}
+
+builtin({
+  name: "nargout",
+  help: {
+    signatures: ["N = nargout", "N = nargout(FUN)"],
+    description:
+      "Number of output arguments of the current function, or the number declared by FUN (a function handle or name). A negative value -k means the last output is varargout and k-1 outputs precede it; anonymous functions report -1.",
+  },
+  nargin: 1,
+  apply: (args, _nargout, ctx) => {
+    const v = args[0];
+    if (isRuntimeFunction(v)) {
+      // Anonymous functions and handles to user functions carry their
+      // count; other named handles are builtins.
+      if (v.nargout !== undefined) return v.nargout;
+      return (v.name ? builtinNargout(v.name) : undefined) ?? -1;
+    }
+    if (isRuntimeChar(v) || isRuntimeString(v)) {
+      const name = toString(v);
+      const n = ctx.rt.declaredNargout?.(name) ?? builtinNargout(name);
+      if (n !== undefined) return n;
+      throw notValidMfile();
+    }
+    throw narginoutBadInput();
   },
 });
 
@@ -347,23 +407,20 @@ for (const [name, fillVal] of [
   ["true", 1],
   ["false", 0],
 ] as const) {
-  registerIBuiltin({
+  builtin({
     name,
-    resolve: () => ({
-      outputTypes: [{ kind: "unknown" }],
-      apply: rawArgs => {
-        // true/false accept a trailing 'logical' class spec; numbl ignores it.
-        const args = stripClassNameArgs(rawArgs);
-        if (args.length === 0) return RTV.logical(fillVal === 1);
-        let shape = parseShapeArgs(args);
-        if (shape.length === 1) shape = [shape[0], shape[0]];
-        const data = allocFloat64Array(shape.reduce((a, b) => a * b, 1));
-        if (fillVal) data.fill(1);
-        const t = RTV.tensor(data, shape);
-        t._isLogical = true;
-        return t;
-      },
-    }),
+    apply: rawArgs => {
+      // true/false accept a trailing 'logical' class spec; numbl ignores it.
+      const args = stripClassNameArgs(rawArgs);
+      if (args.length === 0) return RTV.logical(fillVal === 1);
+      let shape = parseShapeArgs(args);
+      if (shape.length === 1) shape = [shape[0], shape[0]];
+      const data = allocFloat64Array(shape.reduce((a, b) => a * b, 1));
+      if (fillVal) data.fill(1);
+      const t = RTV.tensor(data, shape);
+      t._isLogical = true;
+      return t;
+    },
   });
 }
 
@@ -388,60 +445,35 @@ const opMap: [string, (a: RuntimeValue, b: RuntimeValue) => RuntimeValue][] = [
 ];
 
 for (const [name, op] of opMap) {
-  registerIBuiltin({
+  builtin({
     name,
-    resolve: argTypes => {
-      if (argTypes.length !== 2) return null;
-      return {
-        outputTypes: [{ kind: "unknown" }],
-        apply: args => {
-          const dt = tryDatetimeDurationBinop(name, args[0], args[1]);
-          if (dt !== undefined) return dt;
-          if (name === "mldivide" || name === "mrdivide") {
-            const dec = tryDecompositionDivide(name, args[0], args[1]);
-            if (dec !== undefined) return dec;
-          }
-          return op(args[0], args[1]);
-        },
-      };
+    nargin: 2,
+    // mpower is an M-file in MATLAB.
+    mfile: name === "mpower",
+    apply: args => {
+      const dt = tryDatetimeDurationBinop(name, args[0], args[1]);
+      if (dt !== undefined) return dt;
+      if (name === "mldivide" || name === "mrdivide") {
+        const dec = tryDecompositionDivide(name, args[0], args[1]);
+        if (dec !== undefined) return dec;
+      }
+      return op(args[0], args[1]);
     },
   });
 }
 
-registerIBuiltin({
-  name: "uminus",
-  resolve: argTypes => {
-    if (argTypes.length !== 1) return null;
-    return {
-      outputTypes: [{ kind: "unknown" }],
-      apply: args => mNeg(args[0]),
-    };
-  },
-});
+builtin({ name: "uminus", nargin: 1, apply: args => mNeg(args[0]) });
 
-registerIBuiltin({
-  name: "uplus",
-  resolve: argTypes => {
-    if (argTypes.length !== 1) return null;
-    return {
-      outputTypes: [{ kind: "unknown" }],
-      apply: args => args[0],
-    };
-  },
-});
+builtin({ name: "uplus", nargin: 1, apply: args => args[0] });
 
 // ── Dummy/placeholder builtins ──────────────────────────────────────────
 
 // Dummy handle functions — return a dummy handle struct
-for (const name of ["groot", "gcf", "gca", "shg", "newplot"]) {
-  registerIBuiltin({
-    name,
-    resolve: () => ({
-      outputTypes: [{ kind: "unknown" }],
-      apply: () => RTV.dummyHandle(),
-    }),
-  });
-}
+for (const name of ["groot", "gcf", "gca", "newplot"])
+  builtin({ name, apply: () => RTV.dummyHandle() });
+
+// shg brings the current figure forward; it has no output.
+builtin({ name: "shg", nargin: 0, nargout: 0, mfile: true, apply: () => {} });
 
 // ishandle / ishghandle / isgraphics — test whether the argument is a graphics
 // handle. numbl represents handles either as handle objects (gcf/gca/...) or as
@@ -453,30 +485,25 @@ function ishandleScalar(x: number): boolean {
   return Number.isFinite(x) && x >= 0;
 }
 for (const name of ["ishandle", "ishghandle", "isgraphics"]) {
-  registerIBuiltin({
+  builtin({
     name,
-    resolve: argTypes => {
-      if (argTypes.length < 1) return null;
-      return {
-        outputTypes: [{ kind: "unknown" }],
-        apply: args => {
-          const v = args[0];
-          if (isRuntimeDummyHandle(v) || isRuntimeGraphicsHandle(v))
-            return RTV.logical(true);
-          if (isRuntimeNumber(v)) return RTV.logical(ishandleScalar(v));
-          if (isRuntimeLogical(v))
-            return RTV.logical(ishandleScalar(v ? 1 : 0));
-          if (isRuntimeTensor(v)) {
-            const out = allocFloat64Array(v.data.length);
-            for (let i = 0; i < v.data.length; i++)
-              out[i] = ishandleScalar(v.data[i]) ? 1 : 0;
-            const t = RTV.tensor(out, [...v.shape]);
-            t._isLogical = true;
-            return t;
-          }
-          return RTV.logical(false);
-        },
-      };
+    // ishghandle(h, type) and isgraphics(h, type) also take a type name.
+    nargin: name === "ishandle" ? 1 : [1, 2],
+    apply: args => {
+      const v = args[0];
+      if (isRuntimeDummyHandle(v) || isRuntimeGraphicsHandle(v))
+        return RTV.logical(true);
+      if (isRuntimeNumber(v)) return RTV.logical(ishandleScalar(v));
+      if (isRuntimeLogical(v)) return RTV.logical(ishandleScalar(v ? 1 : 0));
+      if (isRuntimeTensor(v)) {
+        const out = allocFloat64Array(v.data.length);
+        for (let i = 0; i < v.data.length; i++)
+          out[i] = ishandleScalar(v.data[i]) ? 1 : 0;
+        const t = RTV.tensor(out, [...v.shape]);
+        t._isLogical = true;
+        return t;
+      }
+      return RTV.logical(false);
     },
   });
 }
@@ -486,13 +513,10 @@ for (const name of ["ishandle", "ishghandle", "isgraphics"]) {
 // leading light/axes handle) and returns a placeholder Light handle when
 // one is requested (`cl = camlight(...)`). As a statement it produces no
 // output, so `ans` is left untouched.
-registerIBuiltin({
+builtin({
   name: "camlight",
-  resolve: () => ({
-    outputTypes: [{ kind: "unknown" }],
-    apply: (_args, nargout) =>
-      nargout >= 1 ? RTV.dummyHandle() : (undefined as unknown as RuntimeValue),
-  }),
+  mfile: true,
+  apply: (_args, nargout) => (nargout >= 1 ? RTV.dummyHandle() : undefined),
 });
 
 // waitbar — numbl is headless, so the progress dialog renders nothing. All
@@ -500,34 +524,29 @@ registerIBuiltin({
 // waitbar(...,'Name',value)) are accepted; a placeholder figure handle is
 // returned when one is requested (`h = waitbar(...)`). `close(h)` already
 // ignores its argument, so the handle can be passed straight back.
-registerIBuiltin({
+builtin({
   name: "waitbar",
-  resolve: () => ({
-    outputTypes: [{ kind: "unknown" }],
-    apply: (_args, nargout) =>
-      nargout >= 1 ? RTV.dummyHandle() : (undefined as unknown as RuntimeValue),
-  }),
+  nargin: [1, Infinity],
+  mfile: true,
+  apply: (_args, nargout) => (nargout >= 1 ? RTV.dummyHandle() : undefined),
 });
 
 // get(handle, propName) — return property value or dummy handle
-registerIBuiltin({
+builtin({
   name: "get",
-  resolve: () => ({
-    outputTypes: [{ kind: "unknown" }],
-    apply: (args: RuntimeValue[]) => {
-      // get(h, 'colormap') → return default 64×3 parula matrix
-      if (args.length >= 2) {
-        const prop = args[1];
-        const propStr = isRuntimeChar(prop)
-          ? prop.value
-          : isRuntimeString(prop)
-            ? prop
-            : "";
-        if (propStr.toLowerCase() === "colormap") return parulaColormap(64);
-      }
-      return RTV.dummyHandle();
-    },
-  }),
+  apply: args => {
+    // get(h, 'colormap') → return default 64×3 parula matrix
+    if (args.length >= 2) {
+      const prop = args[1];
+      const propStr = isRuntimeChar(prop)
+        ? prop.value
+        : isRuntimeString(prop)
+          ? prop
+          : "";
+      if (propStr.toLowerCase() === "colormap") return parulaColormap(64);
+    }
+    return RTV.dummyHandle();
+  },
 });
 
 // `set(handle, 'PropName', value, ...)` is registered as a runtime-closured
@@ -535,37 +554,18 @@ registerIBuiltin({
 // instructions so live edits reach the serialized plot viewer).
 
 // pathdef — no-op, returns empty string
-registerIBuiltin({
+builtin({
   name: "pathdef",
-  resolve: () => ({
-    outputTypes: [{ kind: "char" }],
-    apply: () => RTV.char(""),
-  }),
+  nargin: 0,
+  mfile: true,
+  apply: () => RTV.char(""),
 });
 
 // isnumbl — returns true (detect numbl runtime)
-registerIBuiltin({
-  name: "isnumbl",
-  resolve: argTypes => {
-    if (argTypes.length !== 0) return null;
-    return {
-      outputTypes: [{ kind: "boolean" }],
-      apply: () => true,
-    };
-  },
-});
+builtin({ name: "isnumbl", nargin: 0, apply: () => true });
 
 // filesep — platform file separator
-registerIBuiltin({
-  name: "filesep",
-  resolve: argTypes => {
-    if (argTypes.length !== 0) return null;
-    return {
-      outputTypes: [{ kind: "char" }],
-      apply: () => RTV.char("/"),
-    };
-  },
-});
+builtin({ name: "filesep", nargin: 0, apply: () => RTV.char("/") });
 
 // pwd / cd — implemented as special builtins in specialBuiltins.ts
 // (they need the SystemAdapter from Runtime).
@@ -573,23 +573,19 @@ registerIBuiltin({
 // mfilename — handled as a special builtin (needs runtime access to current file)
 
 // xlim/ylim — return empty array
-for (const name of ["xlim", "ylim"]) {
-  registerIBuiltin({
+for (const name of ["xlim", "ylim"])
+  builtin({
     name,
-    resolve: () => ({
-      outputTypes: [{ kind: "tensor", isComplex: false }],
-      apply: () => RTV.tensor(allocFloat64Array(0), [0, 0]),
-    }),
+    mfile: true,
+    apply: () => RTV.tensor(allocFloat64Array(0), [0, 0]),
   });
-}
 
 // listfonts — return empty cell
-registerIBuiltin({
+builtin({
   name: "listfonts",
-  resolve: () => ({
-    outputTypes: [{ kind: "unknown" }],
-    apply: () => RTV.cell([], [0, 0]),
-  }),
+  nargin: [0, 1],
+  mfile: true,
+  apply: () => RTV.cell([], [0, 0]),
 });
 
 // Colormap name functions — return the name as a char (so `colormap(jet)`
@@ -609,12 +605,11 @@ for (const cm of [
   "copper",
   "pink",
 ]) {
-  registerIBuiltin({
+  builtin({
     name: cm,
-    resolve: () => ({
-      outputTypes: [{ kind: "char" }],
-      apply: () => RTV.char(cm),
-    }),
+    nargin: [0, 1],
+    mfile: true,
+    apply: () => RTV.char(cm),
   });
 }
 
@@ -636,20 +631,19 @@ function parulaColormap(m: number): RuntimeValue {
   return RTV.tensor(data, [m, 3]);
 }
 
-registerIBuiltin({
+builtin({
   name: "parula",
-  resolve: () => ({
-    outputTypes: [{ kind: "unknown" }],
-    apply: (args: RuntimeValue[]) => {
-      if (
-        args.length >= 1 &&
-        (isRuntimeNumber(args[0]) || isRuntimeTensor(args[0]))
-      ) {
-        return parulaColormap(Math.max(0, Math.round(toNumber(args[0]))));
-      }
-      return RTV.char("parula");
-    },
-  }),
+  nargin: [0, 1],
+  mfile: true,
+  apply: args => {
+    if (
+      args.length >= 1 &&
+      (isRuntimeNumber(args[0]) || isRuntimeTensor(args[0]))
+    ) {
+      return parulaColormap(Math.max(0, Math.round(realScalarArg(args[0]))));
+    }
+    return RTV.char("parula");
+  },
 });
 
 // ── setappdata / getappdata / rmappdata / isappdata ────────────────────
@@ -689,101 +683,68 @@ function ensureBucket(key: number): Map<string, RuntimeValue> {
   return bucket;
 }
 
-registerIBuiltin({
+builtin({
   name: "setappdata",
-  resolve: argTypes => {
-    if (argTypes.length !== 3) return null;
-    return {
-      outputTypes: [],
-      apply: args => {
-        const key = getObjKey(args[0]);
-        const name = toString(args[1]);
-        const bucket = ensureBucket(key);
-        // Manage refcount: bucket takes ownership of the value, dropping
-        // any prior occupant. Without this the bucket holds a dangling
-        // reference once the caller's local goes out of scope, and a
-        // later getappdata + bind would underflow on the value's
-        // already-zero refcount.
-        const rt = getCurrentRuntime();
-        const old = bucket.get(name);
-        incref(args[2]);
-        bucket.set(name, args[2]);
-        if (old !== undefined && rt) decref(rt, old);
-        return [] as unknown as RuntimeValue;
-      },
-    };
+  nargin: 3,
+  nargout: 0,
+  apply: (args, _nargout, ctx) => {
+    const key = getObjKey(args[0]);
+    const name = toString(args[1]);
+    const bucket = ensureBucket(key);
+    // Manage refcount: bucket takes ownership of the value, dropping
+    // any prior occupant. Without this the bucket holds a dangling
+    // reference once the caller's local goes out of scope, and a
+    // later getappdata + bind would underflow on the value's
+    // already-zero refcount.
+    const old = bucket.get(name);
+    incref(args[2]);
+    bucket.set(name, args[2]);
+    if (old !== undefined) decref(ctx.rt, old);
   },
 });
 
-registerIBuiltin({
+builtin({
   name: "getappdata",
-  resolve: argTypes => {
-    if (argTypes.length === 2) {
-      return {
-        outputTypes: [{ kind: "unknown" }],
-        apply: args => {
-          const key = getObjKey(args[0]);
-          const name = toString(args[1]);
-          const bucket = appdataStore.get(key);
-          if (!bucket || !bucket.has(name))
-            return RTV.tensor(allocFloat64Array(0), [0, 0]);
-          return bucket.get(name)!;
-        },
-      };
+  nargin: [1, 2],
+  apply: args => {
+    const key = getObjKey(args[0]);
+    const bucket = appdataStore.get(key);
+    if (args.length === 2) {
+      const name = toString(args[1]);
+      if (!bucket || !bucket.has(name))
+        return RTV.tensor(allocFloat64Array(0), [0, 0]);
+      return bucket.get(name)!;
     }
-    if (argTypes.length === 1) {
-      return {
-        outputTypes: [{ kind: "struct" }],
-        apply: args => {
-          const key = getObjKey(args[0]);
-          const bucket = appdataStore.get(key);
-          if (!bucket || bucket.size === 0) return RTV.struct({});
-          const fields: Record<string, RuntimeValue> = {};
-          for (const [k, v] of bucket) fields[k] = v;
-          return RTV.struct(fields);
-        },
-      };
-    }
-    return null;
+    if (!bucket || bucket.size === 0) return RTV.struct({});
+    const fields: Record<string, RuntimeValue> = {};
+    for (const [k, v] of bucket) fields[k] = v;
+    return RTV.struct(fields);
   },
 });
 
-registerIBuiltin({
+builtin({
   name: "rmappdata",
-  resolve: argTypes => {
-    if (argTypes.length !== 2) return null;
-    return {
-      outputTypes: [],
-      apply: args => {
-        const key = getObjKey(args[0]);
-        const name = toString(args[1]);
-        const bucket = appdataStore.get(key);
-        if (bucket) {
-          const old = bucket.get(name);
-          if (bucket.delete(name) && old !== undefined) {
-            const rt = getCurrentRuntime();
-            if (rt) decref(rt, old);
-          }
-        }
-        return [] as unknown as RuntimeValue;
-      },
-    };
+  nargin: 2,
+  nargout: 0,
+  apply: (args, _nargout, ctx) => {
+    const key = getObjKey(args[0]);
+    const name = toString(args[1]);
+    const bucket = appdataStore.get(key);
+    if (bucket) {
+      const old = bucket.get(name);
+      if (bucket.delete(name) && old !== undefined) decref(ctx.rt, old);
+    }
   },
 });
 
-registerIBuiltin({
+builtin({
   name: "isappdata",
-  resolve: argTypes => {
-    if (argTypes.length !== 2) return null;
-    return {
-      outputTypes: [{ kind: "boolean" }],
-      apply: args => {
-        const key = getObjKey(args[0]);
-        const name = toString(args[1]);
-        const bucket = appdataStore.get(key);
-        return !!(bucket && bucket.has(name));
-      },
-    };
+  nargin: 2,
+  apply: args => {
+    const key = getObjKey(args[0]);
+    const name = toString(args[1]);
+    const bucket = appdataStore.get(key);
+    return !!(bucket && bucket.has(name));
   },
 });
 
@@ -905,24 +866,24 @@ function convertJsonArray(arr: unknown[]): RuntimeValue {
   return RTV.cell(cells, [arr.length, 1]);
 }
 
-registerIBuiltin({
+builtin({
   name: "jsondecode",
-  resolve: argTypes => {
-    if (argTypes.length !== 1) return null;
-    return {
-      outputTypes: [{ kind: "unknown" }],
-      apply: args => {
-        const txt = toString(args[0]);
-        let parsed: unknown;
-        try {
-          parsed = JSON.parse(txt);
-        } catch (e) {
-          throw new RuntimeError(
-            `jsondecode: invalid JSON: ${e instanceof Error ? e.message : String(e)}`
-          );
-        }
-        return convertJsonValue(parsed);
-      },
-    };
+  nargin: 1,
+  apply: args => {
+    if (!isRuntimeChar(args[0]) && !isRuntimeString(args[0]))
+      throw builtinError(
+        "MATLAB:json:InvalidInput",
+        "JSON text must be a character vector or a scalar non-missing string."
+      );
+    const txt = toString(args[0]);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(txt);
+    } catch (e) {
+      throw new RuntimeError(
+        `jsondecode: invalid JSON: ${e instanceof Error ? e.message : String(e)}`
+      );
+    }
+    return convertJsonValue(parsed);
   },
 });

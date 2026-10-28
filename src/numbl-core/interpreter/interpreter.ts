@@ -243,6 +243,8 @@ export class Interpreter {
 
     this.rt.getClassAncestors = (className: string) =>
       this.code.classes.ancestors(className);
+
+    this.rt.declaredNargout = (name: string) => this.declaredNargout(name);
   }
 
   /** Run a complete AST (main script). */
@@ -343,6 +345,7 @@ export class Interpreter {
     narginOverride?: number
   ) => unknown;
   declare declaredNargin: (name: string) => number | undefined;
+  declare declaredNargout: (name: string) => number | undefined;
   declare interpretTarget: (
     target: ResolvedTarget,
     args: unknown[],
