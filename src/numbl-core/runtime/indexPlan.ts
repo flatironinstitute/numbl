@@ -765,7 +765,9 @@ function storeSubs(
   if (rhsNumel !== 1) {
     const lhs: number[] = [];
     for (let d = 0; d < k; d++) lhs.push(subsR[d].count);
-    if (!sameDims(squeezed(lhs), squeezed(rhsShape))) {
+    // An empty RHS fits any empty selection, whatever its shape (MATLAB).
+    const emptyIntoEmpty = rhsNumel === 0 && lhs.some(n => n === 0);
+    if (!emptyIntoEmpty && !sameDims(squeezed(lhs), squeezed(rhsShape))) {
       throw new RuntimeError(
         `Unable to perform assignment because the size of the left side is ${sizeStr(trimShape(lhs))} and the size of the right side is ${sizeStr(rhsShape)}.`
       );

@@ -1,6 +1,6 @@
 /**
  * Main-thread side of numbl-worker.ts: owns the Worker and the handling every
- * host shares (input() prompts over a SharedArrayBuffer, cooperative
+ * host shares (input() prompts over the blocking channel, cooperative
  * cancellation, the uihtml iframe relay, plot instructions, VFS changes).
  * Hosts supply callbacks for the rest; React code uses `useNumblWorker`.
  */
@@ -23,7 +23,12 @@ import type {
   ToNumblWorker,
   WorkerVfsFile,
 } from "./numblWorkerProtocol.js";
-import { createInputSAB, mainThreadRespond } from "./syncInputChannel.js";
+import { InputServer } from "./inputChannel.js";
+import {
+  clearCancel,
+  createCancelBuffer,
+  signalCancel,
+} from "./numbl-core/runtime/blockingChannel.js";
 import type { VfsChanges } from "./vfs/VirtualFileSystem.js";
 
 export interface NumblWorkerHandlers {
@@ -58,7 +63,7 @@ export interface NumblWorkerOptions {
 export class NumblWorkerClient {
   private worker: Worker | null = null;
   private unlistenUihtml: (() => void) | null = null;
-  private readonly inputSAB: SharedArrayBuffer | null;
+  private readonly input: InputServer | null;
   private readonly cancelSAB: SharedArrayBuffer | null;
   private optimization: OptLevel | undefined;
 
@@ -66,12 +71,17 @@ export class NumblWorkerClient {
     private handlers: NumblWorkerHandlers = {},
     private readonly options: NumblWorkerOptions = {}
   ) {
-    this.inputSAB =
-      options.interactiveInput === false ? null : createInputSAB();
-    this.cancelSAB =
-      typeof SharedArrayBuffer !== "undefined"
-        ? new SharedArrayBuffer(4)
-        : null;
+    // input() blocks on the channel bound to the cancel buffer, so both
+    // need SharedArrayBuffer.
+    this.cancelSAB = createCancelBuffer();
+    this.input =
+      options.interactiveInput === false || !this.cancelSAB
+        ? null
+        : new InputServer(prompt => {
+            const ask = this.handlers.onInputRequest;
+            if (ask) ask(prompt);
+            else this.respondToInput(window.prompt(prompt) ?? "");
+          });
   }
 
   /** Replace the callbacks; later messages go to the new ones. */
@@ -96,9 +106,7 @@ export class NumblWorkerClient {
         url: this.options.wasmBridgeUrl(),
       });
     }
-    if (this.inputSAB) {
-      this.post({ type: "set_input_sab", inputSAB: this.inputSAB });
-    }
+    if (this.input) this.post({ type: "set_input", enabled: true });
     if (this.optimization) {
       this.post({ type: "set_optimization", optimization: this.optimization });
     }
@@ -144,10 +152,11 @@ export class NumblWorkerClient {
     });
   }
 
-  /** Ask the running code to stop at its next check; the worker keeps its
-   *  state and reports the run as done. */
+  /** Ask the running code to stop at its next check (or at once, if it is
+   *  blocked in input(), pause or gpu.call); the worker keeps its state and
+   *  reports the run as done. */
   cancel(): void {
-    if (this.cancelSAB) Atomics.store(new Int32Array(this.cancelSAB), 0, 1);
+    if (this.cancelSAB) signalCancel(this.cancelSAB);
   }
 
   updateWorkspace(
@@ -175,7 +184,7 @@ export class NumblWorkerClient {
 
   /** Answer the pending input() request. */
   respondToInput(text: string): void {
-    if (this.inputSAB) mainThreadRespond(this.inputSAB, text);
+    this.input?.respond(text);
   }
 
   sendUihtmlEvent(ev: UihtmlPageEvent): void {
@@ -183,16 +192,13 @@ export class NumblWorkerClient {
   }
 
   private resetCancel(): void {
-    if (this.cancelSAB) Atomics.store(new Int32Array(this.cancelSAB), 0, 0);
+    if (this.cancelSAB) clearCancel(this.cancelSAB);
   }
 
   private handleMessage(msg: FromNumblWorker): void {
     const h = this.handlers;
+    if (this.input?.handle(msg)) return;
     switch (msg.type) {
-      case "request-input":
-        if (h.onInputRequest) h.onInputRequest(msg.prompt ?? "");
-        else this.respondToInput(prompt(msg.prompt ?? "") ?? "");
-        return;
       case "output":
         h.onOutput?.(msg.text);
         return;

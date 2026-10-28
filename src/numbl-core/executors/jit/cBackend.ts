@@ -23,6 +23,7 @@ import {
 } from "./typeAdapterC.js";
 import {
   bindCancel,
+  bindHostNumeric,
   bindHostWrite,
   bindRaise,
   makeCMarshalCtx,
@@ -94,6 +95,7 @@ export const cBackend: JitBackend<CArtifact> = {
     interp.onJitCompile?.(`${req.where}:${cName}${req.describe}`, source, "c");
     const compiled = compileAndLoadC(source, declaration, bridge);
     const koffi = bridge.koffi as Koffi;
+    bindHostNumeric(koffi, compiled.lib);
     return {
       compiled,
       signature,

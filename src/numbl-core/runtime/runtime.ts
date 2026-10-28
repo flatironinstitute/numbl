@@ -99,7 +99,11 @@ import {
   subsasgnCall as _subsasgnCall,
   memberChainAssign as _memberChainAssign,
 } from "./runtimeMemberAccess.js";
-import { syncSleep } from "./syncChannel.js";
+import {
+  blockingChannelFor,
+  sleepBlocking,
+  type BlockingChannel,
+} from "./blockingChannel.js";
 import {
   figuresReducer,
   initialFiguresState,
@@ -191,6 +195,9 @@ export class Runtime {
    *  once cancelled. The interpreter polls it between statements and calls
    *  (`checkCancel`); JIT'd code polls it in loops (see executors.md). */
   cancelFlag: Int32Array | null = null;
+  /** Bound to the same cancel buffer: where input(), pause and gpu.call
+   *  block, so Stop interrupts them (see blockingChannel.ts). */
+  blocking: BlockingChannel | null = null;
 
   // Line tracking
   public $line = 0;
@@ -411,6 +418,7 @@ export class Runtime {
     }
     if (options.cancelSAB) {
       this.cancelFlag = new Int32Array(options.cancelSAB);
+      this.blocking = blockingChannelFor(options.cancelSAB);
     }
   }
 
@@ -1508,7 +1516,7 @@ export class Runtime {
       typeof seconds === "number"
         ? seconds
         : toNumber(ensureRuntimeValue(seconds));
-    syncSleep(s * 1000);
+    sleepBlocking(s * 1000, this.blocking);
   }
 
   public readInput(prompt: string): string {

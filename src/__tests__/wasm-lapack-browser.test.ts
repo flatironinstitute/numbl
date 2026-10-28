@@ -1,13 +1,9 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { executeCode } from "../numbl-core/executeCode.js";
 import { isRuntimeTensor } from "../numbl-core/runtime/types.js";
+import { providerNames } from "../numbl-core/native/lapack-bridge.js";
 import {
-  setLapackBridge,
-  type LapackBridge,
-} from "../numbl-core/native/lapack-bridge.js";
-import {
-  setMatmulAccelerator,
-  getMatmulAccelerator,
+  uninstallWasmLapackBridge,
   ACCELERATOR_ABI,
   type WasmLapackExports,
 } from "../numbl-core/native/wasm-lapack-bridge.js";
@@ -87,8 +83,7 @@ function tensorVar(
 }
 
 afterEach(() => {
-  setMatmulAccelerator(null);
-  setLapackBridge(null as unknown as LapackBridge);
+  uninstallWasmLapackBridge();
   _resetWasmLapackLoaderForTests();
 });
 
@@ -101,7 +96,7 @@ describe("wasm-lapack-browser loader", () => {
       instantiate: async () => ({ exports }) as unknown as WebAssembly.Instance,
     });
     expect(ok).toBe(true);
-    expect(getMatmulAccelerator()).toBeTypeOf("function");
+    expect(providerNames()).toContain("wasm");
     // Manifest at base + filename; wasm URL resolved relative to manifest.
     expect(urls[0]).toBe("https://host.example/bridge/numbl-bridge.json");
     expect(urls[1]).toBe("https://host.example/bridge/bridge.abc123.wasm");
@@ -164,10 +159,10 @@ describe("wasm-lapack-browser loader", () => {
       fetchImpl,
       instantiate: async () => ({ exports }) as unknown as WebAssembly.Instance,
     });
-    expect(getMatmulAccelerator()).toBeTypeOf("function");
+    expect(providerNames()).toContain("wasm");
     const ok = await ensureWasmLapackBridge(null);
     expect(ok).toBe(false);
-    expect(getMatmulAccelerator()).toBeUndefined();
+    expect(providerNames()).not.toContain("wasm");
   });
 
   it("resolves false (best-effort) when the manifest 404s", async () => {
@@ -179,7 +174,7 @@ describe("wasm-lapack-browser loader", () => {
       },
     });
     expect(ok).toBe(false);
-    expect(getMatmulAccelerator()).toBeUndefined();
+    expect(providerNames()).not.toContain("wasm");
   });
 
   it("uses the byte cache when populated, and populates it on a miss", async () => {

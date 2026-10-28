@@ -3,8 +3,15 @@
 // `jit_tensor_mtimes_real_scalar` mirrors the C 1×k * k×1
 // inner-product path that returns a bare number instead of a
 // freshly-allocated 1×1 tensor.
+//
+// A host that installs `$numeric` (the numbl JIT host) takes the large
+// products, routing them through the interpreter's LAPACK provider stack
+// (BLAS when available) so they match --opt 0 bit for bit; it returns
+// null for small ones, which run the loops below, the same loops the
+// stack's inline provider runs.
 
 import { jit_tensor_alloc } from "../tensor/tensor_alloc.js";
+import { jit_tensor_make } from "../tensor/tensor.js";
 import { jit_raise_bail, jit_raise_error } from "../system/raise.js";
 
 export function jit_tensor_mtimes_real(a, b) {
@@ -18,17 +25,9 @@ export function jit_tensor_mtimes_real(a, b) {
   if (k !== k2) {
     jit_raise_error("", `Inner matrix dimensions must agree: ${k} vs ${k2}`);
   }
-  // Optional WASM LAPACK accelerator. When a host installs `$matmulAccel`
-  // (browser worker, after loading a bridge), delegate the multiply; a
-  // falsy return means "declined" (too small / error) and we fall through
-  // to the JS loop below. `typeof` guard is safe even when unset.
-  if (typeof $matmulAccel === "function") {
-    const accel = $matmulAccel(a.data, m, k, b.data, n);
-    if (accel) {
-      const acc = jit_tensor_alloc(m, n);
-      acc.data.set(accel);
-      return acc;
-    }
+  if (typeof $numeric === "object" && $numeric) {
+    const data = $numeric.matmul(a.data, m, k, b.data, n);
+    if (data) return jit_tensor_make([m, n], data);
   }
   const r = jit_tensor_alloc(m, n);
   for (let j = 0; j < n; j++) {
@@ -50,6 +49,10 @@ export function jit_tensor_mtimes_real_scalar(a, b) {
   // The translate-time type system has already proven a is 1×k and b
   // is k×1; this helper trusts that and just runs the inner product.
   const k = a.shape[1];
+  if (typeof $numeric === "object" && $numeric) {
+    const data = $numeric.matmul(a.data, 1, k, b.data, 1);
+    if (data) return data[0];
+  }
   let s = 0;
   for (let p = 0; p < k; p++) {
     s += a.data[p * a.shape[0]] * b.data[p];

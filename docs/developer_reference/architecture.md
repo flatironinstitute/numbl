@@ -51,5 +51,5 @@ All stream semantics live in `numbl-core/fileTable.ts`. A `FileIOAdapter` suppli
 ## Data flow
 
 - **Source → AST → RuntimeValue** is the critical path.
-- **Side channels**: output text, plot instructions, and diagnostics go out through callbacks on `ExecOptions`. Input (e.g., `input()`) comes back through a platform-provided callback: in the browser worker this is bridged through a `SharedArrayBuffer` so it can be synchronous.
+- **Side channels**: output text, plot instructions, and diagnostics go out through callbacks on `ExecOptions`. Input (e.g., `input()`) comes back through a platform-provided callback: in the browser worker this is a request on the blocking channel (`SharedArrayBuffer` + `Atomics.wait`, see [web-app.md](web-app.md#blocking-waits)) so it can be synchronous and still be stopped.
 - **JIT events** go through their own callbacks on `ExecOptions`: `onJitCompile` (generated code per unit) and `onJitBail` (runtime bails to the interpreter).

@@ -4,7 +4,12 @@
  * any bundler — or none — can consume this without worker-loading support.
  */
 import workerCode from "./generated/worker-code.txt";
-import { createInputSAB, mainThreadRespond } from "../syncInputChannel.js";
+import { InputServer } from "../inputChannel.js";
+import {
+  clearCancel,
+  createCancelBuffer,
+  signalCancel,
+} from "../numbl-core/runtime/blockingChannel.js";
 import type {
   BootFile,
   ExecuteResult,
@@ -82,7 +87,8 @@ export interface NumblSession {
   /**
    * Cooperatively interrupt the currently running `execute` (or boot script):
    * sets a shared cancel flag the worker polls at loop iterations and function
-   * calls, so it throws and the pending `execute` resolves with
+   * calls and wakes a blocked `input()`, `pause` or `gpu.call`, so the run
+   * throws and the pending `execute` resolves with
    * `aborted: true`. The worker and the persistent workspace survive — only
    * the running command is abandoned. No-op when `canInterrupt` is false.
    */
@@ -135,26 +141,23 @@ class NumblSessionImpl implements NumblSession {
     resolve: () => void;
     reject: (err: Error) => void;
   } | null = null;
-  // Cooperative-cancellation flag shared with the worker. Int32[0] != 0 means
-  // "cancel the running code". Only available when the page is cross-origin
-  // isolated (SharedArrayBuffer defined); otherwise null and interrupt() is a
-  // no-op. The same buffer serves every run — the host clears it before each
-  // execute and sets it in interrupt().
-  private readonly cancelBuffer =
-    typeof SharedArrayBuffer !== "undefined" ? new SharedArrayBuffer(4) : null;
-  private readonly cancelFlag = this.cancelBuffer
-    ? new Int32Array(this.cancelBuffer)
+  // Cancel buffer shared with the worker (Int32[0] != 0 cancels the running
+  // code). Only available when the page is cross-origin isolated
+  // (SharedArrayBuffer defined); otherwise null and interrupt() is a no-op.
+  // The same buffer serves every run: the host clears it before each execute
+  // and signals it in interrupt(), which also wakes a blocked input() or
+  // pause. input() requests arrive over the channel bound to it.
+  private readonly cancelBuffer = createCancelBuffer();
+  private readonly input = this.cancelBuffer
+    ? new InputServer(prompt => this.options.onInputRequest?.(prompt))
     : null;
-  // Shared channel for synchronous input() (null without cross-origin
-  // isolation). The worker blocks on it; provideInput() writes the reply.
-  private readonly inputBuffer = createInputSAB();
 
   get canInterrupt(): boolean {
-    return this.cancelFlag !== null;
+    return this.cancelBuffer !== null;
   }
 
   get canInput(): boolean {
-    return this.inputBuffer !== null;
+    return this.input !== null;
   }
 
   constructor(private options: NumblSessionOptions) {
@@ -185,7 +188,6 @@ class NumblSessionImpl implements NumblSession {
       maxIterations: o.maxIterations ?? 1e9,
       displayResults: o.displayResults ?? false,
       cancelSAB: this.cancelBuffer ?? undefined,
-      inputSAB: this.inputBuffer ?? undefined,
     });
     return new Promise<void>((resolve, reject) => {
       this.readyWaiter = { resolve, reject };
@@ -197,9 +199,7 @@ class NumblSessionImpl implements NumblSession {
     // Clear any leftover cancel signal so a prior interrupt() can't abort this
     // fresh run (executes are sequential, so this only ever clears a stale
     // flag from a previous, already-settled run).
-    if (this.cancelFlag) {
-      Atomics.store(this.cancelFlag, 0, 0);
-    }
+    if (this.cancelBuffer) clearCancel(this.cancelBuffer);
     const id = this.nextExecuteId++;
     this.post({ type: "execute", id, code });
     return new Promise<ExecuteResult>((resolve, reject) => {
@@ -208,15 +208,11 @@ class NumblSessionImpl implements NumblSession {
   }
 
   interrupt(): void {
-    if (this.cancelFlag) {
-      Atomics.store(this.cancelFlag, 0, 1);
-    }
+    if (this.cancelBuffer) signalCancel(this.cancelBuffer);
   }
 
   provideInput(text: string): void {
-    if (this.inputBuffer) {
-      mainThreadRespond(this.inputBuffer, text);
-    }
+    this.input?.respond(text);
   }
 
   writeFile(path: string, content: string | Uint8Array): void {
@@ -274,6 +270,7 @@ class NumblSessionImpl implements NumblSession {
   }
 
   private handleMessage(msg: FromWorker) {
+    if (this.input?.handle(msg)) return;
     switch (msg.type) {
       case "progress":
         this.options.onProgress?.(msg.message);
@@ -309,9 +306,6 @@ class NumblSessionImpl implements NumblSession {
         rw?.reject(new Error(msg.message));
         break;
       }
-      case "request-input":
-        this.options.onInputRequest?.(msg.prompt);
-        break;
       case "htmlSourceEvent":
         this.options.onHtmlSourceEvent?.(msg.compId, msg.name, msg.dataJson);
         break;

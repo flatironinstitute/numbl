@@ -28,6 +28,8 @@ import type { Type, NumericType } from "../../jit/index.js";
 import { isMultiElement } from "../../jit/index.js";
 import type { KoffiLib } from "./compileC.js";
 import { JIT_MAX_NDIM } from "./typeAdapterC.js";
+import { getLapackBridge } from "../../native/lapack-bridge.js";
+import { MATMUL_INLINE_MAX_WORK } from "../../native/inline-matmul.js";
 
 /** Loose koffi typing — same shape as in typeAdapterC.ts. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -119,6 +121,100 @@ export function bindHostWrite(
       }
     },
   };
+}
+
+/** The per-process koffi callbacks behind `jit_set_host_numeric`: views
+ *  over the C buffers, run through the LAPACK provider stack, and copy the
+ *  result into the C output. Return 0, or 1 when the provider threw. */
+let hostNumericCbs: [unknown, unknown] | null = null;
+function hostNumericCallbacks(koffi: KoffiAny): [unknown, unknown] {
+  if (hostNumericCbs !== null) return hostNumericCbs;
+  const f64 = (p: unknown, n: number): Float64Array =>
+    new Float64Array(koffi.view(p, n * 8));
+  const realProto = koffi.proto(
+    "int jit_host_matmul_cb(void *a, long m, long k, void *b, long n, void *out)"
+  );
+  const complexProto = koffi.proto(
+    "int jit_host_matmul_complex_cb(void *ar, void *ai, long m, long k, " +
+      "void *br, void *bi, long n, void *out_re, void *out_im)"
+  );
+  const real = koffi.register(
+    (
+      a: unknown,
+      m: number | bigint,
+      k: number | bigint,
+      b: unknown,
+      n: number | bigint,
+      out: unknown
+    ): number => {
+      try {
+        const [M, K, N] = [Number(m), Number(k), Number(n)];
+        const r = getLapackBridge().matmul(
+          f64(a, M * K),
+          M,
+          K,
+          f64(b, K * N),
+          N
+        );
+        f64(out, M * N).set(r);
+        return 0;
+      } catch {
+        return 1;
+      }
+    },
+    koffi.pointer(realProto)
+  );
+  const complex = koffi.register(
+    (
+      ar: unknown,
+      ai: unknown,
+      m: number | bigint,
+      k: number | bigint,
+      br: unknown,
+      bi: unknown,
+      n: number | bigint,
+      outRe: unknown,
+      outIm: unknown
+    ): number => {
+      try {
+        const [M, K, N] = [Number(m), Number(k), Number(n)];
+        const r = getLapackBridge().matmulComplex(
+          f64(ar, M * K),
+          ai === null ? new Float64Array(M * K) : f64(ai, M * K),
+          M,
+          K,
+          f64(br, K * N),
+          bi === null ? new Float64Array(K * N) : f64(bi, K * N),
+          N
+        );
+        f64(outRe, M * N).set(r.re);
+        const im = f64(outIm, M * N);
+        if (r.im) im.set(r.im);
+        else im.fill(0);
+        return 0;
+      } catch {
+        return 1;
+      }
+    },
+    koffi.pointer(complexProto)
+  );
+  hostNumericCbs = [real, complex];
+  return hostNumericCbs;
+}
+
+/** Bind the provider-stack matmul into an emitted `.so` (see
+ *  `runtime/tensor_ops/host_numeric.h`), so its large products match the
+ *  interpreter. Done once per loaded `.so`; a no-op when the spec has no
+ *  matrix product. */
+export function bindHostNumeric(koffi: KoffiAny, lib: KoffiLib): void {
+  let set: (re: unknown, cx: unknown, inlineMax: number) => void;
+  try {
+    set = lib.func("void jit_set_host_numeric(void *, void *, double)");
+  } catch {
+    return;
+  }
+  const [real, complex] = hostNumericCallbacks(koffi);
+  set(real, complex, MATMUL_INLINE_MAX_WORK);
 }
 
 /** The raise status a call left behind (see `runtime/system/raise.h`). */
