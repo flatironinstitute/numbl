@@ -51,6 +51,7 @@ import type { FileIOAdapter } from "../fileIOAdapter.js";
 import { type FileTable, fileIOView, fileTableFor } from "../fileTable.js";
 import type { SystemAdapter } from "../systemAdapter.js";
 import { ensureRuntimeValue } from "./runtimeHelpers.js";
+import { errorToMException } from "./mexception.js";
 import {
   uplus as _uplus,
   uminus as _uminus,
@@ -556,35 +557,11 @@ export class Runtime {
     }
   }
 
-  public wrapError(e: unknown): RuntimeStruct {
-    if (e instanceof RuntimeError) {
-      return RTV.struct(
-        new Map<string, RuntimeValue>([
-          ["identifier", RTV.char(e.identifier)],
-          ["message", RTV.char(e.message)],
-          ["cause", RTV.cell([], [0, 0])],
-          ["stack", buildStackField(e)],
-        ])
-      );
-    }
-    if (e instanceof Error) {
-      return RTV.struct(
-        new Map<string, RuntimeValue>([
-          ["identifier", RTV.char("")],
-          ["message", RTV.char(e.message)],
-          ["cause", RTV.cell([], [0, 0])],
-          ["stack", emptyStackField()],
-        ])
-      );
-    }
-    return RTV.struct(
-      new Map<string, RuntimeValue>([
-        ["identifier", RTV.char("")],
-        ["message", RTV.char(String(e))],
-        ["cause", RTV.cell([], [0, 0])],
-        ["stack", emptyStackField()],
-      ])
-    );
+  /** The MException `catch` binds for an error, with the stack of where
+   *  it was raised. */
+  public wrapError(e: unknown): RuntimeClassInstance {
+    this.annotateError(e);
+    return errorToMException(e);
   }
 
   // ── Call stack ──────────────────────────────────────────────────────
@@ -1429,78 +1406,6 @@ export const rstr = (s: RuntimeString | RuntimeChar): string => {
   if (isRuntimeChar(s)) return s.value;
   throw new RuntimeError(`Expected string or char, got ${kstr(s)}`);
 };
-
-// ── Error stack helpers ───────────────────────────────────────────────
-
-/** Empty MATLAB-style stack field: 0x1 struct with file/name/line fields. */
-export function emptyStackField(): RuntimeValue {
-  return RTV.structArray(["file", "name", "line"], []);
-}
-
-/**
- * Build a MATLAB-style stack struct array from a RuntimeError's callStack.
- * Index 1 is the innermost frame (where the error was thrown).
- */
-export function buildStackField(e: RuntimeError): RuntimeValue {
-  const fieldNames = ["file", "name", "line"];
-  const frames = e.callStack;
-  if (!frames || frames.length === 0) {
-    // No call stack info — synthesize a single frame from error's own location
-    if (e.file || e.line !== null) {
-      return RTV.structArray(fieldNames, [
-        RTV.struct(
-          new Map<string, RuntimeValue>([
-            ["file", RTV.char(e.file ?? "")],
-            ["name", RTV.char("")],
-            ["line", e.line ?? 0],
-          ])
-        ),
-      ]);
-    }
-    return emptyStackField();
-  }
-
-  // Build frames innermost-first to match MATLAB convention.
-  const elements: RuntimeStruct[] = [];
-  const N = frames.length;
-  for (let i = N - 1; i >= 0; i--) {
-    let frameFile: string | null;
-    let frameLine: number;
-    if (i === N - 1) {
-      frameFile = e.file;
-      frameLine = e.line ?? 0;
-    } else {
-      const callerFrame = frames[i + 1];
-      frameFile = callerFrame.callerFile;
-      frameLine = callerFrame.callerLine;
-    }
-    elements.push(
-      RTV.struct(
-        new Map<string, RuntimeValue>([
-          ["file", RTV.char(frameFile ?? "")],
-          ["name", RTV.char(frames[i].name)],
-          ["line", frameLine],
-        ])
-      )
-    );
-  }
-
-  // Append the outermost caller (e.g. top-level script) if present.
-  const outermost = frames[0];
-  if (outermost.callerFile && outermost.callerLine > 0) {
-    elements.push(
-      RTV.struct(
-        new Map<string, RuntimeValue>([
-          ["file", RTV.char(outermost.callerFile)],
-          ["name", RTV.char("")],
-          ["line", outermost.callerLine],
-        ])
-      )
-    );
-  }
-
-  return RTV.structArray(fieldNames, elements);
-}
 
 // ── Default class instance array concatenation ─────────────────────────
 

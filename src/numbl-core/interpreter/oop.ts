@@ -27,6 +27,10 @@ import {
   type ResolvedTarget,
 } from "../resolution/index.js";
 import type { ClassInfo } from "../workspace/classInfo.js";
+import {
+  MEXCEPTION_CLASS,
+  MEXCEPTION_PROPERTIES,
+} from "../runtime/mexception.js";
 
 import type { Interpreter } from "./interpreter.js";
 import { evalArgs, evalExpr } from "./evalExpressions.js";
@@ -154,6 +158,12 @@ export function evalSuperMethodCall(
         ? ensureRuntimeValue(args[0])
         : RTV.tensor(allocFloat64Array(0), [0, 0]);
     return interp.rt.callSuperConstructor(objVal, data);
+  }
+  // `obj@MException(id, msg, ...)`: the built-in MException constructor
+  // provides the exception properties.
+  if (!superClassInfo && expr.superClassName === MEXCEPTION_CLASS) {
+    const superInstance = interp.rt.callBuiltin(MEXCEPTION_CLASS, 1, args);
+    return interp.rt.callSuperConstructor(objVal, superInstance);
   }
   // A superclass without a constructor: an instance with its defaults.
   const { propertyNames, defaults } = superClassInfo
@@ -376,6 +386,7 @@ export function classPublicProperties(
   interp: Interpreter,
   className: string
 ): string[] | undefined {
+  if (className === MEXCEPTION_CLASS) return [...MEXCEPTION_PROPERTIES];
   const self = interp.code.classes.get(className);
   if (!self) return undefined;
   const out: string[] = [];
@@ -400,6 +411,10 @@ export function classPublicProperties(
         }
       }
     }
+  }
+  // A subclass of MException inherits its properties.
+  if (interp.code.classes.ancestors(className).includes(MEXCEPTION_CLASS)) {
+    for (const pn of MEXCEPTION_PROPERTIES) if (!seen.has(pn)) out.push(pn);
   }
   return out;
 }

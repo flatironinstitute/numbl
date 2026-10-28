@@ -291,7 +291,9 @@ export function dispatch(
         `No method '${name}' for class '${targetClassName}'`
       );
     }
-    throw new RuntimeError(`Undefined function or variable: '${name}'`);
+    throw new RuntimeError(`Undefined function or variable: '${name}'`, null, {
+      identifier: "MATLAB:UndefinedFunction",
+    });
   } finally {
     rt.$file = callerFile;
     rt.$line = callerLine;

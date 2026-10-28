@@ -2,6 +2,8 @@
  * Runtime error type and source location utilities.
  */
 
+import type { RuntimeClassInstance } from "./types.js";
+
 export interface Span {
   file: string;
   start: number;
@@ -42,6 +44,12 @@ export class RuntimeError extends Error {
   identifier: string;
   /** File sources for resolving source lines in call stack display */
   fileSources: Map<string, string> | null;
+  /** The MException a `throw` / `rethrow` / `error(struct)` raised; `catch`
+   *  binds a copy of it (see runtime/mexception.ts). Null for other errors. */
+  exception: RuntimeClassInstance | null;
+  /** When set, `catch` keeps `exception`'s stack (rethrow) instead of
+   *  recording where the error was raised. */
+  keepStack: boolean;
 
   constructor(
     message: string,
@@ -58,6 +66,8 @@ export class RuntimeError extends Error {
     this.callStack = null;
     this.identifier = options?.identifier ?? "";
     this.fileSources = null;
+    this.exception = null;
+    this.keepStack = false;
   }
 
   /**

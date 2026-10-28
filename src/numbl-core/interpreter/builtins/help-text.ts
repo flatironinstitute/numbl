@@ -1354,8 +1354,9 @@ const H: Record<string, BuiltinHelp> = {
     description: "Throw error if condition is false.",
   },
   error: {
-    signatures: ["error(MSG)", "error(ID, MSG, ...)"],
-    description: "Throw an error with a message.",
+    signatures: ["error(MSG)", "error(ID, MSG, ...)", "error(errStruct)"],
+    description:
+      "Throw an error with a message, optionally with an identifier and format values. error(errStruct) raises the error described by a struct with message, identifier and (optionally) stack fields. An empty message or empty struct does nothing.",
   },
   isequal: {
     signatures: ["TF = isequal(A, B, ...)"],
@@ -2026,10 +2027,6 @@ const H: Record<string, BuiltinHelp> = {
   lastwarn: {
     signatures: ["S = lastwarn"],
     description: "Last warning message. Returns empty string in numbl.",
-  },
-  rethrow: {
-    signatures: ["rethrow(ME)"],
-    description: "Re-throw error from MException struct.",
   },
   fileparts: {
     signatures: [

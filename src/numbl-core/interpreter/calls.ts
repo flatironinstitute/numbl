@@ -82,7 +82,9 @@ export function callResolved(
     default:
       return interpretTarget(interp, r.target, args, nargout);
   }
-  throw new RuntimeError(`Undefined function or variable '${r.name}'`);
+  throw new RuntimeError(`Undefined function or variable '${r.name}'`, null, {
+    identifier: "MATLAB:UndefinedFunction",
+  });
 }
 
 export function interpretTarget(

@@ -11,6 +11,10 @@ Errors that escape the interpreter — syntax errors and runtime errors — are 
 
 This conversion lives in a single diagnostics layer that both the CLI error formatter and the web worker consume. Any new error-producing path should throw a typed error the diagnostics layer already understands — do not format messages ad hoc.
 
+### Caught errors (MException)
+
+`catch ME` binds an MException object, made from the `RuntimeError` by `errorToMException` ([`runtime/mexception.ts`](../../src/numbl-core/runtime/mexception.ts)). An MException is a value-class `RuntimeClassInstance` with className `MException` (or a user subclass) and the properties identifier, message, cause, stack and Correction; there is no classdef behind it. Its methods (`throw`, `rethrow`, `throwAsCaller`, `getReport`, `addCause`, ...) are builtins taking the exception first ([`builtins/mexception.ts`](../../src/numbl-core/interpreter/builtins/mexception.ts)), which a method call on the object reaches because class-method dispatch falls back to builtins for a class without a classdef. A `throw` puts the exception on the `RuntimeError` (`exception`), so the catch gets the same object back (subclass, causes, extra properties) with the stack of the throw site; `rethrow` also sets `keepStack` so the original stack survives. Errors raised by `error` and builtins carry only an identifier and message, and the catch builds the exception and its stack from the error's call stack.
+
 ## JS user functions
 
 Workspace files with a `.numbl.js` extension define functions in JavaScript; see [src/docs/js-functions.md](../../src/docs/js-functions.md) for the user-facing API. Each file calls `register` with a function `(args, nargout) => result`, an object `{ apply, help }`, or the older `{ resolve }` form, and the loader (`builtinFromSpec` in `jsUserFunctions.ts`) wraps it as an `IBuiltin`. They are loaded at startup and participate in function resolution like workspace functions. This is the extension point for users who want native-ish performance or access to external APIs without patching numbl itself.

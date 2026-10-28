@@ -18,6 +18,11 @@ import {
 import { horzcat } from "./tensor-construction.js";
 import { ensureRuntimeValue } from "./runtimeHelpers.js";
 import type { Runtime } from "./runtime.js";
+import {
+  MEXCEPTION_CLASS,
+  MEXCEPTION_PROPERTIES,
+  isMException,
+} from "./mexception.js";
 
 export function getMember(
   rt: Runtime,
@@ -110,6 +115,17 @@ export function setMemberReturn(
   const mv = ensureRuntimeValue(base);
   // Check for property setter method (set.PropertyName)
   if (isRuntimeClassInstance(mv)) {
+    if (
+      MEXCEPTION_PROPERTIES.includes(name) &&
+      isMException(mv, c => rt.classAncestors(c))
+    ) {
+      // MATLAB's message doubles the quotes around the class name.
+      throw new RuntimeError(
+        `Unable to set the '${name}' property of class ''${MEXCEPTION_CLASS}'' because it is read-only.`,
+        null,
+        { identifier: "MATLAB:class:SetProhibited" }
+      );
+    }
     const accessorKey = `${mv.className}.set.${name}`;
     if (!rt.activeAccessors.has(accessorKey)) {
       const setter = rt.cachedResolveClassMethod(mv.className, `set.${name}`);

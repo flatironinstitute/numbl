@@ -1,10 +1,11 @@
 /**
- * `isfield(s, name)` — does the struct/class `s` have a field/property
+ * `isfield(s, name)` — does the struct `s` have a field
  * named `name`?
  *
  * Numbl semantics
  * (`numbl-core/interpreter/builtins/type-constructors.ts`):
- *   - Struct or class instance → `true` iff `name` is in the field list.
+ *   - Struct → `true` iff `name` is in the field list. A class instance
+ *     has properties, not fields → `false` (as in MATLAB).
  *   - Anything else (numeric tensor, `[]`, char, string, handle, …) →
  *     `false`. There is no "empty matrix as struct" coercion; the
  *     non-struct branch just returns `false` so `isfield([], 'foo')`
@@ -21,7 +22,6 @@ import { TypeError, UnsupportedConstruct } from "../../../lowering/errors.js";
 import {
   fieldType,
   isStruct,
-  isClass,
   isChar,
   isString,
   scalarLogical,
@@ -31,7 +31,7 @@ import {
 import type { Builtin } from "../../registry.js";
 
 function staticHasField(s: Type, name: string): boolean {
-  if (!isStruct(s) && !isClass(s)) return false;
+  if (!isStruct(s)) return false;
   return fieldType(s, name) !== undefined;
 }
 

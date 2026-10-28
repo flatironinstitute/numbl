@@ -17,8 +17,9 @@ import {
   RuntimeStructArray,
   RuntimeStringArray,
 } from "./types.js";
-import { colMajorIndex, ind2sub } from "./utils.js";
+import { colMajorIndex, ind2sub, valueShape } from "./utils.js";
 import { formatDatetimePattern } from "./datetime-format.js";
+import { MEXCEPTION_PROPERTIES } from "./mexception.js";
 
 /** Format a value for display */
 export function displayValue(v: RuntimeValue): string {
@@ -320,6 +321,11 @@ function formatClassInstance(v: RuntimeClassInstance): string {
     const s = formatDatetimeOrDuration(v);
     if (s !== null) return s;
   }
+  // An MException (or subclass), recognized by its properties as display
+  // has no class table, is displayed as MATLAB does.
+  if (MEXCEPTION_PROPERTIES.every(p => v.fields.has(p))) {
+    return formatPropertyList(v);
+  }
   const lines: string[] = [`  ${v.className} with properties:\n`];
   for (const [key, val] of v.fields) {
     // Builtin-defined objects (graph, decomposition) keep internal state in
@@ -328,6 +334,56 @@ function formatClassInstance(v: RuntimeClassInstance): string {
     lines.push(`    ${key}: ${displayValue(val)}`);
   }
   return lines.join("\n");
+}
+
+/** MATLAB's object display: right-aligned property names and a one-line
+ *  summary of each value. */
+function formatPropertyList(v: RuntimeClassInstance): string {
+  const keys = [...v.fields.keys()].filter(k => !k.startsWith("_"));
+  const width = Math.max(0, ...keys.map(k => k.length));
+  const lines = [`  ${v.className} with properties:`, ""];
+  for (const k of keys) {
+    lines.push(`    ${k.padStart(width)}: ${summarizeValue(v.fields.get(k)!)}`);
+  }
+  return lines.join("\n") + "\n";
+}
+
+/** A value as MATLAB summarizes it inside an object or struct display:
+ *  'text', scalars, short rows, or [m×n class]. */
+function summarizeValue(v: RuntimeValue): string {
+  const dims = (shape: readonly number[]) => shape.join("×");
+  if (isRuntimeNumber(v)) return formatNumber(v);
+  if (isRuntimeLogical(v)) return v ? "1" : "0";
+  if (isRuntimeString(v)) return `"${v}"`;
+  switch (v.kind) {
+    case "char":
+      return v.shape && v.shape[0] > 1
+        ? `[${dims(v.shape)} char]`
+        : `'${v.value}'`;
+    case "tensor": {
+      if (v.data.length === 0 && v.shape.every(d => d === 0)) return "[]";
+      const isRow = v.shape.length === 2 && v.shape[0] === 1;
+      if (isRow && !v.imag && v.data.length <= 10)
+        return `[${Array.from(v.data, formatNumber).join(" ")}]`;
+      return `[${dims(v.shape)} ${v._isLogical ? "logical" : "double"}]`;
+    }
+    case "cell":
+      return v.data.length === 0 && v.shape.every(d => d === 0)
+        ? "{}"
+        : `{${dims(v.shape)} cell}`;
+    case "struct":
+      return "[1×1 struct]";
+    case "struct_array":
+      return `[${dims(valueShape(v))} struct]`;
+    case "class_instance":
+      return `[1×1 ${v.className}]`;
+    case "class_instance_array":
+      return `[${dims(v.shape)} ${v.className}]`;
+    case "function":
+      return `@${v.name}`;
+    default:
+      return displayValue(v);
+  }
 }
 
 const DATETIME_MONTH_ABBR = [

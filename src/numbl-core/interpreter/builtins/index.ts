@@ -10,6 +10,7 @@ import "./complex.js";
 import "./predicates.js";
 import "./logical.js";
 import "./utility.js";
+import "./mexception.js";
 import "./introspection.js";
 import "./array-construction.js";
 import "./reductions.js";
