@@ -2,7 +2,7 @@
  * Input types of an executor unit, in the JIT compiler's `Type` lattice.
  *
  * Every dispatch types its inputs (`typeOfValue`), widens them against the
- * previous dispatch (`widenAgainst`) and keys the compile cache on them
+ * earlier dispatches (`widenAgainst`) and keys the compile cache on them
  * (`typeKey`), so this runs on every interpreted call of a user function.
  * To keep that cheap, the types are interned: a value maps through a short
  * signature string to a shared, frozen `Type`, the canonical key of an
@@ -172,23 +172,88 @@ function widenInterned(a: Type, prev: Type): Type | null {
 }
 
 /**
- * Progressive type widening: in place, widen each entry of `types`
- * against the corresponding entry of `prev` (`widenArgType`). No-op when
- * the arities differ (a different specialization, no widening). An entry
- * that should not widen keeps this call's concrete type, so a fresh,
- * specific spec gets built rather than one poisoned by a mismatched
- * earlier call.
+ * The input types a unit has been dispatched with, per input name (a
+ * variable name, or a call's parameter position): a few type _families_,
+ * most recent first, no two of which widen against each other (a scalar
+ * and a tensor, say, or a 2-D and a 3-D tensor).
+ *
+ * Keeping one entry per family, rather than only the previous dispatch's
+ * type, lets an input whose type alternates between families converge: a
+ * `find` result that is sometimes 1x1 and sometimes kx1 widens each kx1
+ * against the earlier kx1 types, instead of compiling a new spec for every
+ * k that follows a 1x1. Keying by name keeps the history when a loop's
+ * input set changes between dispatches (a variable that exists only after
+ * some branch has run).
+ */
+export type WideningHistory = ReadonlyMap<string, readonly Type[]>;
+
+/** Families kept per input. */
+const MAX_FAMILIES = 4;
+
+/**
+ * Progressive type widening: in place, widen each entry of `types` (the
+ * input named `names[i]`) against the first of that input's families in
+ * `prev` it widens with (`widenArgType`). An entry that widens with no
+ * family keeps this call's concrete type, so a fresh, specific spec gets
+ * built rather than one poisoned by a mismatched earlier call.
  */
 export function widenAgainst(
   types: Type[],
-  prev: readonly Type[] | undefined
+  names: readonly string[],
+  prev: WideningHistory | undefined
 ): void {
-  if (!prev || prev.length !== types.length) return;
+  if (!prev) return;
   for (let i = 0; i < types.length; i++) {
     const a = types[i];
-    const p = prev[i];
-    if (a === p || a.kind === "Unknown" || p.kind === "Unknown") continue;
-    const w = widenInterned(a, p);
-    if (w !== null) types[i] = w;
+    if (a.kind === "Unknown") continue;
+    const fams = prev.get(names[i]);
+    if (!fams) continue;
+    for (const p of fams) {
+      if (a === p) break;
+      if (p.kind === "Unknown") continue;
+      const w = widenInterned(a, p);
+      if (w !== null) {
+        types[i] = w;
+        break;
+      }
+    }
   }
+}
+
+/**
+ * The history after a dispatch with (widened) `types`: each input's type
+ * moves to the front of its families, replacing the families it widens
+ * with; inputs absent from this dispatch keep theirs. Returns `prev`
+ * itself when nothing changed (the steady state).
+ */
+export function recordWidening(
+  prev: WideningHistory | undefined,
+  names: readonly string[],
+  types: readonly Type[]
+): WideningHistory {
+  let next: Map<string, readonly Type[]> | null = prev ? null : new Map();
+  for (let i = 0; i < types.length; i++) {
+    const t = types[i];
+    const fams = prev?.get(names[i]);
+    if (fams?.[0] === t) continue;
+    const kept: Type[] = [t];
+    for (const p of fams ?? []) {
+      if (kept.length >= MAX_FAMILIES) break;
+      if (p === t) continue;
+      if (t.kind !== "Unknown" && p.kind !== "Unknown") {
+        if (widenInterned(t, p) !== null) continue;
+      }
+      kept.push(p);
+    }
+    next ??= new Map(prev);
+    next.set(names[i], kept);
+  }
+  return next ?? prev!;
+}
+
+const positionNames: (readonly string[])[] = [];
+
+/** The names a call's parameters are widened under: their positions. */
+export function paramPositions(n: number): readonly string[] {
+  return (positionNames[n] ??= Array.from({ length: n }, (_, i) => `#${i}`));
 }
