@@ -192,7 +192,8 @@ function hasNonZero(a: Float64Array): boolean {
   return false;
 }
 
-/** A 0x0 RHS (`[]` or `''`) turns an indexed assignment into deletion. */
+/** Without the syntactic information (`subsasgn`, internal stores), a 0x0
+ *  double or char RHS turns an indexed assignment into deletion. */
 function isDeletionRhs(rhs: RuntimeValue): boolean {
   if (isRuntimeTensor(rhs)) {
     const s = rhs.shape;
@@ -1397,20 +1398,23 @@ export function indexIntoRTValue(
 // ── Store: main dispatcher ───────────────────────────────────────────────
 
 /** Store into indexed position: base(indices) = rhs (or base{indices} = rhs
- *  for cells when `parenAssign` is false). A 0x0 RHS in a paren store
- *  deletes. Shared targets are copied before mutation. `storeBack` marks
- *  the store-back of `s(k).f = v`, which may add fields to a struct
- *  array. */
+ *  for cells when `parenAssign` is false). A paren store deletes when
+ *  `nullAssign` is true (the RHS is literally `[]` or `''`); when it is
+ *  undefined, a 0x0 double or char RHS deletes. Shared targets are copied
+ *  before mutation. `storeBack` marks the store-back of `s(k).f = v`,
+ *  which may add fields to a struct array. */
 export function storeIntoRTValueIndex(
   base: RuntimeValue,
   indices: RuntimeValue[],
   rhs: RuntimeValue,
   parenAssign = false,
   rt?: StoreRuntime,
-  storeBack = false
+  storeBack = false,
+  nullAssign?: boolean
 ): RuntimeValue {
+  const del = nullAssign ?? isDeletionRhs(rhs);
   if (isRuntimeSparseMatrix(base)) {
-    if (isDeletionRhs(rhs)) return deleteFromSparse(base, indices);
+    if (del) return deleteFromSparse(base, indices);
     return storeIntoSparse(base, indices, rhs);
   }
 
@@ -1430,7 +1434,7 @@ export function storeIntoRTValueIndex(
   }
 
   if (isRuntimeTensor(base)) {
-    if (isDeletionRhs(rhs)) return deleteFromTensor(base, indices);
+    if (del) return deleteFromTensor(base, indices);
     // An empty numeric target takes the class of a struct, object or
     // string RHS.
     if (base.data.length === 0) {
@@ -1445,19 +1449,19 @@ export function storeIntoRTValueIndex(
   }
 
   if (isRuntimeCell(base)) {
-    if (parenAssign && isDeletionRhs(rhs)) return deleteFromCell(base, indices);
+    if (parenAssign && del) return deleteFromCell(base, indices);
     return storeIntoCell(base, indices, rhs, !parenAssign, rt);
   }
 
   if (isRuntimeStruct(base) || isRuntimeStructArray(base)) {
-    if (isDeletionRhs(rhs)) return deleteFromStructArray(base, indices);
+    if (del) return deleteFromStructArray(base, indices);
     if (isRuntimeStruct(rhs) || isRuntimeStructArray(rhs))
       return storeIntoStructArray(base, indices, rhs, !storeBack, rt);
     throw new RuntimeError("Assignment between unlike types is not allowed.");
   }
 
   if (isRuntimeClassInstance(base) || isRuntimeClassInstanceArray(base)) {
-    if (isDeletionRhs(rhs)) return deleteFromObjectArray(base, indices);
+    if (del) return deleteFromObjectArray(base, indices);
     if (isRuntimeClassInstance(rhs) || isRuntimeClassInstanceArray(rhs))
       return storeIntoObjectArray(base, indices, rhs, rt);
     throw new RuntimeError(
@@ -1466,7 +1470,7 @@ export function storeIntoRTValueIndex(
   }
 
   if (isRuntimeString(base) || isRuntimeStringArray(base)) {
-    if (isDeletionRhs(rhs)) return deleteFromStringArray(base, indices);
+    if (del) return deleteFromStringArray(base, indices);
     return storeIntoStringArray(base, indices, rhs);
   }
 

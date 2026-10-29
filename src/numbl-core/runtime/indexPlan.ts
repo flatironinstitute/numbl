@@ -869,13 +869,7 @@ function deleteSubs(
     return { dims, ss, shape: trimShape(out) };
   }
   if (nonColon > 1) {
-    // Deleting nothing is harmless even with several subscripts.
-    for (let d = 0; d < k; d++) {
-      if (subs[d] !== COLON_INDEX) {
-        const s = resolveSub(subs[d], dims[d], d + 1);
-        if (s.count === 0) return null;
-      }
-    }
+    // Even when the subscripts select nothing.
     throw new RuntimeError(
       "A null assignment can have only one non-colon index."
     );

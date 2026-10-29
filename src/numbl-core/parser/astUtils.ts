@@ -66,3 +66,19 @@ export function unwindMemberLvalue(
   if (cur.type !== "Ident") return null;
   return { rootName: cur.name, fields };
 }
+
+/** Whether an assignment RHS is MATLAB's null value `[]` (also `[ ]`,
+ *  `([])`, `[[]]`) or `''`, which makes `A(I) = rhs` a deletion. Any
+ *  other empty value, even a 0x0 double held in a variable, is an
+ *  ordinary assignment. */
+export function isNullAssignRhs(e: Expr): boolean {
+  if (e.type === "Char") return e.value === "''"; // raw, with quotes
+  if (e.type !== "Tensor") return false;
+  const elems = e.rows.flat();
+  if (elems.length === 0) return true;
+  return (
+    elems.length === 1 &&
+    elems[0].type === "Tensor" &&
+    isNullAssignRhs(elems[0])
+  );
+}

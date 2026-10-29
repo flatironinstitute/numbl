@@ -13,6 +13,7 @@ import {
 describe("StreamMessage encode/decode", () => {
   const messages: StreamMessage[] = [
     { type: "output", text: "x = 3\n" },
+    { type: "output", text: "oops\n", stream: "stderr" },
     {
       type: "drawnow",
       plotInstructions: [{ type: "set_hold", value: true }],
@@ -157,6 +158,19 @@ describe("numbl --stream", () => {
     expect(err.line).toBe(2);
     expect(err.callStack?.map(f => f.name)).toEqual(["fail"]);
     expect(messages[2]).toEqual({ type: "done", success: false });
+  }, 60000);
+
+  it("marks fprintf(2, ...) output as stderr", () => {
+    const { status, messages } = runStream(
+      "fprintf(2, 'bad %d\\n', 1);\nfprintf(1, 'ok\\n');\n"
+    );
+    expect(status).toBe(0);
+    expect(messages[0]).toEqual({
+      type: "output",
+      text: "bad 1\n",
+      stream: "stderr",
+    });
+    expect(messages[1]).toEqual({ type: "output", text: "ok\n" });
   }, 60000);
 
   it("reports a syntax error and fails", () => {

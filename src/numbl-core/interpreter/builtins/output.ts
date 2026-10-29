@@ -256,7 +256,7 @@ builtin({
 
     let count: number | undefined;
     if (fid === 1 || fid === 2) {
-      rt.output(output);
+      rt.output(output, fid === 2);
     } else {
       if (!rt.files)
         throw new RuntimeError("File I/O is not available in this environment");

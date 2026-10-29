@@ -31,14 +31,26 @@ static double _Complex jit_cdiv(double _Complex a, double _Complex b) {
   }
   /* Standard Smith's: pick the scaling that puts the larger-magnitude
    * divisor component in the denominator. */
+  double re, im;
   if (fabs(br) >= fabs(bi)) {
     double r = bi / br;
     double den = br + r * bi;
-    return jit_cpack((ar + ai * r) / den, (ai - ar * r) / den);
+    re = (ar + ai * r) / den;
+    im = (ai - ar * r) / den;
+  } else {
+    double r = br / bi;
+    double den = bi + r * br;
+    re = (ar * r + ai) / den;
+    im = (ai * r - ar) / den;
   }
-  double r = br / bi;
-  double den = bi + r * br;
-  return jit_cpack((ar * r + ai) / den, (ai * r - ar) / den);
+  /* An infinite divisor with a finite numerator: 0 where Smith's ratio is
+   * Inf/Inf (as the interpreter's ops/complexDivide.ts). */
+  if (isnan(re) && isnan(im) && isinf(br) && isinf(bi) && isfinite(ar) &&
+      isfinite(ai)) {
+    re = 0.0;
+    im = 0.0;
+  }
+  return jit_cpack(re, im);
 }
 
 /* Scalar `/` with MATLAB's mixed real/complex rule (see `jit_cmul_mixed`

@@ -107,6 +107,7 @@ export async function runRepl(
       const result = session.execute(code, {
         displayResults: true,
         onOutput: (text: string) => process.stdout.write(text),
+        onErrorOutput: (text: string) => process.stderr.write(text),
         onDrawnow,
         onInput,
         optimization,

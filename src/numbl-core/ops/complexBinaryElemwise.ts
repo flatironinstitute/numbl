@@ -8,15 +8,7 @@
  */
 
 import { OpBin } from "./opCodes.js";
-
-function cdivzRe(r: number, i: number): number {
-  if (r === 0 && i === 0) return NaN;
-  return (r > 0 ? 1 : r < 0 ? -1 : 0) / 0;
-}
-function cdivzIm(r: number, i: number): number {
-  if (r === 0 && i === 0) return 0;
-  return (i > 0 ? 1 : i < 0 ? -1 : 0) / 0;
-}
+import { cdivResult, complexDivide } from "./complexDivide.js";
 
 export function tsComplexBinaryElemwise(
   op: number,
@@ -55,16 +47,9 @@ export function tsComplexBinaryElemwise(
       for (let i = 0; i < n; i++) {
         const ar = aRe[i],
           ai = aIm ? aIm[i] : 0;
-        const br = bRe[i],
-          bi = bIm ? bIm[i] : 0;
-        const denom = br * br + bi * bi;
-        if (denom === 0) {
-          outRe[i] = cdivzRe(ar, ai);
-          outIm[i] = cdivzIm(ar, ai);
-        } else {
-          outRe[i] = (ar * br + ai * bi) / denom;
-          outIm[i] = (ai * br - ar * bi) / denom;
-        }
+        complexDivide(ar, ai, bRe[i], bIm ? bIm[i] : 0);
+        outRe[i] = cdivResult.re;
+        outIm[i] = cdivResult.im;
       }
       return;
     default:
@@ -112,37 +97,13 @@ export function tsComplexScalarBinaryElemwise(
       }
       return;
     case OpBin.DIV:
-      if (scalarOnLeft) {
-        for (let i = 0; i < n; i++) {
-          const ar = arrRe[i];
-          const ai = arrIm ? arrIm[i] : 0;
-          const denom = ar * ar + ai * ai;
-          if (denom === 0) {
-            outRe[i] = cdivzRe(sRe, sIm);
-            outIm[i] = cdivzIm(sRe, sIm);
-          } else {
-            outRe[i] = (sRe * ar + sIm * ai) / denom;
-            outIm[i] = (sIm * ar - sRe * ai) / denom;
-          }
-        }
-      } else {
-        const denom = sRe * sRe + sIm * sIm;
-        if (denom === 0) {
-          for (let i = 0; i < n; i++) {
-            const ar = arrRe[i];
-            const ai = arrIm ? arrIm[i] : 0;
-            outRe[i] = cdivzRe(ar, ai);
-            outIm[i] = cdivzIm(ar, ai);
-          }
-        } else {
-          const invDenom = 1 / denom;
-          for (let i = 0; i < n; i++) {
-            const ar = arrRe[i];
-            const ai = arrIm ? arrIm[i] : 0;
-            outRe[i] = (ar * sRe + ai * sIm) * invDenom;
-            outIm[i] = (ai * sRe - ar * sIm) * invDenom;
-          }
-        }
+      for (let i = 0; i < n; i++) {
+        const ar = arrRe[i];
+        const ai = arrIm ? arrIm[i] : 0;
+        if (scalarOnLeft) complexDivide(sRe, sIm, ar, ai);
+        else complexDivide(ar, ai, sRe, sIm);
+        outRe[i] = cdivResult.re;
+        outIm[i] = cdivResult.im;
       }
       return;
     default:

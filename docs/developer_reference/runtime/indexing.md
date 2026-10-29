@@ -8,7 +8,7 @@ Paren and brace indexing on the interpreter path (`A(i,j)`, `A(i) = x`, `A(i) = 
 
 - `planIndex(shape, numel, subs)` plans a read: the selected offsets and the result shape.
 - `planStore(shape, numel, subs, rhsNumel, rhsShape)` plans an assignment: the offsets to write, the RHS compatibility check (scalar expansion, element counts for linear indexing, non-singleton dimensions for subscript indexing), and the grown shape when a subscript is out of range.
-- `planDelete(shape, numel, subs)` plans `A(subs) = []`: the offsets to keep and the shape afterwards.
+- `planDelete(shape, numel, subs)` plans `A(subs) = []`: the offsets to keep and the shape afterwards. As in MATLAB, deletion is syntactic: only an RHS that is literally `[]` (or `[ ]`, `([])`, `[[]]`) or `''` deletes (`isNullAssignRhs` in `parser/astUtils.ts`, passed down as `nullAssign`); any other empty value, even a 0x0 double in a variable, is an ordinary assignment. `subsasgn` and internal callers, which have no syntax, delete for a 0x0 double or char value.
 
 The rules applied there include logical masks (as `find(mask)`), colon, unit-step ranges (planned as contiguous blocks), trailing-dimension collapse when there are fewer subscripts than dimensions, the vector-orientation rule for `A(I)`, empty-result shapes, growth (vectors along their orientation, ambiguous growth errors, colon extents taken from the RHS when the target is `0x0`), deletion rules, and MATLAB's error messages.
 

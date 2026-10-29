@@ -31,7 +31,7 @@ import {
   type RuntimeStruct,
   stringArrayValue,
 } from "../runtime/types.js";
-import { kstr, valueNumel } from "../runtime/kinds.js";
+import { valueNumel } from "../runtime/kinds.js";
 import { RuntimeError, invalidDataTypeError } from "../runtime/error.js";
 import { RTV } from "../runtime/constructors.js";
 import { tensorSize2D, colMajorIndex } from "../runtime/utils.js";
@@ -45,7 +45,6 @@ import {
   elementwiseCompare,
   binaryScalar,
   compareScalar,
-  mapBinary,
   type Operand,
   type ElemResult,
 } from "../ops/index.js";
@@ -168,35 +167,6 @@ export function mLogical(
   b: RuntimeValue
 ): RuntimeValue {
   return elemCompare(op, a, b);
-}
-
-/** The error for an operand the complex arithmetic path cannot use. */
-function complexOperandError(v: RuntimeValue): RuntimeError {
-  return isRuntimeChar(v)
-    ? new RuntimeError(`Cannot use ${kstr(v)} in complex arithmetic`)
-    : invalidDataTypeError();
-}
-
-function toComplex(v: RuntimeValue): { re: number; im: number } {
-  if (isRuntimeComplexNumber(v)) return { re: v.re, im: v.im };
-  if (isRuntimeNumber(v)) return { re: v, im: 0 };
-  if (isRuntimeLogical(v)) return { re: v ? 1 : 0, im: 0 };
-  if (isRuntimeTensor(v) && v.data.length === 1) {
-    return { re: v.data[0], im: v.imag ? v.imag[0] : 0 };
-  }
-  if (isRuntimeSparseMatrix(v)) return toComplex(densify(v));
-  throw complexOperandError(v);
-}
-
-function isComplexOrMixed(a: RuntimeValue, b: RuntimeValue): boolean {
-  return (
-    isRuntimeComplexNumber(a) ||
-    isRuntimeComplexNumber(b) ||
-    (isRuntimeTensor(a) && a.imag !== undefined) ||
-    (isRuntimeTensor(b) && b.imag !== undefined) ||
-    (isRuntimeSparseMatrix(a) && a.pi !== undefined) ||
-    (isRuntimeSparseMatrix(b) && b.pi !== undefined)
-  );
 }
 
 /** A dense complex value whose imaginary part is all zero, as real (what
@@ -446,51 +416,155 @@ export function mElemLeftDiv(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
   return mElemDiv(b, a);
 }
 
-/** Power */
+/** Matrix power `a ^ b` (mpower): element-wise for two scalars, repeated
+ *  multiplication for a square matrix to an integer power, and a matrix
+ *  function through the eigendecomposition for a square matrix to a
+ *  non-integer or complex power and for a scalar to a square matrix power.
+ *  Anything else is MATLAB's dimension error. */
 export function mPow(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
-  if (isComplexOrMixed(a, b)) {
-    // Complex operands: scalars only.
-    const ac = toComplex(a),
-      bc = toComplex(b);
-    const r = binaryScalar(OpBin.POW, ac.re, ac.im, true, bc.re, bc.im, true);
-    return r.im === 0 ? r.re : RTV.complex(r.re, r.im);
+  if (isScalarValue(a) && isScalarValue(b)) return elemwise(OpBin.POW, a, b);
+  if (isRuntimeSparseMatrix(a)) a = densify(a);
+  if (isRuntimeSparseMatrix(b)) b = densify(b);
+  const ta = powOperand(a);
+  const tb = powOperand(b);
+  if (ta.shape.length > 2 || tb.shape.length > 2)
+    throw new RuntimeError(
+      "Arguments must be 2-D. To operate on each element of the matrix individually, use POWER (.^) for elementwise power.",
+      null,
+      { identifier: "MATLAB:mpower:inputsMustBe2D" }
+    );
+  const aScalar = ta.data.length === 1;
+  const bScalar = tb.data.length === 1;
+  const square = (t: RuntimeTensor) => t.shape[0] === t.shape[1];
+  if (aScalar && bScalar)
+    return elemwise(OpBin.POW, unwrap1x1(ta), unwrap1x1(tb));
+  if (bScalar && square(ta)) return matrixToPower(ta, tb);
+  if (aScalar && square(tb)) return scalarToMatrixPower(ta, tb);
+  throw new RuntimeError(
+    "Incorrect dimensions for raising a matrix to a power. Check that the matrix is square and the power is a scalar. To operate on each element of the matrix individually, use POWER (.^) for elementwise power.",
+    null,
+    { identifier: "MATLAB:mpower:notScalarAndSquareMatrix" }
+  );
+}
+
+/** An mpower operand as a dense tensor. */
+function powOperand(v: RuntimeValue): RuntimeTensor {
+  if (isRuntimeChar(v)) return charToNumericTensor(v);
+  if (
+    isRuntimeTensor(v) ||
+    isRuntimeNumber(v) ||
+    isRuntimeLogical(v) ||
+    isRuntimeComplexNumber(v)
+  )
+    return coerceToTensor(v, "mpower");
+  throw invalidDataTypeError();
+}
+
+/** `A ^ p` for a square matrix `A` and a 1x1 `p`. */
+function matrixToPower(A: RuntimeTensor, p: RuntimeTensor): RuntimeValue {
+  const n = A.shape[0];
+  const pRe = p.data[0];
+  const pIm = p.imag ? p.imag[0] : 0;
+  if (n === 0) return RTV.tensor(allocFloat64Array(0), [0, 0]);
+  if (pRe !== pRe || pIm !== pIm)
+    return RTV.tensor(allocFloat64Array(n * n).fill(NaN), [n, n]);
+  if (!Number.isFinite(pRe) || !Number.isFinite(pIm))
+    throw new RuntimeError(
+      "mpower: an infinite power of a matrix is not supported"
+    );
+  if (pIm === 0 && Number.isInteger(pRe)) {
+    if (pRe === 0) {
+      const data = allocFloat64Array(n * n);
+      for (let i = 0; i < n; i++) data[colMajorIndex(i, i, n)] = 1;
+      return RTV.tensor(data, [n, n]);
+    }
+    let base: RuntimeTensor = A;
+    let k = pRe;
+    if (k < 0) {
+      // A^(-k) = inv(A)^k
+      const invA = getIBuiltin("inv")!.call([A], 1) as RuntimeValue;
+      if (!isRuntimeTensor(invA))
+        throw new RuntimeError("mpower: inv returned non-tensor");
+      base = invA;
+      k = -k;
+    }
+    // Binary powering: k = 1e300 takes ~1000 products, not 1e300.
+    let result: RuntimeTensor | null = null;
+    let sq = base;
+    for (;;) {
+      if (k % 2 === 1)
+        result = result ? (matMul(result, sq) as RuntimeTensor) : sq;
+      k = Math.floor(k / 2);
+      if (k === 0) break;
+      sq = matMul(sq, sq) as RuntimeTensor;
+    }
+    return result!;
   }
-  // Matrix power if a is a matrix and b is scalar integer
-  if (isRuntimeTensor(a) && (isRuntimeNumber(b) || isRuntimeLogical(b))) {
-    const exp = toNumber(b);
-    const [rows, cols] = tensorSize2D(a);
-    if (rows === cols && Number.isInteger(exp)) {
-      if (exp === 0) {
-        // A^0 = eye(n)
-        const data = allocFloat64Array(rows * cols);
-        for (let i = 0; i < rows; i++) {
-          data[colMajorIndex(i, i, rows)] = 1;
-        }
-        return RTV.tensor(data, [rows, cols]);
-      }
-      let base: RuntimeTensor = a;
-      let n = exp;
-      if (n < 0) {
-        // A^(-n) = inv(A)^n
-        const invA = getIBuiltin("inv")!.call([a], 1) as RuntimeValue;
-        if (!isRuntimeTensor(invA))
-          throw new RuntimeError("mpower: inv returned non-tensor");
-        base = invA;
-        n = -n;
-      }
-      // Repeated squaring for A^n
-      let result: RuntimeValue = base;
-      for (let i = 1; i < n; i++) {
-        result = matMul(result as RuntimeTensor, base);
-      }
-      return result;
+  // A real matrix to a real power is real unless an eigenvalue lies on the
+  // branch cut (the negative real axis).
+  const realInputs = !A.imag && pIm === 0;
+  return eigMatrixFunction(
+    A,
+    (re, im) => binaryScalar(OpBin.POW, re, im, true, pRe, pIm, true),
+    lambdas => realInputs && !lambdas.some(l => l.im === 0 && l.re < 0)
+  );
+}
+
+/** `s ^ B` for a 1x1 `s` and a square matrix `B`. */
+function scalarToMatrixPower(s: RuntimeTensor, B: RuntimeTensor): RuntimeValue {
+  if (B.shape[0] === 0) return RTV.tensor(allocFloat64Array(0), [0, 0]);
+  const sRe = s.data[0];
+  const sIm = s.imag ? s.imag[0] : 0;
+  const realResult = !B.imag && sIm === 0 && sRe > 0;
+  return eigMatrixFunction(
+    B,
+    (re, im) => binaryScalar(OpBin.POW, sRe, sIm, true, re, im, true),
+    () => realResult
+  );
+}
+
+/** f(A) = V * diag(f(lambda)) / V from the eigendecomposition of a square
+ *  matrix. Raises a not-supported error when `A` is not diagonalizable to
+ *  working accuracy (MATLAB uses a Schur method there). `isReal` says,
+ *  given the eigenvalues, that the exact result is real, so roundoff in
+ *  its imaginary part is dropped. */
+function eigMatrixFunction(
+  A: RuntimeTensor,
+  f: (re: number, im: number) => { re: number; im: number },
+  isReal: (lambdas: { re: number; im: number }[]) => boolean
+): RuntimeValue {
+  const n = A.shape[0];
+  const [V, D] = getIBuiltin("eig")!.call([A], 2) as RuntimeValue[];
+  const Vt = coerceToTensor(V, "mpower");
+  const Dt = coerceToTensor(D, "mpower");
+  const rc = toNumber(getIBuiltin("rcond")!.call([Vt], 1) as RuntimeValue);
+  if (!(rc >= Math.sqrt(Number.EPSILON)))
+    throw new RuntimeError(
+      "mpower: a non-integer or matrix power of a matrix that is not diagonalizable is not supported"
+    );
+  const lambdas: { re: number; im: number }[] = [];
+  for (let k = 0; k < n; k++) {
+    const j = colMajorIndex(k, k, n);
+    lambdas.push({ re: Dt.data[j], im: Dt.imag ? Dt.imag[j] : 0 });
+  }
+  // W = V * diag(f(lambda)), column by column.
+  const wRe = allocFloat64Array(n * n);
+  const wIm = allocFloat64Array(n * n);
+  for (let k = 0; k < n; k++) {
+    const fk = f(lambdas[k].re, lambdas[k].im);
+    const fRe = fk.re;
+    const fIm = fk.im;
+    for (let i = 0; i < n; i++) {
+      const j = colMajorIndex(i, k, n);
+      const vRe = Vt.data[j];
+      const vIm = Vt.imag ? Vt.imag[j] : 0;
+      wRe[j] = vRe * fRe - vIm * fIm;
+      wIm[j] = vRe * fIm + vIm * fRe;
     }
   }
-  if (isScalarValue(a) && isScalarValue(b)) return elemwise(OpBin.POW, a, b);
-  // Other array operands (a non-square matrix, a non-integer power, a
-  // scalar base with a matrix exponent): MATLAB raises an error or computes
-  // a matrix function; numbl applies Math.pow element-wise.
-  return tensorOf(mapBinary(Math.pow, operandOf(a), operandOf(b)));
+  const F = coerceToTensor(mDiv(RTV.tensor(wRe, [n, n], wIm), Vt), "mpower");
+  if (isReal(lambdas) || !F.imag) return RTV.tensor(F.data, [n, n]);
+  return realIfZeroImag(F);
 }
 
 /** Element-wise power */

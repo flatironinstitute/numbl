@@ -30,8 +30,9 @@ export interface StreamDiagnostic {
 }
 
 export type StreamMessage =
-  /** Program output (disp, fprintf, auto-display). */
-  | { type: "output"; text: string }
+  /** Program output (disp, fprintf, auto-display); `stream` is "stderr"
+   *  for standard-error text (`fprintf(2, ...)`). */
+  | { type: "output"; text: string; stream?: "stderr" }
   /** Plot instructions flushed by drawnow or at the end of the run. */
   | { type: "drawnow"; plotInstructions: PlotInstruction[] }
   /** The program called input(); the reply is read as one line on stdin. */
@@ -74,7 +75,10 @@ export function decodeStreamMessage(line: string): StreamMessage | null {
   if (m.v !== undefined && m.v !== STREAM_PROTOCOL_VERSION) return null;
   switch (m.type) {
     case "output":
-      return isStr(m.text) ? { type: "output", text: m.text } : null;
+      if (!isStr(m.text)) return null;
+      return m.stream === "stderr"
+        ? { type: "output", text: m.text, stream: "stderr" }
+        : { type: "output", text: m.text };
     case "drawnow":
       return Array.isArray(m.plotInstructions)
         ? {
