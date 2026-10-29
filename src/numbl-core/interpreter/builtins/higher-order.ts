@@ -27,6 +27,7 @@ import { builtin } from "./builtin.js";
 
 builtin({
   name: "arrayfun",
+  accepts: { sparse: true },
   nargin: [2, Infinity],
   nargout: Infinity,
   apply: (args, nargout, ctx) =>
@@ -35,6 +36,7 @@ builtin({
 
 builtin({
   name: "cellfun",
+  accepts: { sparse: true },
   nargin: [2, Infinity],
   nargout: Infinity,
   apply: (args, nargout, ctx) =>
@@ -53,6 +55,7 @@ builtin({
 // functions (MATLAB's string-named calls do not see them).
 builtin({
   name: "feval",
+  accepts: { sparse: true },
   nargin: [1, Infinity],
   nargout: Infinity,
   apply: (args, nargout, ctx) => {
@@ -72,6 +75,7 @@ builtin({
 
 builtin({
   name: "bsxfun",
+  accepts: { sparse: true },
   nargin: 3,
   apply: (args, nargout, ctx) =>
     bsxfunImpl(ctx.rt, nargout, args) as RuntimeValue | RuntimeValue[],
@@ -155,6 +159,7 @@ builtin({
 
 builtin({
   name: "subsasgn",
+  accepts: { sparse: true },
   nargin: 3,
   apply: (args, nargout, ctx) =>
     subsasgnBuiltin(ctx.rt, nargout, args) as RuntimeValue | RuntimeValue[],
@@ -162,6 +167,7 @@ builtin({
 
 builtin({
   name: "builtin",
+  accepts: { sparse: true },
   nargin: [1, Infinity],
   nargout: Infinity,
   apply: (args, nargout, ctx) => {

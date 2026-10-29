@@ -48,6 +48,7 @@ import {
 } from "./emitNamedTypedef.js";
 import { emitCellTypedef } from "./emitCellTypedef.js";
 import { emitFunction, fnParamList, fnRetType } from "./emitStmt.js";
+import { renameCIdentifiers } from "./cSource.js";
 
 export interface EmitOptions {
   /** cName of the entry spec to expose at module scope (no `static`
@@ -192,13 +193,31 @@ export function emitProgram(prog: IRProgram, opts: EmitOptions): EmitResult {
   );
   out.push("void jit_free(void *p) { free(p); }");
   out.push("");
+  const names = canonicalSpecNames(prog);
   return {
-    source: out.join("\n"),
-    hostEntry,
+    source: renameCIdentifiers(out.join("\n"), names),
+    hostEntry: names.get(hostEntry)!,
     activatedSnippets: Array.from(state.active),
     locFiles: state.locFiles,
     borrows,
   };
+}
+
+/** Names for the module's specs (and the host entry) that depend only on
+ *  their position, `_jit_fn<k>_<source name>`, in place of the mangled
+ *  `<source name>__<hash of argument types>`, so that two modules that
+ *  differ only in those types emit the same C (see `cSource.ts`). User
+ *  identifiers cannot begin with `_`, so these do not collide with
+ *  locals. */
+function canonicalSpecNames(prog: IRProgram): Map<string, string> {
+  const names = new Map<string, string>();
+  let k = 0;
+  for (const cName of prog.functions.keys()) {
+    const canon = `_jit_fn${k++}_${cName.replace(/__[0-9a-f]{8}$/, "")}`;
+    names.set(cName, canon);
+    names.set(`${cName}__host`, `${canon}__host`);
+  }
+  return names;
 }
 
 /** The exported wrapper the host calls: clears the raise status, arms the

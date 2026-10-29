@@ -31,7 +31,7 @@ import { makeTensor, mkc } from "./types.js";
 import { builtin } from "./builtin.js";
 import { undefinedForTypeError } from "./value-class.js";
 import { valueClass } from "../../runtime/kinds.js";
-import { builtinError } from "./args.js";
+import { builtinError, UNIMPLEMENTED_SPARSE_TYPE } from "./args.js";
 import { allocFloat64Array } from "../../runtime/alloc.js";
 import { imagAllZero } from "../../helpers/effectively-real.js";
 import { charToNumericTensor } from "../../runtime/indexing.js";
@@ -83,6 +83,7 @@ function parseDoubleText(s: string): number {
 
 builtin({
   name: "double",
+  accepts: { sparse: true },
   nargin: 1,
   apply: args => {
     const v = args[0];
@@ -164,6 +165,7 @@ function singleApply(v: RuntimeValue): RuntimeValue {
 
 builtin({
   name: "single",
+  accepts: { sparse: true },
   nargin: 1,
   apply: args => singleApply(args[0]),
 });
@@ -214,6 +216,7 @@ for (const { name, min, max } of INT_RANGES) {
   builtin({
     name,
     nargin: 1,
+    accepts: { sparse: UNIMPLEMENTED_SPARSE_TYPE },
     apply: args => {
       // Enumeration member / built-in-derived instance → its underlying
       // value (e.g. `uint32(patchtype.tri)` → the stored uint32).
@@ -242,11 +245,6 @@ for (const { name, min, max } of INT_RANGES) {
         }
         return RTV.tensor(data, [...v.shape], imag);
       }
-      if (isRuntimeSparseMatrix(v))
-        throw builtinError(
-          "MATLAB:unimplementedSparseType",
-          "Attempt to convert to unimplemented sparse type"
-        );
       throw invalidConversion(name, v);
     },
   });
@@ -284,6 +282,12 @@ builtin({
       "Reinterpret the raw bytes of numeric array X as CLASS (e.g. 'uint8', 'single', 'int32'). numbl stores all numerics as double, so X is treated as double-precision; this is mainly for serializing numeric data to bytes, e.g. typecast(double(x), 'uint8').",
   },
   nargin: 2,
+  accepts: {
+    sparse: {
+      identifier: "MATLAB:typecast:mustBeFull",
+      message: "Sparse first argument is not supported.",
+    },
+  },
   apply: args => {
     const X = args[0];
     const clsArg = args[1];
@@ -493,6 +497,13 @@ builtin({
       "Encode value V (struct, cell, char/string, logical, or numeric array) as a JSON-formatted char row vector. NaN and Inf are written as null unless ConvertInfAndNaN is false.",
   },
   nargin: [1, 5],
+  accepts: {
+    sparse: {
+      identifier: "MATLAB:json:UnsupportedSparseDataType",
+      message:
+        "Unable to encode sparse objects of class double as JSON-formatted text.",
+    },
+  },
   apply: args => {
     const convert = jsonencodeOptions(args.slice(1));
     const saved = jsonConvertInfAndNaN;
@@ -551,6 +562,7 @@ function idivideOperand(v: RuntimeValue): number | RuntimeTensor {
 
 builtin({
   name: "idivide",
+  accepts: { sparse: true },
   nargin: [2, 3],
   mfile: true,
   apply: args => {
@@ -619,6 +631,7 @@ function toLogicalElem(x: number): number {
 
 builtin({
   name: "logical",
+  accepts: { sparse: true },
   nargin: 1,
   apply: args => {
     // Enumeration member with a `logical` superclass → underlying value.
@@ -677,8 +690,6 @@ function complexPart(
     if (v.imag && !imagAllZero(v.imag)) throw err();
     return v;
   }
-  if (isRuntimeSparseMatrix(v))
-    throw new RuntimeError("complex: sparse input is not supported");
   throw err();
 }
 
@@ -703,8 +714,6 @@ builtin({
           a.shape.slice()
         );
       }
-      if (isRuntimeSparseMatrix(a))
-        throw new RuntimeError("complex: sparse input is not supported");
       throw builtinError(
         "MATLAB:complex:expectsNumeric",
         "First input must be numeric."
@@ -763,6 +772,7 @@ function cellSizeArg(v: RuntimeValue): RuntimeValue {
 
 builtin({
   name: "cell",
+  accepts: { sparse: true },
   nargin: [1, Infinity],
   apply: args => {
     if (args.length === 1 && isRuntimeCell(args[0])) return args[0];
@@ -783,6 +793,7 @@ builtin({
 
 builtin({
   name: "struct",
+  accepts: { sparse: true },
   apply: args => {
     if (args.length === 0) return RTV.struct(new Map());
     if (args.length === 1) {
@@ -891,6 +902,7 @@ builtin({
 
 builtin({
   name: "isfield",
+  accepts: { sparse: true },
   nargin: 2,
   apply: args => {
     const v = args[0];
@@ -922,6 +934,7 @@ builtin({
 
 builtin({
   name: "deal",
+  accepts: { sparse: true },
   nargin: [0, Infinity],
   nargout: [0, Infinity],
   mfile: true,

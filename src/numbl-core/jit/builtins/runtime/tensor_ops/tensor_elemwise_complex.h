@@ -33,7 +33,8 @@
  * `mixedRealComplex` in helpers/arithmetic.ts): a real operand scales
  * each part of a complex one without promotion, so a result part stays
  * 0 where the complex operand's part is 0 (NaN or Inf in the real
- * operand would otherwise give NaN*0 = NaN). The lanes are written
+ * operand would otherwise give NaN*0 = NaN), unless the element's
+ * imaginary part is 0: then it is scaled as a real number. The lanes are written
  * directly rather than through `jit_cmake`, whose `re + im*I` turns
  * an Inf imag part into a NaN real part. */
 static int jit_celem_acts_real(jit_tensor_t t) {
@@ -50,7 +51,7 @@ static inline void jit_celem_plus(double are, double aim, int ar, double bre,
                                     double bim, int br, double *re, double *im) {
   (void)ar;
   (void)br;
-  double _Complex v = jit_cadd(jit_cmake(are, aim), jit_cmake(bre, bim));
+  double _Complex v = jit_cadd(jit_cpack(are, aim), jit_cpack(bre, bim));
   *re = jit_creal(v);
   *im = jit_cimag(v);
 }
@@ -59,7 +60,7 @@ static inline void jit_celem_minus(double are, double aim, int ar, double bre,
                                      double bim, int br, double *re, double *im) {
   (void)ar;
   (void)br;
-  double _Complex v = jit_csub(jit_cmake(are, aim), jit_cmake(bre, bim));
+  double _Complex v = jit_csub(jit_cpack(are, aim), jit_cpack(bre, bim));
   *re = jit_creal(v);
   *im = jit_cimag(v);
 }
@@ -70,13 +71,13 @@ static inline void jit_celem_times(double are, double aim, int ar, double bre,
     *re = are * bre;
     *im = 0.0;
   } else if (br) {
-    *re = are == 0.0 ? 0.0 : are * bre;
+    *re = (are == 0.0 && aim != 0.0) ? 0.0 : are * bre;
     *im = aim == 0.0 ? 0.0 : aim * bre;
   } else if (ar) {
-    *re = bre == 0.0 ? 0.0 : bre * are;
+    *re = (bre == 0.0 && bim != 0.0) ? 0.0 : bre * are;
     *im = bim == 0.0 ? 0.0 : bim * are;
   } else {
-    double _Complex v = jit_cmul(jit_cmake(are, aim), jit_cmake(bre, bim));
+    double _Complex v = jit_cmul(jit_cpack(are, aim), jit_cpack(bre, bim));
     *re = jit_creal(v);
     *im = jit_cimag(v);
   }
@@ -89,14 +90,14 @@ static inline void jit_celem_rdivide(double are, double aim, int ar,
     *re = are / bre;
     *im = 0.0;
   } else if (br) {
-    *re = are == 0.0 ? 0.0 : are / bre;
+    *re = (are == 0.0 && aim != 0.0) ? 0.0 : are / bre;
     *im = aim == 0.0 ? 0.0 : aim / bre;
   } else if (ar && bim == 0.0) {
     *re = are / bre;
     *im = 0.0;
   } else {
-    double _Complex v = jit_cdiv(jit_cmake(are, ar ? 0.0 : aim),
-                                   jit_cmake(bre, bim));
+    double _Complex v = jit_cdiv(jit_cpack(are, ar ? 0.0 : aim),
+                                   jit_cpack(bre, bim));
     *re = jit_creal(v);
     *im = jit_cimag(v);
   }

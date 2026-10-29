@@ -30,7 +30,13 @@ import {
   formatDatetimeOrDuration,
 } from "../../runtime/index.js";
 import { builtin, type BuiltinApply } from "./builtin.js";
-import { builtinError, numericArg, realScalarArg } from "./args.js";
+import {
+  builtinError,
+  denseNumericArg,
+  PRINTF_SPARSE,
+  realScalarArg,
+  UNIMPLEMENTED_SPARSE_TYPE,
+} from "./args.js";
 import { valueClass } from "../../runtime/kinds.js";
 import {
   isText,
@@ -108,12 +114,14 @@ function textMap(
 // MATLAB's lower/upper return non-text input unchanged.
 builtin({
   name: "lower",
+  accepts: { sparse: true },
   nargin: 1,
   apply: args => applyTextFn(args[0], s => s.toLowerCase()),
 });
 
 builtin({
   name: "upper",
+  accepts: { sparse: true },
   nargin: 1,
   apply: args => applyTextFn(args[0], s => s.toUpperCase()),
 });
@@ -525,12 +533,14 @@ function strcmpApply(
 
 builtin({
   name: "strcmp",
+  accepts: { sparse: true },
   nargin: 2,
   apply: args => strcmpApply(args, (a, b) => a === b),
 });
 
 builtin({
   name: "strcmpi",
+  accepts: { sparse: true },
   nargin: 2,
   apply: args =>
     strcmpApply(args, (a, b) => a.toLowerCase() === b.toLowerCase()),
@@ -1031,8 +1041,7 @@ function isNumericValue(v: RuntimeValue): boolean {
     isRuntimeNumber(v) ||
     isRuntimeLogical(v) ||
     isRuntimeTensor(v) ||
-    isRuntimeComplexNumber(v) ||
-    isRuntimeSparseMatrix(v)
+    isRuntimeComplexNumber(v)
   );
 }
 
@@ -1069,8 +1078,7 @@ function decimalArg(
     throw unsupportedFormError(name, "array input");
   }
   if (isRuntimeChar(v)) throw unsupportedClassError(name, v);
-  if (isNumericValue(v))
-    throw unsupportedFormError(name, "complex or sparse input");
+  if (isNumericValue(v)) throw unsupportedFormError(name, "complex input");
   throw badType();
 }
 
@@ -1130,13 +1138,9 @@ builtin({
   mfile: true,
   apply: args => {
     // char input is converted to its character codes, as in MATLAB.
-    const v = numericArg(args[0]);
-    if (
-      isRuntimeComplexNumber(v) ||
-      isRuntimeSparseMatrix(v) ||
-      (isRuntimeTensor(v) && v.imag)
-    )
-      throw unsupportedFormError("int2str", "complex or sparse input");
+    const v = denseNumericArg(args[0]);
+    if (isRuntimeComplexNumber(v) || (isRuntimeTensor(v) && v.imag))
+      throw unsupportedFormError("int2str", "complex input");
     const roundInt = (x: number) => Math.sign(x) * Math.round(Math.abs(x));
     if (isRuntimeTensor(v)) {
       const rows = v.shape[0] || 1;
@@ -1167,12 +1171,8 @@ builtin({
     const v = args[0];
     // MATLAB returns char input unchanged.
     if (isRuntimeChar(v)) return v;
-    if (
-      isRuntimeComplexNumber(v) ||
-      isRuntimeSparseMatrix(v) ||
-      (isRuntimeTensor(v) && v.imag)
-    )
-      throw unsupportedFormError("num2str", "complex or sparse input");
+    if (isRuntimeComplexNumber(v) || (isRuntimeTensor(v) && v.imag))
+      throw unsupportedFormError("num2str", "complex input");
     if (!isRuntimeNumber(v) && !isRuntimeLogical(v) && !isRuntimeTensor(v))
       throw builtinError(
         "MATLAB:num2str:nonNumericInput",
@@ -1245,6 +1245,7 @@ builtin({
 
 builtin({
   name: "mat2str",
+  accepts: { sparse: true },
   nargin: [1, 3],
   mfile: true,
   apply: args => {
@@ -1414,6 +1415,7 @@ function charConversionError(v: RuntimeValue): RuntimeError {
 // char(), char(A), char(A1, ..., An)
 builtin({
   name: "char",
+  accepts: { sparse: UNIMPLEMENTED_SPARSE_TYPE },
   apply: args => {
     if (args.length === 0) return RTV.char("");
     if (args.length > 1) {
@@ -1473,6 +1475,7 @@ builtin({
 
 builtin({
   name: "string",
+  accepts: { sparse: true },
   nargin: [0, 1],
   apply: args => {
     if (args.length === 0) return RTV.string("");
@@ -1527,6 +1530,7 @@ builtin({
 
 builtin({
   name: "strings",
+  accepts: { sparse: true },
   help: {
     signatures: ["strings", "strings(n)", "strings(m,n)", "strings([m n])"],
     description:
@@ -1712,6 +1716,7 @@ builtin({
 
 builtin({
   name: "ismissing",
+  accepts: { sparse: true },
   help: {
     signatures: ["ismissing(A)"],
     description:
@@ -1769,6 +1774,7 @@ builtin({
   name: "sprintf",
   nargin: [1, Infinity],
   nargout: 2,
+  accepts: { sparse: PRINTF_SPARSE },
   apply: (args, nargout) => {
     const f = args[0];
     if (!isText(f))

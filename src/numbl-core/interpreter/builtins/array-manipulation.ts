@@ -198,6 +198,7 @@ function rejectComplex(v: RuntimeValue, id: string, message: string): void {
 function structAwareBuiltin(spec: PlainBuiltinSpec): void {
   const apply = spec.apply;
   builtin({
+    accepts: { sparse: true },
     ...spec,
     apply: (args, nargout, ctx) => {
       const v = args[0];
@@ -470,12 +471,14 @@ structAwareBuiltin({
 
 builtin({
   name: "transpose",
+  accepts: { sparse: true },
   nargin: 1,
   apply: args => mTranspose(args[0]),
 });
 
 builtin({
   name: "ctranspose",
+  accepts: { sparse: true },
   nargin: 1,
   apply: args => mConjugateTranspose(args[0]),
 });
@@ -484,6 +487,7 @@ builtin({
 
 builtin({
   name: "diag",
+  accepts: { sparse: true },
   nargin: [1, 2],
   apply: args => {
     let v = args[0];
@@ -659,6 +663,7 @@ builtin({
 
 builtin({
   name: "cat",
+  accepts: { sparse: true },
   nargin: [1, Infinity],
   apply: args => {
     const d0 = args[0];
@@ -762,11 +767,13 @@ builtin({
 
 builtin({
   name: "horzcat",
+  accepts: { sparse: true },
   apply: args => horzcat(...args),
 });
 
 builtin({
   name: "vertcat",
+  accepts: { sparse: true },
   apply: args => vertcat(...args),
 });
 
@@ -1181,6 +1188,7 @@ function repelemObjects(
 
 builtin({
   name: "repelem",
+  accepts: { sparse: true },
   nargin: [2, Infinity],
   mfile: true,
   apply: args => {
@@ -1690,6 +1698,7 @@ builtin({
 
 builtin({
   name: "sub2ind",
+  accepts: { sparse: true },
   nargin: [2, Infinity],
   mfile: true,
   apply: args => {
@@ -1753,6 +1762,7 @@ builtin({
 
 builtin({
   name: "ind2sub",
+  accepts: { sparse: true },
   nargin: 2,
   nargout: [0, Infinity],
   mfile: true,

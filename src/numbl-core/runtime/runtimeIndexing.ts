@@ -393,7 +393,9 @@ export function indexCell(
 }
 
 /**
- * Indexed assignment `base(indices) = rhs` (deletion when rhs is `[]`).
+ * Indexed assignment `base(indices) = rhs`. `nullAssign` says whether the
+ * RHS is literally `[]` or `''` (MATLAB's null assignment, a deletion);
+ * when undefined, a 0x0 double or char RHS deletes (as for `subsasgn`).
  * `storeBack` marks the store-back of `base(indices).f = v`, which may add
  * a field to a struct array.
  */
@@ -403,7 +405,8 @@ export function indexStore(
   indices: unknown[],
   rhs: unknown,
   skipSubsasgn = false,
-  storeBack = false
+  storeBack = false,
+  nullAssign?: boolean
 ): unknown {
   // ── Fast paths: one in-range scalar subscript into an unshared target
   // that is written in place: a real tensor (number RHS, plus
@@ -545,7 +548,8 @@ export function indexStore(
       ensureRuntimeValue(rhs),
       isRuntimeCell(mv),
       rt,
-      storeBack
+      storeBack,
+      nullAssign
     );
   }
   // Convert scalar number/logical/complex to 1x1 tensor for indexed assignment
@@ -580,7 +584,7 @@ export function indexStore(
   // A char RHS assigned into a numeric/char array becomes its code point(s)
   // (MATLAB: x=[1 2 3]; x(2)='A' -> [1 65 3]); '' still deletes.
   if (isRuntimeChar(rhsMv)) rhsMv = charToNumericTensor(rhsMv);
-  const result = mIndexStore(mv, idxMvals, rhsMv, false, rt);
+  const result = mIndexStore(mv, idxMvals, rhsMv, false, rt, false, nullAssign);
   if (wasChar && isRuntimeTensor(result)) {
     return numericTensorToChar(result);
   }

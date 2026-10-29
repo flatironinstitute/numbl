@@ -35,7 +35,7 @@ Program output reaches the host through a koffi callback while the call runs, so
 
 ## Native compile/load
 
-The `cc`-invoke + koffi `dlopen` step lives in `executors/jit/compileC.node.ts` (Node only; uses `node:fs`/`node:child_process`). `cBackend.ts` calls it directly; the backend reaches a run through its host (`host.cjit`, set from `nodeCJitBackend()` in `cjit.node.ts` by `initNodePlatform` in `src/node-platform.ts`), and `compileC.ts` keeps only the types. Compiled `.so`s are cached on disk keyed by a hash of the flags + C source. Without `cc` or `koffi`, the C-JIT executors decline and `--opt 2` behaves like `--opt 1`.
+The `cc`-invoke + koffi `dlopen` step lives in `executors/jit/compileC.node.ts` (Node only; uses `node:fs`/`node:child_process`). `cBackend.ts` calls it directly; the backend reaches a run through its host (`host.cjit`, set from `nodeCJitBackend()` in `cjit.node.ts` by `initNodePlatform` in `src/node-platform.ts`), and `compileC.ts` keeps only the types. Compiled `.so`s are cached on disk (`~/.cache/numbl/c-jit`, or `$NUMBL_CJIT_CACHE`) keyed by a hash of the flags, the koffi declaration and the C source without its comments. The emitter names a module's specs by their position in call order from the entry (`_jit_fn<k>_<name>`, see `codegen/cSource.ts`) rather than by the mangled `<name>__<hash of argument types>`, so a widened spec whose code is the same as the exact-shape spec it replaced (only the type comments differ) loads the cached object instead of running `cc` again. Without `cc` or `koffi`, the C-JIT executors decline and `--opt 2` behaves like `--opt 1`.
 
 ## When it helps
 

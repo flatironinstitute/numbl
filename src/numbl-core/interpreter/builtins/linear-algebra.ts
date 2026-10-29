@@ -94,10 +94,12 @@ const svdTypeError = errorFn(
   "MATLAB:svd:inputType",
   "First input must be single or double."
 );
-const svdSparseError = errorFn(
-  "MATLAB:svd:noSVDsparse",
-  "SVD does not support sparse matrices. Use SVDS to compute a subset of the singular values and vectors of a sparse matrix."
-);
+/** MATLAB rejects sparse input to svd and the functions built on it. */
+const SVD_SPARSE = {
+  identifier: "MATLAB:svd:noSVDsparse",
+  message:
+    "SVD does not support sparse matrices. Use SVDS to compute a subset of the singular values and vectors of a sparse matrix.",
+};
 const floatOrLogicalError = errorFn(
   "MATLAB:math:mustBeFloatOrLogical",
   "Invalid data type. Argument must be double, single, or logical."
@@ -132,6 +134,7 @@ const unknownNormError = errorFn(
 
 builtin({
   name: "norm",
+  accepts: { sparse: true },
   nargin: [1, 2],
   // normImplTensor may allocate scratch (e.g. the SVD for the 2-norm); the
   // result is a scalar, so release it on return.
@@ -363,6 +366,7 @@ const vecnormTypeError = errorFn(
 
 builtin({
   name: "vecnorm",
+  accepts: { sparse: true },
   nargin: [1, 3],
   apply: args => {
     const v = boolToNumber(args[0]);
@@ -485,6 +489,7 @@ function vecnormAlongDim(
 
 builtin({
   name: "dot",
+  accepts: { sparse: true },
   nargin: [2, 3],
   mfile: true,
   apply: args => {
@@ -782,6 +787,7 @@ builtin({
 
 builtin({
   name: "cross",
+  accepts: { sparse: true },
   nargin: [2, 3],
   mfile: true,
   apply: args => {
@@ -879,6 +885,7 @@ const invTypeError = errorFn(
 
 builtin({
   name: "inv",
+  accepts: { sparse: true },
   nargin: 1,
   apply: args => invValue(args[0]),
 });
@@ -1026,6 +1033,7 @@ builtin({
   name: "svd",
   nargin: [1, 3],
   nargout: 3,
+  accepts: { sparse: SVD_SPARSE },
   apply: (args, nargout) => {
     let econ = false;
     let form: "vector" | "matrix" | undefined;
@@ -1070,7 +1078,7 @@ function svdApply(
       nargout
     );
   }
-  const A = denseFloatMatrixArg(a, svdTypeError, svdSparseError);
+  const A = denseFloatMatrixArg(a, svdTypeError);
   const [m, n] = tensorSize2D(A);
   const k = Math.min(m, n);
   const bridge = getLapackBridge();
@@ -1117,7 +1125,7 @@ function svdApply(
 /** null(A): orthonormal basis (columns) for the null space of A, via SVD.
  *  null(A, tol) overrides the singular-value tolerance. */
 function nullApply(args: RuntimeValue[]): RuntimeValue {
-  const A = denseFloatMatrixArg(args[0], svdTypeError, svdSparseError);
+  const A = denseFloatMatrixArg(args[0], svdTypeError);
   const [m, n] = tensorSize2D(A);
   let tolArg: number | undefined;
   if (args.length > 1) {
@@ -1162,6 +1170,7 @@ builtin({
   name: "null",
   nargin: [1, 2],
   mfile: true,
+  accepts: { sparse: SVD_SPARSE },
   apply: args => nullApply(args),
 });
 
@@ -1227,6 +1236,7 @@ function bandwidthApply(
 
 builtin({
   name: "bandwidth",
+  accepts: { sparse: true },
   nargin: [1, 2],
   nargout: 2,
   apply: (args, nargout) => bandwidthApply(args, nargout),
@@ -1266,6 +1276,7 @@ for (const [name, upper] of [
       description: `True if A is ${upper ? "upper" : "lower"} triangular (all entries ${upper ? "below" : "above"} the main diagonal are zero). Works for dense and sparse matrices.`,
     },
     nargin: 1,
+    accepts: { sparse: true },
     apply: args => RTV.logical(isTriangularValue(args[0], upper)),
   });
 }
@@ -1304,6 +1315,7 @@ builtin({
 
 builtin({
   name: "qr",
+  accepts: { sparse: true },
   nargin: [1, 3],
   nargout: 3,
   apply: (args, nargout) => {
@@ -1617,6 +1629,7 @@ const invalidPermFlagError = errorFn(
 
 builtin({
   name: "lu",
+  accepts: { sparse: true },
   nargin: [1, 3],
   nargout: 5,
   apply: (args, nargout) => withScratch(() => luApply(args, nargout)),
@@ -1837,6 +1850,7 @@ const eigTypeError = errorFn(
 
 builtin({
   name: "eig",
+  accepts: { sparse: true },
   nargin: [1, 4],
   nargout: 3,
   apply: (args, nargout) => eigApply(args, nargout),
@@ -2399,6 +2413,7 @@ const posdefError = errorFn(
 
 builtin({
   name: "chol",
+  accepts: { sparse: true },
   nargin: [1, 3],
   nargout: 3,
   apply: (args, nargout) => withScratch(() => cholApply(args, nargout)),
@@ -2603,6 +2618,12 @@ builtin({
   name: "linsolve",
   nargin: [2, 3],
   nargout: 2,
+  accepts: {
+    sparse: {
+      identifier: "MATLAB:linsolve:sparseNotSupported",
+      message: "Linsolve is not supported for sparse inputs.",
+    },
+  },
   apply: (args, nargout) => {
     if (args.length > 2)
       throw new RuntimeError(
@@ -2616,12 +2637,8 @@ builtin({
       "MATLAB:linsolve:inputType",
       "First and second arguments must be single or double."
     );
-    const sparseError = errorFn(
-      "MATLAB:linsolve:sparseNotSupported",
-      "Linsolve is not supported for sparse inputs."
-    );
-    const A = denseFloatMatrixArg(args[0], typeError, sparseError);
-    const B = denseFloatMatrixArg(args[1], typeError, sparseError);
+    const A = denseFloatMatrixArg(args[0], typeError);
+    const B = denseFloatMatrixArg(args[1], typeError);
     const [m, n] = tensorSize2D(A);
     const [Bm, p] = tensorSize2D(B);
     if (Bm !== m)
@@ -2643,6 +2660,7 @@ builtin({
 
 builtin({
   name: "cond",
+  accepts: { sparse: true },
   nargin: [1, 2],
   mfile: true,
   apply: args => {
@@ -2750,6 +2768,7 @@ builtin({
   name: "rank",
   nargin: [1, 2],
   mfile: true,
+  accepts: { sparse: SVD_SPARSE },
   apply: args => {
     const tolArg =
       args.length >= 2
@@ -2765,7 +2784,7 @@ builtin({
     if (isRuntimeNumber(v)) return RTV.num(v === 0 ? 0 : 1);
     if (isRuntimeComplexNumber(v))
       return RTV.num(v.re === 0 && v.im === 0 ? 0 : 1);
-    const A = denseFloatMatrixArg(v, svdTypeError, svdSparseError);
+    const A = denseFloatMatrixArg(v, svdTypeError);
     const [rows, cols] = tensorSize2D(A);
     const s = (svdApply(A, 1) as RuntimeTensor).data;
     let tol: number;
@@ -2793,6 +2812,7 @@ builtin({
   name: "pinv",
   nargin: [1, 2],
   mfile: true,
+  accepts: { sparse: SVD_SPARSE },
   apply: args =>
     withScratch(() => {
       const tolArg =
@@ -2811,7 +2831,7 @@ builtin({
         const d = v.re * v.re + v.im * v.im;
         return d === 0 ? RTV.num(0) : RTV.complex(v.re / d, -v.im / d);
       }
-      const A = denseFloatMatrixArg(v, svdTypeError, svdSparseError);
+      const A = denseFloatMatrixArg(v, svdTypeError);
       const [m, n] = tensorSize2D(A);
       const k = Math.min(m, n);
       if (A.imag) {
@@ -2875,6 +2895,7 @@ builtin({
 
 builtin({
   name: "kron",
+  accepts: { sparse: true },
   nargin: 2,
   mfile: true,
   apply: args => {
@@ -2919,6 +2940,7 @@ builtin({
 
 builtin({
   name: "blkdiag",
+  accepts: { sparse: true },
   mfile: true,
   apply: args => {
     if (args.some(a => isRuntimeChar(a)))
@@ -2964,6 +2986,12 @@ builtin({
 builtin({
   name: "pagemtimes",
   nargin: [2, 4],
+  accepts: {
+    sparse: {
+      identifier: "MATLAB:pagemtimes:sparseNotSupported",
+      message: "Sparse inputs are not supported.",
+    },
+  },
   apply: args => {
     let X: RuntimeValue, Y: RuntimeValue;
     let transpX = "none",
@@ -2994,12 +3022,8 @@ builtin({
       "MATLAB:pagemtimes:invalidArray",
       "Invalid data types. Input arrays must be double or single."
     );
-    const sparseError = errorFn(
-      "MATLAB:pagemtimes:sparseNotSupported",
-      "Sparse inputs are not supported."
-    );
-    const xT = denseFloatMatrixArg(X, typeError, sparseError);
-    const yT = denseFloatMatrixArg(Y, typeError, sparseError);
+    const xT = denseFloatMatrixArg(X, typeError);
+    const yT = denseFloatMatrixArg(Y, typeError);
 
     const xShape = xT.shape.length < 2 ? [1, xT.shape[0] || 1] : xT.shape;
     const yShape = yT.shape.length < 2 ? [1, yT.shape[0] || 1] : yT.shape;
@@ -3124,6 +3148,7 @@ builtin({
 
 builtin({
   name: "pagetranspose",
+  accepts: { sparse: true },
   nargin: 1,
   mfile: true,
   apply: (args, _nargout, ctx) => {
@@ -3175,6 +3200,12 @@ builtin({
   name: "qz",
   nargin: [2, 3],
   nargout: 6,
+  accepts: {
+    sparse: {
+      identifier: "MATLAB:qz:noQZsparse",
+      message: "Sparse matrices not supported.",
+    },
+  },
   apply: (args, nargout) => outputs(qzApply(args, nargout), nargout),
 });
 
@@ -3186,12 +3217,8 @@ function qzApply(args: RuntimeValue[], nargout: number): RuntimeValue[] {
     else if (modeStr === "real") mode = "real";
     else throw new RuntimeError(`qz: unknown mode '${modeStr}'`);
   }
-  const sparseError = errorFn(
-    "MATLAB:qz:noQZsparse",
-    "Sparse matrices not supported."
-  );
-  const A = denseFloatMatrixArg(args[0], mustBeFloatError, sparseError);
-  const B = denseFloatMatrixArg(args[1], mustBeFloatError, sparseError);
+  const A = denseFloatMatrixArg(args[0], mustBeFloatError);
+  const B = denseFloatMatrixArg(args[1], mustBeFloatError);
   const [mA, nA] = tensorSize2D(A);
   const [mB, nB] = tensorSize2D(B);
   if (mA !== nA) throw new RuntimeError("qz: A must be a square matrix");

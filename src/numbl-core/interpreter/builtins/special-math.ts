@@ -5,10 +5,8 @@
 import {
   isRuntimeChar,
   isRuntimeComplexNumber,
-  isRuntimeSparseMatrix,
   isRuntimeTensor,
 } from "../../runtime/types.js";
-import { sparseToDense } from "../../helpers/sparse-arithmetic.js";
 import type { RuntimeValue, RuntimeTensor } from "../../runtime/types.js";
 import { RTV, RuntimeError } from "../../runtime/index.js";
 import {
@@ -301,9 +299,7 @@ function applyAiryElementwise(
     return r.im === 0 ? RTV.num(r.re) : RTV.complex(r.re, r.im);
   }
   if (hasImag(x)) {
-    const t = isRuntimeSparseMatrix(x)
-      ? sparseToDense(x)
-      : (x as RuntimeTensor);
+    const t = x as RuntimeTensor;
     const im = t.imag!;
     const len = t.data.length;
     const resultRe = allocFloat64Array(len);

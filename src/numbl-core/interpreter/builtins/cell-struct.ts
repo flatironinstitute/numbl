@@ -154,6 +154,7 @@ builtin({
 
 builtin({
   name: "mat2cell",
+  accepts: { sparse: true },
   nargin: [2, Infinity],
   mfile: true,
   apply: args => {
@@ -273,6 +274,7 @@ function num2cellElements(
 
 builtin({
   name: "num2cell",
+  accepts: { sparse: true },
   nargin: [1, 2],
   mfile: true,
   apply: args => {
@@ -479,6 +481,7 @@ builtin({
 
 builtin({
   name: "setfield",
+  accepts: { sparse: true },
   nargin: [3, Infinity],
   mfile: true,
   apply: args => {

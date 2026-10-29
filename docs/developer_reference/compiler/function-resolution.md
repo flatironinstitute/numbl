@@ -46,7 +46,7 @@ classMethod("duration", {
 });
 ```
 
-The method receives the objects as ordinary arguments (either operand may be the object), and `a + b`, `plus(a, b)` and `a.plus(b)` all reach it. `methods` and `ismethod` list the registered methods. `datetime`, `duration` (`plus`, `minus` and the comparisons) and `decomposition` (`mldivide`, `mrdivide`) are registered this way. A new value type that should overload operators and functions:
+The method receives the objects as ordinary arguments (either operand may be the object), and `a + b`, `plus(a, b)` and `a.plus(b)` all reach it. `methods` and `ismethod` list the registered methods. Like a builtin, a method gets its other arguments under its `accepts` policy (a sparse argument arrives dense unless it declares `accepts: { sparse: true }`; see [builtins.md](../builtins.md#argument-kinds-sparse-and-other-non-dense-values)); since resolution picks the method first, the method's policy is the one that applies. `datetime`, `duration` (`plus`, `minus` and the comparisons) and `decomposition` (`mldivide`, `mrdivide`) are registered this way. A new value type that should overload operators and functions:
 
 1. stores its values as a kind whose descriptor has `isObject: true` and whose `className` is the class name (a `class_instance` with that class name, as `datetime` does, or a new kind; see [values-and-tensors.md](../runtime/values-and-tensors.md#adding-a-value-kind));
 2. registers its methods with `classMethod`, including the operator methods it supports; operators it does not define raise MATLAB's error.

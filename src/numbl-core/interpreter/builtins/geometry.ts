@@ -13,18 +13,16 @@ import {
   isRuntimeTensor,
   isRuntimeChar,
   isRuntimeComplexNumber,
-  isRuntimeSparseMatrix,
 } from "../../runtime/types.js";
 import { RTV, RuntimeError, tensorSize2D } from "../../runtime/index.js";
 import { builtin } from "./builtin.js";
-import { builtinError, mustBeRealError, numericArg } from "./args.js";
+import { builtinError, denseNumericArg, mustBeRealError } from "./args.js";
 import { allocFloat64Array } from "../../runtime/alloc.js";
 import {
   getDelaunayBackend,
   getConvexHullBackend,
 } from "../../native/geometry-bridge.js";
 import { imagAllZero } from "../../helpers/effectively-real.js";
-import { sparseToDense } from "../../helpers/sparse-arithmetic.js";
 
 // ── Argument checks ──────────────────────────────────────────────────────
 
@@ -609,13 +607,12 @@ function getQueryValues(v: RuntimeValue): {
   // numericArg: logical -> double, char -> codes, other types rejected with
   // MATLAB's invalid-data-type error. MATLAB's inpolygon silently uses the
   // real part of complex input; numbl rejects it instead.
-  let a = numericArg(v);
+  const a = denseNumericArg(v);
   if (typeof a === "number") return { data: [a], shape: null };
   if (isRuntimeComplexNumber(a)) {
     if (a.im !== 0) throw mustBeRealError();
     return { data: [a.re], shape: null };
   }
-  if (isRuntimeSparseMatrix(a)) a = sparseToDense(a);
   if (a.imag && !imagAllZero(a.imag)) throw mustBeRealError();
   return { data: Array.from(a.data), shape: [...a.shape] };
 }

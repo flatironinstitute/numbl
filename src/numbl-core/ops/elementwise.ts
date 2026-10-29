@@ -25,6 +25,7 @@ import {
   NATIVE_CMP_OP_COUNT,
 } from "./opCodes.js";
 import { broadcastShape, forEachBroadcastRow } from "./broadcast.js";
+import { cdivResult, complexDivide } from "./complexDivide.js";
 
 /** A dense operand. `RuntimeTensor` satisfies this interface. */
 export interface DenseOperand {
@@ -83,10 +84,6 @@ export function realElem(op: number, x: number, y: number): number {
   }
 }
 
-function signedInf(x: number): number {
-  return x > 0 ? Infinity : x < 0 ? -Infinity : 0;
-}
-
 /** cos(pi * x) with exact results at integer and half-integer x. */
 function cospi(x: number): number {
   if (Number.isInteger(x)) return (x & 1) === 0 ? 1 : -1;
@@ -109,29 +106,11 @@ function sinpi(x: number): number {
 let cRe = 0;
 let cIm = 0;
 
-/** Smith's algorithm: avoids spurious overflow in bRe*bRe + bIm*bIm. */
+/** Complex division (see complexDivide.ts). */
 function complexDiv(aRe: number, aIm: number, bRe: number, bIm: number) {
-  if (bRe === 0 && bIm === 0) {
-    if (aRe === 0 && aIm === 0) {
-      cRe = NaN;
-      cIm = 0;
-    } else {
-      cRe = signedInf(aRe);
-      cIm = signedInf(aIm);
-    }
-    return;
-  }
-  if (Math.abs(bRe) >= Math.abs(bIm)) {
-    const r = bIm / bRe;
-    const d = bRe + bIm * r;
-    cRe = (aRe + aIm * r) / d;
-    cIm = (aIm - aRe * r) / d;
-  } else {
-    const r = bRe / bIm;
-    const d = bIm + bRe * r;
-    cRe = (aRe * r + aIm) / d;
-    cIm = (aIm * r - aRe) / d;
-  }
+  complexDivide(aRe, aIm, bRe, bIm);
+  cRe = cdivResult.re;
+  cIm = cdivResult.im;
 }
 
 /** Principal-branch z^w. A pure-real negative base with a real exponent
@@ -221,9 +200,11 @@ function complexElem(
 }
 
 /** Complex times or divided by real, without promoting the real operand to
- *  complex: each part of `c` is scaled on its own and stays exactly 0
- *  where it is 0 (promoting would turn Inf or NaN in `x` into NaN parts).
- *  `realLeft` is for `x ./ c`. */
+ *  complex: each part of `c` is scaled on its own, and a zero part of a
+ *  number with a nonzero other part stays exactly 0 (promoting would turn
+ *  Inf or NaN in `x` into NaN parts). An element with a zero imaginary
+ *  part is scaled as a real number (MATLAB: [0 1i] .* [Inf 1] has NaN
+ *  first). `realLeft` is for `x ./ c`. */
 function mixedElem(
   op: number,
   re: number,
@@ -232,11 +213,21 @@ function mixedElem(
   realLeft: boolean
 ): void {
   if (op === OpBin.MUL) {
-    cRe = re === 0 ? 0 : re * x;
-    cIm = im === 0 ? 0 : im * x;
+    if (im === 0) {
+      cRe = re * x;
+      cIm = 0;
+    } else {
+      cRe = re === 0 ? 0 : re * x;
+      cIm = im * x;
+    }
   } else if (!realLeft) {
-    cRe = re === 0 ? 0 : re / x;
-    cIm = im === 0 ? 0 : im / x;
+    if (im === 0) {
+      cRe = re / x;
+      cIm = 0;
+    } else {
+      cRe = re === 0 ? 0 : re / x;
+      cIm = im / x;
+    }
   } else if (im === 0) {
     cRe = x / re;
     cIm = 0;

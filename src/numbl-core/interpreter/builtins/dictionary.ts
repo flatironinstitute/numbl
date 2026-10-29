@@ -51,6 +51,8 @@ function dictMethod(
     name,
     nargin,
     nargout,
+    // Values are stored as given (keys reject sparse themselves).
+    accepts: { sparse: true },
     apply: (args, n) => {
       const d = args[0];
       if (!isRuntimeDictionary(d)) throw undefinedFunctionError(name, d);
@@ -62,6 +64,7 @@ function dictMethod(
 // dictionary(), dictionary(keys, values), dictionary(k1,v1,...,kN,vN)
 builtin({
   name: "dictionary",
+  accepts: { sparse: true },
   apply: args => {
     if (args.length % 2 !== 0)
       throw builtinError(

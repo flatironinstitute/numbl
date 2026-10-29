@@ -156,6 +156,7 @@ const sumOmitNanKernel = accumKernelOmitNaN((acc, val) => acc + val, 0);
 
 builtin({
   name: "sum",
+  accepts: { sparse: true },
   // sum(A, dim|vecdim|'all', outtype, nanflag)
   nargin: [1, 4],
   apply: args => {
@@ -190,6 +191,7 @@ const prodOmitNanKernel = accumKernelOmitNaN((acc, val) => acc * val, 1);
 
 builtin({
   name: "prod",
+  accepts: { sparse: true },
   nargin: [1, 4],
   apply: args => {
     if (isRuntimeChar(args[0]))
@@ -233,6 +235,7 @@ const meanOmitNanKernel = accumKernelOmitNaN(
 
 builtin({
   name: "mean",
+  accepts: { sparse: true },
   nargin: [1, 4],
   mfile: true,
   apply: args => {
@@ -395,6 +398,7 @@ function sliceReductionBuiltin(
     nargin: [1, 4],
     nargout,
     mfile: true,
+    accepts: { sparse: true },
     apply: (args, nout) => {
       if (nout > 1)
         throw new RuntimeError(`${name}: only the first output is supported`);
@@ -420,6 +424,7 @@ function anyAllBuiltin(mode: "any" | "all"): void {
   builtin({
     name: mode,
     nargin: [1, 2],
+    accepts: { sparse: true },
     apply: args => {
       const v = dense(dataArg(args[0], mode));
       if (typeof v === "number")

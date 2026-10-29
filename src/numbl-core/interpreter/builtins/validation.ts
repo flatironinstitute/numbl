@@ -46,6 +46,7 @@ function validator(
     nargin,
     nargout: 0,
     mfile: true,
+    accepts: { sparse: true },
     apply: (args, _nargout, ctx) => check(args, ctx.rt),
   });
 }
@@ -489,6 +490,7 @@ function checkColumnMonotonicity(
 
 builtin({
   name: "validateattributes",
+  accepts: { sparse: true },
   nargin: [3, 6],
   nargout: 0,
   apply: (args, _nargout, { rt }) => {

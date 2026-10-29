@@ -94,12 +94,17 @@ interface PlotArity {
   nargout?: Arity;
 }
 
+const SPARSE_PLOTS = new Set(["pcolor", "isosurface"]);
+
 function plotSpec(name: string, arity: PlotArity, fn: PlotFn): BuiltinSpec {
   return {
     name,
     nargin: arity.nargin,
     nargout: arity.nargout ?? 1,
     mfile: !BUILTIN_NAMES.has(name),
+    // Plot data arrives dense (the argument-kind default), except where the
+    // builtin reads sparse input itself.
+    accepts: SPARSE_PLOTS.has(name) ? { sparse: true } : undefined,
     apply: (args, nargout, ctx) => fn(nargout, args, ctx.rt),
   };
 }

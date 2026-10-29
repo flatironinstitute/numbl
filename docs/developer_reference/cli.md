@@ -32,7 +32,7 @@ The CLI provides:
 
 - a file-I/O adapter backed by Node's `fs` (byte-level primitives; fids and stream semantics are in the core `FileTable`, see [architecture.md](architecture.md#file-io));
 - a system adapter providing env vars, cwd, and platform info;
-- an output router that writes to stdout/stderr (or NDJSON stream mode);
+- an output router that writes to stdout/stderr (or NDJSON stream mode). `fprintf(2, ...)` text reaches the host through `ExecOptions.onErrorOutput` (falling back to `onOutput` when a host does not set it, as the browser does); the CLI writes it to stderr, and stream mode marks its `output` messages with `stream: "stderr"`;
 - an optional plot callback that forwards figures to an embedded HTTP server for a browser viewer.
 
 ## Options of note
@@ -41,7 +41,7 @@ The full option list is the `--help` output, mirrored in [docs/agents.md](../age
 
 - At `--opt 2`, `--dump-js` and `--dump-c` can be used together: C-JIT kernels land in the `--dump-c` file and the JS-JIT units that picked up the rest in the `--dump-js` file.
 - `--profile <file>` (run/eval) writes per-builtin timing JSON, which `numbl show-profile <file>` pretty-prints. Neither is listed in `--help`.
-- `NUMBL_CC` selects the C compiler for the C-JIT (default `cc`) and `NUMBL_NO_QHULL` skips loading the qhull WASM backend. Neither is listed in `--help`.
+- `NUMBL_CC` selects the C compiler for the C-JIT (default `cc`), `NUMBL_CJIT_CACHE` the directory of compiled C-JIT objects (default `~/.cache/numbl/c-jit`; point it at an empty directory to time cold compiles), and `NUMBL_NO_QHULL` skips loading the qhull WASM backend. None of them is listed in `--help`.
 
 ## Stream protocol
 

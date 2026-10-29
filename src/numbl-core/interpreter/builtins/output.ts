@@ -27,6 +27,7 @@ import {
   isBuiltin,
 } from "../../runtime/builtinRegistry.js";
 import { builtin } from "./builtin.js";
+import { PRINTF_SPARSE } from "./args.js";
 
 /** The leading help comment block of a .m source file: the comment lines
  *  right after the function/classdef declaration (or at the top of a
@@ -121,6 +122,7 @@ builtin({
 
 builtin({
   name: "disp",
+  accepts: { sparse: true },
   nargin: 1,
   nargout: 0,
   apply: (args, _nargout, ctx) => {
@@ -230,6 +232,7 @@ builtin({
 builtin({
   name: "fprintf",
   nargin: [1, Infinity],
+  accepts: { sparse: PRINTF_SPARSE },
   apply: (args, nargout, ctx) => {
     const rt = ctx.rt;
     // Detect optional leading fid argument (numeric first arg with >= 2 args)
@@ -253,7 +256,7 @@ builtin({
 
     let count: number | undefined;
     if (fid === 1 || fid === 2) {
-      rt.output(output);
+      rt.output(output, fid === 2);
     } else {
       if (!rt.files)
         throw new RuntimeError("File I/O is not available in this environment");

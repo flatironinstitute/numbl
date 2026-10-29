@@ -51,17 +51,14 @@ export function floatMatrixArg(
   throw err();
 }
 
-/** Like `floatMatrixArg`, but a sparse matrix is converted to a dense one,
- *  or raises `sparseErr()` when given. */
+/** Like `floatMatrixArg`, but a sparse matrix is converted to a dense
+ *  one. */
 export function denseFloatMatrixArg(
   v: RuntimeValue,
-  err: () => RuntimeError,
-  sparseErr?: () => RuntimeError
+  err: () => RuntimeError
 ): RuntimeTensor {
   const a = floatMatrixArg(v, err);
-  if (isRuntimeTensor(a)) return a;
-  if (sparseErr) throw sparseErr();
-  return sparseToDense(a);
+  return isRuntimeTensor(a) ? a : sparseToDense(a);
 }
 
 /** A numeric argument (char and logical allowed, as for MATLAB's M-file

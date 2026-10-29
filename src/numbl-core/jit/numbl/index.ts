@@ -23,6 +23,7 @@ export type {
 } from "../../parser/index.js";
 
 export {
+  isNullAssignRhs,
   tryExtractDottedName,
   unwindMemberChain,
   unwindMemberLvalue,

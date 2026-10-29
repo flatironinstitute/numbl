@@ -46,7 +46,12 @@ import {
 
 /** A one-argument predicate builtin. */
 function predicate(name: string, test: (v: RuntimeValue) => boolean): void {
-  builtin({ name, nargin: 1, apply: args => test(args[0]) });
+  builtin({
+    name,
+    nargin: 1,
+    accepts: { sparse: true },
+    apply: args => test(args[0]),
+  });
 }
 
 // ── Type predicates ──────────────────────────────────────────────────────
@@ -57,6 +62,7 @@ function categoryPredicate(name: string, category: string): void {
   builtin({
     name,
     nargin: 1,
+    accepts: { sparse: true },
     apply: (args, _nargout, { rt }) =>
       isaValue(args[0], category, cls => rt.classAncestors(cls)),
   });
@@ -120,6 +126,7 @@ predicate("isvarname", v => {
 
 builtin({
   name: "iskeyword",
+  accepts: { sparse: true },
   nargin: [0, 1],
   mfile: true,
   apply: args => {
@@ -146,6 +153,7 @@ predicate("isobject", isObjectValue);
 
 builtin({
   name: "isprop",
+  accepts: { sparse: true },
   help: {
     signatures: ["tf = isprop(obj, PropertyName)"],
     description:
@@ -249,6 +257,7 @@ predicate("ismatrix", v => valueShape(v).length <= 2);
 
 builtin({
   name: "numel",
+  accepts: { sparse: true },
   nargin: [1, Infinity],
   apply: args => {
     if (args.length > 1)
@@ -261,6 +270,7 @@ builtin({
 
 builtin({
   name: "length",
+  accepts: { sparse: true },
   nargin: 1,
   apply: args => {
     const v = args[0];
@@ -270,6 +280,7 @@ builtin({
 
 builtin({
   name: "ndims",
+  accepts: { sparse: true },
   nargin: 1,
   apply: args => {
     return Math.max(2, valueShape(args[0]).length);
@@ -304,6 +315,7 @@ function sizeDims(args: RuntimeValue[]): number[] {
 
 builtin({
   name: "size",
+  accepts: { sparse: true },
   nargin: [1, Infinity],
   nargout: [0, Infinity],
   apply: (args, nargout) => {
@@ -344,6 +356,7 @@ builtin({
 
 builtin({
   name: "class",
+  accepts: { sparse: true },
   nargin: [1, Infinity],
   apply: args => {
     if (args.length === 1) return RTV.char(valueClass(args[0]));
@@ -545,6 +558,7 @@ builtin({
 
 builtin({
   name: "isa",
+  accepts: { sparse: true },
   nargin: 2,
   apply: (args, _nargout, ctx) => ctx.rt.isa(args[0], args[1]),
 });
@@ -570,6 +584,7 @@ const nameColumn = (names: string[]) =>
 // or a built-in type.
 builtin({
   name: "superclasses",
+  accepts: { sparse: true },
   nargin: 1,
   apply: (args, _nargout, ctx) => {
     const className = referencedClass(args[0]);
@@ -581,6 +596,7 @@ builtin({
 // cell for anything that is not a class.
 builtin({
   name: "properties",
+  accepts: { sparse: true },
   nargin: 1,
   scope: true,
   apply: (args, nargout, { scope, rt }) => {
@@ -620,6 +636,7 @@ function nameColumns(names: string[], width: number): string {
 // and the methods a handle class inherits from `handle` left out.
 builtin({
   name: "methods",
+  accepts: { sparse: true },
   nargin: 1,
   scope: true,
   apply: (args, nargout, { scope, rt }) => {
@@ -660,6 +677,7 @@ builtin({
 // metaclass(obj): the meta.class object of the value's class (as ?Name).
 builtin({
   name: "metaclass",
+  accepts: { sparse: true },
   nargin: 1,
   scope: true,
   apply: (args, _nargout, { scope }) => scope.metaClass(valueClass(args[0])),
@@ -670,6 +688,7 @@ builtin({
 // not modelled and give false.
 builtin({
   name: "ismethod",
+  accepts: { sparse: true },
   nargin: 2,
   mfile: true,
   scope: true,
@@ -692,6 +711,7 @@ builtin({
 // Internal: the runtime representation of a value, for tests.
 builtin({
   name: "__inferred_type_str",
+  accepts: { sparse: true },
   nargin: 1,
   apply: args => {
     const v = args[0];

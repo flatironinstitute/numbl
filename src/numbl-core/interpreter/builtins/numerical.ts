@@ -26,6 +26,7 @@ import {
 import { builtin } from "./builtin.js";
 import {
   builtinError,
+  denseNumericArg,
   numericArg,
   realScalarArg,
   type NumericArg,
@@ -181,6 +182,7 @@ builtin({
 
 builtin({
   name: "conv",
+  accepts: { sparse: true },
   nargin: [2, 3],
   mfile: true,
   apply: args => {
@@ -254,7 +256,6 @@ function conv2Matrix(v: RuntimeValue, who: string): ConvMat {
       m: 1,
       n: 1,
     };
-  if (isRuntimeSparseMatrix(v)) return conv2Matrix(sparseToDense(v), who);
   if (isRuntimeNumber(v))
     return { re: allocFloat64Array([v as number]), m: 1, n: 1 };
   if (isRuntimeLogical(v))
@@ -461,13 +462,12 @@ builtin({
       throw new RuntimeError("polyval: the delta output is not supported");
     const p = toComplexArrays(args[0], "polyval");
     const np = p.re.length;
-    let xv: NumericArg;
+    let xv: ReturnType<typeof denseNumericArg>;
     try {
-      xv = numericArg(args[1]);
+      xv = denseNumericArg(args[1]);
     } catch {
       throw new RuntimeError("polyval: second argument must be numeric");
     }
-    if (isRuntimeSparseMatrix(xv)) xv = sparseToDense(xv);
     let x: { re: Float64Array; im: Float64Array | undefined };
     let shape: number[];
     if (typeof xv === "number") {
@@ -563,6 +563,7 @@ builtin({
 
 builtin({
   name: "trapz",
+  accepts: { sparse: true },
   nargin: [1, 3],
   mfile: true,
   apply: args => {
@@ -598,6 +599,7 @@ builtin({
 
 builtin({
   name: "cumtrapz",
+  accepts: { sparse: true },
   nargin: [1, 3],
   mfile: true,
   apply: args => {
@@ -1092,6 +1094,7 @@ builtin({
 
 builtin({
   name: "cov",
+  accepts: { sparse: true },
   nargin: [1, Infinity],
   mfile: true,
   apply: args =>
@@ -1256,6 +1259,7 @@ builtin({
 
 builtin({
   name: "histc",
+  accepts: { sparse: true },
   nargin: [2, 3],
   nargout: 2,
   apply: (args, nargout) => {
@@ -1367,6 +1371,7 @@ builtin({
 
 builtin({
   name: "discretize",
+  accepts: { sparse: true },
   help: {
     signatures: [
       "Y = discretize(X, edges)",

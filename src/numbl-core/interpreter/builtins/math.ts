@@ -12,7 +12,6 @@ import type { RuntimeValue } from "../../runtime/types.js";
 import {
   isRuntimeChar,
   isRuntimeComplexNumber,
-  isRuntimeSparseMatrix,
   isRuntimeTensor,
 } from "../../runtime/types.js";
 import { RuntimeError } from "../../runtime/error.js";
@@ -77,8 +76,14 @@ function registerUnary(
   floatUnary(name, { realFn, complexFn, op }, { mfile });
 }
 
-/** A real-only floating-point unary builtin (erf, gamma, ...): complex
- *  input raises `err`. */
+/** MATLAB's error for sparse input to erf, gamma, ... */
+const NOT_FULL_REAL = (name: string) => ({
+  identifier: `MATLAB:${name}:notFullReal`,
+  message: "Input must be real and full.",
+});
+
+/** A real-only floating-point unary builtin (erf, gamma, ...): complex or
+ *  sparse input raises `err`. */
 function realOnlyUnary(
   name: string,
   realFn: (x: number) => number,
@@ -91,6 +96,7 @@ function realOnlyUnary(
   builtin({
     name,
     nargin: 1,
+    accepts: { sparse: NOT_FULL_REAL(name) },
     apply: args => f([realFloatArg(args[0], err)]),
   });
 }
@@ -571,7 +577,6 @@ function isNumericValue(v: RuntimeValue): boolean {
     typeof v === "boolean" ||
     isRuntimeTensor(v) ||
     isRuntimeComplexNumber(v) ||
-    isRuntimeSparseMatrix(v) ||
     isRuntimeChar(v)
   );
 }

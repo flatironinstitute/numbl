@@ -18,7 +18,6 @@ import {
   isRuntimeNumber,
   isRuntimeLogical,
   isRuntimeStruct,
-  isRuntimeSparseMatrix,
   isRuntimeComplexNumber,
   type RuntimeTensor,
 } from "../../runtime/types.js";
@@ -32,7 +31,6 @@ import {
   normalizeSigmaString,
   type SigmaSpec,
 } from "../../helpers/eigs-select.js";
-import { sparseToDense } from "../../helpers/sparse-arithmetic.js";
 
 builtin({
   name: "eigs",
@@ -243,14 +241,9 @@ function _eigsImpl(
   nargout: number,
   args: RuntimeValue[]
 ): RuntimeValue | RuntimeValue[] {
+  // eigs computes on dense matrices internally; a sparse A or B (e.g. a
+  // graph Laplacian) arrives densified (the default argument policy).
   const margs = [...args];
-
-  // eigs computes on dense matrices internally; densify any sparse inputs
-  // (e.g. a graph Laplacian) so the A / B positions are plain tensors.
-  for (let i = 0; i < margs.length; i++) {
-    const mi = margs[i];
-    if (isRuntimeSparseMatrix(mi)) margs[i] = sparseToDense(mi);
-  }
 
   // 1. Afun vs matrix input, and the matrix size n.
   let afun: RuntimeValue | null = null;

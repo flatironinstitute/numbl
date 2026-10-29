@@ -110,6 +110,33 @@ export function numericArg(v: RuntimeValue): NumericArg {
   throw invalidDataTypeError();
 }
 
+/** MATLAB's error for converting a sparse matrix to a class with no sparse
+ *  storage (int8, ..., char), for `accepts: { sparse: ... }`. */
+export const UNIMPLEMENTED_SPARSE_TYPE = {
+  identifier: "MATLAB:unimplementedSparseType",
+  message: "Attempt to convert to unimplemented sparse type",
+};
+
+/** MATLAB's error for a sparse argument to sprintf and fprintf. */
+export const PRINTF_SPARSE = {
+  identifier: "MATLAB:printf:invalidInputAttribute",
+  message: "Function is not defined for sparse inputs.",
+};
+
+/** `numericArg` for a builtin on the default argument policy, which never
+ *  receives a sparse matrix (it arrives densified; see
+ *  runtime/argKinds.ts). */
+export function denseNumericArg(
+  v: RuntimeValue
+): number | RuntimeComplexNumber | RuntimeTensor {
+  const a = numericArg(v);
+  if (isRuntimeSparseMatrix(a))
+    throw new RuntimeError(
+      "internal: a sparse argument reached a builtin that does not accept sparse"
+    );
+  return a;
+}
+
 /** Like `numericArg`, but complex input raises `err` (by default MATLAB's
  *  "Argument must be real."). A tensor whose imaginary part is all zero
  *  counts as real. */
