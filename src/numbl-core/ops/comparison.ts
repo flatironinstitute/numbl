@@ -3,7 +3,7 @@
  * Mirrors native/ops/comparison.c.
  *
  * Output is 0.0 / 1.0 stored in a Float64Array (numbl's logical-tensor
- * convention — caller wraps the result with _isLogical = true).
+ * convention — the caller builds a logical tensor from it).
  */
 
 import { OpCmp } from "./opCodes.js";

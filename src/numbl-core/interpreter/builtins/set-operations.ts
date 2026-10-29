@@ -95,7 +95,7 @@ function numData(v: RuntimeValue): NumData | null {
       im: t.imag ?? null,
       shape: [...t.shape],
       isChar: false,
-      isLogical: !!v._isLogical,
+      isLogical: v.cls === "logical",
     };
   }
   if (isRuntimeChar(v)) {
@@ -131,13 +131,15 @@ function cmpAt(
 function makeNumeric(
   re: ArrayLike<number>,
   im: ArrayLike<number> | null,
-  shape: number[]
+  shape: number[],
+  logical = false
 ): RuntimeTensor {
   const keepIm = im !== null && Array.prototype.some.call(im, x => x !== 0);
   return RTV.tensor(
     Float64Array.from(re),
     shape,
-    keepIm ? Float64Array.from(im) : undefined
+    keepIm ? Float64Array.from(im) : undefined,
+    logical ? "logical" : "double"
   );
 }
 
@@ -513,12 +515,7 @@ builtin({
       // An all-zero imaginary lane (e.g. a JIT `sqrt` that lifted to
       // complex without leaving the real domain) sorts by value, not
       // magnitude, and returns a real result.
-      const out = sortTensor(stripZeroImagTensor(v), dim, descend, nargout);
-      if (v._isLogical) {
-        const sorted = Array.isArray(out) ? out[0] : out;
-        (sorted as RuntimeTensor)._isLogical = true;
-      }
-      return out;
+      return sortTensor(stripZeroImagTensor(v), dim, descend, nargout);
     }
     if (isRuntimeCell(v)) {
       if (!isCellstr(v))
@@ -553,14 +550,15 @@ function sortTensor(
   if (!im && !descend && nargout <= 1 && re.length === shape[dimIdx]) {
     const sorted = allocFloat64Array(re);
     sorted.sort();
-    return RTV.tensor(sorted, [...shape]);
+    return RTV.tensor(sorted, [...shape], undefined, v.cls);
   }
 
   if (dimIdx >= shape.length) {
     const cp = RTV.tensor(
       allocFloat64Array(re),
       [...shape],
-      im ? allocFloat64Array(im) : undefined
+      im ? allocFloat64Array(im) : undefined,
+      v.cls
     );
     if (nargout > 1) {
       const ones = allocFloat64Array(re.length).fill(1);
@@ -622,7 +620,7 @@ function sortTensor(
   }
 
   const imOut = resultIm && resultIm.some(x => x !== 0) ? resultIm : undefined;
-  const sorted = RTV.tensor(resultRe, [...shape], imOut);
+  const sorted = RTV.tensor(resultRe, [...shape], imOut, v.cls);
   if (nargout > 1) return [sorted, RTV.tensor(resultIdx!, [...shape])];
   return sorted;
 }
@@ -983,8 +981,7 @@ function ismemberStrings(
       tfData[i] = found ? 1 : 0;
       if (locData) locData[i] = found ? bStrings.indexOf(s) + 1 : 0;
     }
-    const t = RTV.tensor(tfData, [...v.shape]);
-    t._isLogical = true;
+    const t = RTV.logicalTensor(tfData, [...v.shape]);
     if (nargout > 1) {
       return [t, RTV.tensor(locData!, [...v.shape])];
     }
@@ -1033,8 +1030,7 @@ function ismemberNumeric(
     const lia = RTV.logical(tfData[0] === 1);
     return nargout > 1 ? [lia, RTV.num(locData![0])] : lia;
   }
-  const t = RTV.tensor(tfData, [...shape]);
-  t._isLogical = true;
+  const t = RTV.logicalTensor(tfData, [...shape]);
   if (nargout > 1) return [t, RTV.tensor(locData!, [...shape])];
   return t;
 }
@@ -1182,8 +1178,7 @@ builtin({
       const l = RTV.logical(lia[0] === 1);
       return nargout <= 1 ? l : [l, RTV.num(locb[0])];
     }
-    const tf = RTV.tensor(lia, shape);
-    tf._isLogical = true;
+    const tf = RTV.logicalTensor(lia, shape);
     if (nargout <= 1) return tf;
     if (allIndices) {
       const cells = all.map(h =>
@@ -1242,10 +1237,10 @@ builtin({
     const out = RTV.tensor(
       allocFloat64Array(nzVals),
       [n, 1],
-      d.im && n > 0 ? allocFloat64Array(nzImag) : undefined
+      d.im && n > 0 ? allocFloat64Array(nzImag) : undefined,
+      d.isLogical ? "logical" : "double"
     );
     if (d.isChar) return numericTensorToChar(out);
-    if (d.isLogical) out._isLogical = true;
     return out;
   },
 });
@@ -1343,9 +1338,13 @@ builtin({
         if (resultIm) resultIm[i + j * m] = im![rowIdx[i] + j * m];
       }
     }
-    let result: RuntimeValue = makeNumeric(resultRe, resultIm, [m, n]);
+    let result: RuntimeValue = makeNumeric(
+      resultRe,
+      resultIm,
+      [m, n],
+      d.isLogical
+    );
     if (d.isChar) result = numericTensorToChar(result as RuntimeTensor);
-    else if (d.isLogical) (result as RuntimeTensor)._isLogical = true;
 
     if (nargout > 1) {
       const idxData = allocFloat64Array(m);
@@ -1452,14 +1451,9 @@ function uniqueValues(
   if (!isRuntimeTensor(v))
     throw new RuntimeError("unique: argument must be numeric");
 
-  const out = byRows
+  return byRows
     ? uniqueByRows(v, nargout, stable)
     : uniqueElements(v, nargout, stable);
-  if (v._isLogical) {
-    const C = Array.isArray(out) ? out[0] : out;
-    (C as RuntimeTensor)._isLogical = true;
-  }
-  return out;
 }
 
 function uniqueCharVector(
@@ -1621,7 +1615,7 @@ function uniqueItems(
     : isRow
       ? [1, nUnique]
       : [nUnique, 1];
-  const C = makeNumeric(reOut, imOut, outShape);
+  const C = makeNumeric(reOut, imOut, outShape, d.isLogical);
   if (nargout <= 1) return C;
 
   const ia = RTV.tensor(allocFloat64Array(order.map(i => i + 1)), [nUnique, 1]);
@@ -1908,8 +1902,7 @@ builtin({
           colRe[g] = re[j * rows + firsts[g]] + 0; // -0 -> 0
           if (colIm) colIm[g] = im![j * rows + firsts[g]] + 0;
         }
-        const t = makeNumeric(colRe, colIm, [ng, 1]);
-        if (d.isLogical) t._isLogical = true;
+        const t = makeNumeric(colRe, colIm, [ng, 1], d.isLogical);
         return t;
       };
       groups =

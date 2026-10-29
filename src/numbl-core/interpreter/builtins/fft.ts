@@ -480,8 +480,7 @@ function applyFFTShift(args: RuntimeValue[], inverse: boolean): RuntimeValue {
     curData = result.outData;
     curImag = result.outImag;
   }
-  const out = RTV.tensor(curData, [...shape], curImag);
-  if (x._isLogical) out._isLogical = true;
+  const out = RTV.tensor(curData, [...shape], curImag, x.cls);
   return out;
 }
 

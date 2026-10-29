@@ -11,6 +11,7 @@ import {
   isRuntimeSparseMatrix,
   isRuntimeString,
   isRuntimeTensor,
+  withElementClass,
 } from "../../runtime/types.js";
 import { RTV, RuntimeError } from "../../runtime/index.js";
 import { sparseToDense } from "../../helpers/sparse-arithmetic.js";
@@ -518,10 +519,10 @@ function cumBuiltin(
       if (
         keepLogical &&
         isRuntimeTensor(a0) &&
-        a0._isLogical &&
+        a0.cls === "logical" &&
         isRuntimeTensor(r)
       )
-        r._isLogical = true;
+        withElementClass(r, "logical");
       return r;
     },
   });
@@ -620,8 +621,7 @@ builtin({
         broadcastIterate(a.shape, b.shape, outShape, (ai, bi, oi) => {
           out[oi] = (a.data[ai] !== 0) !== (b.data[bi] !== 0) ? 1 : 0;
         });
-        const result = RTV.tensor(out, outShape);
-        result._isLogical = true;
+        const result = RTV.logicalTensor(out, outShape);
         return result;
       }
       const n = a.data.length;
@@ -629,8 +629,7 @@ builtin({
       for (let i = 0; i < n; i++) {
         out[i] = (a.data[i] !== 0) !== (b.data[i] !== 0) ? 1 : 0;
       }
-      const result = RTV.tensor(out, a.shape);
-      result._isLogical = true;
+      const result = RTV.logicalTensor(out, a.shape);
       return result;
     }
     const t = (isRuntimeTensor(a) ? a : b) as RuntimeTensor;
@@ -640,8 +639,7 @@ builtin({
     for (let i = 0; i < n; i++) {
       out[i] = (t.data[i] !== 0) !== s ? 1 : 0;
     }
-    const result = RTV.tensor(out, t.shape);
-    result._isLogical = true;
+    const result = RTV.logicalTensor(out, t.shape);
     return result;
   },
 });

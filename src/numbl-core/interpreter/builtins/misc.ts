@@ -340,8 +340,7 @@ for (const [name, fillVal] of [
       if (shape.length === 1) shape = [shape[0], shape[0]];
       const data = allocFloat64Array(shape.reduce((a, b) => a * b, 1));
       if (fillVal) data.fill(1);
-      const t = RTV.tensor(data, shape);
-      t._isLogical = true;
+      const t = RTV.logicalTensor(data, shape);
       return t;
     },
   });
@@ -408,8 +407,10 @@ function handleEquality(
     const y = hb.elems[hb.elems.length === 1 ? 0 : i];
     data[i] = (x === y) === equal ? 1 : 0;
   }
-  const t = RTV.tensor(data, ha.elems.length === n ? ha.shape : hb.shape);
-  t._isLogical = true;
+  const t = RTV.logicalTensor(
+    data,
+    ha.elems.length === n ? ha.shape : hb.shape
+  );
   return t;
 }
 
@@ -467,8 +468,7 @@ for (const name of ["ishandle", "ishghandle", "isgraphics"]) {
         const out = allocFloat64Array(v.data.length);
         for (let i = 0; i < v.data.length; i++)
           out[i] = ishandleScalar(v.data[i]) ? 1 : 0;
-        const t = RTV.tensor(out, [...v.shape]);
-        t._isLogical = true;
+        const t = RTV.logicalTensor(out, [...v.shape]);
         return t;
       }
       return RTV.logical(false);

@@ -94,7 +94,7 @@ function requireNumeric(v: RuntimeValue): {
 }
 
 function isLogicalValue(v: RuntimeValue): boolean {
-  return isRuntimeLogical(v) || (isRuntimeTensor(v) && !!v._isLogical);
+  return isRuntimeLogical(v) || (isRuntimeTensor(v) && v.cls === "logical");
 }
 
 /** An element-wise test on the real parts of a numeric or logical value. */

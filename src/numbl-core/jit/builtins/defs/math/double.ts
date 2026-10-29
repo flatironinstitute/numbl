@@ -166,7 +166,7 @@ export const doubleBuiltin: Builtin = {
       }
       if (isMultiElement(t)) {
         // Fresh tensor object, dropping any `isLogical` flag (numbl
-        // strips `_isLogical` on the double(...) result). Use an
+        // returns a double-class tensor from double(...)). Use an
         // inline object literal — argsJs[0] is a Var read so the
         // dup-evaluation is harmless.
         if (t.isComplex) {

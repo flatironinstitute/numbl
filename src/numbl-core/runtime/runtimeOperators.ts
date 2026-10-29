@@ -135,7 +135,7 @@ export function uplus(v: unknown): RuntimeValue {
   if (isRuntimeLogical(mv)) return mv ? 1 : 0;
   if (isRuntimeChar(mv)) return charToNumericTensor(mv);
   if (isRuntimeTensor(mv)) {
-    if (!mv._isLogical) return mv;
+    if (mv.cls !== "logical") return mv;
     return RTV.tensor(allocFloat64Array(mv.data), mv.shape);
   }
   if (
@@ -187,8 +187,7 @@ export function not(v: unknown): RuntimeLogical | RuntimeTensor {
       if (mv.imag && mv.imag[i] !== 0) throw notRealError();
       result[i] = mv.data[i] === 0 ? 1 : 0;
     }
-    const t = RTV.tensor(result, mv.shape);
-    t._isLogical = true;
+    const t = RTV.logicalTensor(result, mv.shape);
     return t;
   }
   // `classdef Foo < logical` (or a numeric superclass) without a `not`.

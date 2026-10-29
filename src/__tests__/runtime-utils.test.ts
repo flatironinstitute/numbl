@@ -191,8 +191,29 @@ describe("RTV constructors", () => {
   });
 
   it("creates a tensor with given shape", () => {
-    const t = RTV.tensor([1, 2, 3, 4, 5, 6], [2, 3]);
+    const t = RTV.tensorFromArray([1, 2, 3, 4, 5, 6], [2, 3]);
     expect(t.shape).toEqual([2, 3]);
     expect(t.data.length).toBe(6);
+    expect(t.cls).toBe("double");
+  });
+
+  it("rejects tensor data that is not a Float64Array", () => {
+    const bad = new Float32Array([1, 2]) as unknown as Float64Array;
+    expect(() => RTV.tensor(bad, [1, 2])).toThrow(/Float64Array/);
+    expect(() =>
+      RTV.tensor(new Float64Array(2), [1, 2], bad as Float64Array)
+    ).toThrow(/Float64Array/);
+    expect(() => RTV.tensor([1, 2] as unknown as Float64Array, [1, 2])).toThrow(
+      /Float64Array/
+    );
+  });
+
+  it("fixes the element class at construction and keeps it on clone", () => {
+    const t = RTV.logicalTensor(new Float64Array([1, 0, 1]), [1, 3]);
+    expect(t.cls).toBe("logical");
+    const c = t.shallowClone();
+    expect(c.cls).toBe("logical");
+    expect(c.data).not.toBe(t.data);
+    expect(RTV.tensor(new Float64Array(1), [1, 1]).cls).toBe("double");
   });
 });

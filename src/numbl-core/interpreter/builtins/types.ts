@@ -3,7 +3,7 @@
  * runtime/builtinRegistry.ts).
  */
 
-import type { RuntimeValue } from "../../runtime/types.js";
+import type { ElementClass, RuntimeValue } from "../../runtime/types.js";
 import {
   RuntimeTensor,
   RuntimeComplexNumber,
@@ -31,12 +31,10 @@ export function mkc(re: number, im: number): number | RuntimeComplexNumber {
 export function makeTensor(
   data: Float64Array,
   imag: Float64Array | undefined,
-  shape: number[]
+  shape: number[],
+  cls: ElementClass = "double"
 ): RuntimeTensor {
-  // Strip trailing singleton dimensions (always keep minimum 2D)
-  const s = [...shape];
-  while (s.length > 2 && s[s.length - 1] === 1) s.pop();
-  return new RuntimeTensor(data, s, imag);
+  return RTV.tensor(data, shape, imag, cls);
 }
 
 // ── Apply helpers ───────────────────────────────────────────────────────
@@ -367,8 +365,6 @@ export function unaryPredicate(
       for (let i = 0; i < n; i++)
         out[i] = complexTest(v.data[i], v.imag[i]) ? 1 : 0;
     }
-    const t = makeTensor(out, undefined, v.shape.slice());
-    t._isLogical = true;
-    return t;
+    return makeTensor(out, undefined, v.shape.slice(), "logical");
   };
 }

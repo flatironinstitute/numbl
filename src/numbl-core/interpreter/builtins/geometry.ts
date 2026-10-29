@@ -747,8 +747,7 @@ builtin({
 
     const makeOut = (data: Float64Array): RuntimeValue => {
       if (xq.shape === null) return RTV.logical(data[0] !== 0);
-      const t = RTV.tensor(data, xq.shape) as RuntimeTensor;
-      t._isLogical = true;
+      const t = RTV.logicalTensor(data, xq.shape) as RuntimeTensor;
       return t;
     };
 
