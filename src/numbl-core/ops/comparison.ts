@@ -66,12 +66,39 @@ export function tsRealScalarComparison(
   scalarOnLeft: boolean,
   out: Float64Array
 ): void {
-  if (scalarOnLeft) {
-    for (let i = 0; i < n; i++) out[i] = rcmp(op, scalar, arr[i]);
-  } else {
-    for (let i = 0; i < n; i++) out[i] = rcmp(op, arr[i], scalar);
+  // `s op x` is `x op' s` with the ordering ops mirrored.
+  if (scalarOnLeft) op = MIRROR[op] ?? op;
+  const s = scalar;
+  switch (op) {
+    case OpCmp.EQ:
+      for (let i = 0; i < n; i++) out[i] = arr[i] === s ? 1 : 0;
+      return;
+    case OpCmp.NE:
+      for (let i = 0; i < n; i++) out[i] = arr[i] !== s ? 1 : 0;
+      return;
+    case OpCmp.LT:
+      for (let i = 0; i < n; i++) out[i] = arr[i] < s ? 1 : 0;
+      return;
+    case OpCmp.LE:
+      for (let i = 0; i < n; i++) out[i] = arr[i] <= s ? 1 : 0;
+      return;
+    case OpCmp.GT:
+      for (let i = 0; i < n; i++) out[i] = arr[i] > s ? 1 : 0;
+      return;
+    case OpCmp.GE:
+      for (let i = 0; i < n; i++) out[i] = arr[i] >= s ? 1 : 0;
+      return;
+    default:
+      throw new Error(`tsRealScalarComparison: unknown op ${op}`);
   }
 }
+
+const MIRROR: Record<number, number> = {
+  [OpCmp.LT]: OpCmp.GT,
+  [OpCmp.LE]: OpCmp.GE,
+  [OpCmp.GT]: OpCmp.LT,
+  [OpCmp.GE]: OpCmp.LE,
+};
 
 export function tsComplexComparison(
   op: number,

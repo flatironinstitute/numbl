@@ -30,6 +30,7 @@ import {
   isRuntimeClassInstanceArray,
   isRuntimeDictionary,
   isRuntimeStringArray,
+  type RuntimeTensor,
 } from "../runtime/types.js";
 import { isaValue, kstr, valueClass, valueShape } from "./kinds.js";
 import { incref, decref } from "./refcount.js";
@@ -41,13 +42,13 @@ import {
 } from "./builtinRegistry.js";
 import { COLON_SENTINEL } from "./sentinels.js";
 import {
-  getBroadcastShape,
   mAdd,
   mSub,
   mElemMul,
   mElemDiv,
 } from "../../numbl-core/helpers/arithmetic.js";
 import { ensureRuntimeValue } from "./runtimeHelpers.js";
+import { tryBroadcastShape, broadcastIterate } from "../ops/broadcast.js";
 import type { Runtime } from "./runtime.js";
 import { allocFloat64Array } from "./alloc.js";
 import { readableProperty } from "./runtimeMemberAccess.js";
@@ -845,57 +846,22 @@ export function bsxfunImpl(
   const a = coerceToTensor(rawA, "bsxfun");
   const b = coerceToTensor(rawB, "bsxfun");
 
-  const outShape = getBroadcastShape(a.shape, b.shape);
+  const outShape = tryBroadcastShape(a.shape, b.shape);
   if (!outShape)
     throw new RuntimeError(
-      "bsxfun: non-singleton dimensions of the two input arrays must match each other"
+      "Non-singleton dimensions of the two input arrays must match each other.",
+      null,
+      { identifier: "MATLAB:bsxfun:arrayDimensionsMustMatch" }
     );
 
   const totalElems = outShape.reduce((acc, d) => acc * d, 1);
   const resultData = allocFloat64Array(totalElems);
   let resultImag: Float64Array | undefined;
+  const elem = (t: RuntimeTensor, i: number): unknown =>
+    t.imag ? RTV.complex(t.data[i], t.imag[i]) : t.data[i];
 
-  const aIsReal = !a.imag;
-  const bIsReal = !b.imag;
-  const ndim = outShape.length;
-  const aPadded =
-    a.shape.length >= ndim
-      ? a.shape
-      : [...a.shape, ...new Array(ndim - a.shape.length).fill(1)];
-  const bPadded =
-    b.shape.length >= ndim
-      ? b.shape
-      : [...b.shape, ...new Array(ndim - b.shape.length).fill(1)];
-
-  // Precompute strides — zero for broadcast (size-1) dimensions
-  const aStrides = new Array(ndim);
-  const bStrides = new Array(ndim);
-  let aStr = 1,
-    bStr = 1;
-  for (let d = 0; d < ndim; d++) {
-    aStrides[d] = aPadded[d] === 1 ? 0 : aStr;
-    bStrides[d] = bPadded[d] === 1 ? 0 : bStr;
-    aStr *= aPadded[d];
-    bStr *= bPadded[d];
-  }
-
-  const subs = new Array(ndim).fill(0);
-  let aIdx = 0,
-    bIdx = 0;
-  for (let i = 0; i < totalElems; i++) {
-    let r;
-    if (aIsReal && bIsReal) {
-      r = callFn(a.data[aIdx], b.data[bIdx]);
-    } else if (aIsReal && !bIsReal) {
-      r = callFn(a.data[aIdx], RTV.complex(b.data[bIdx], b.imag![bIdx]));
-    } else if (!aIsReal && bIsReal) {
-      r = callFn(RTV.complex(a.data[aIdx], a.imag![aIdx]), b.data[bIdx]);
-    } else {
-      r = callFn(
-        RTV.complex(a.data[aIdx], a.imag![aIdx]),
-        RTV.complex(b.data[bIdx], b.imag![bIdx])
-      );
-    }
+  broadcastIterate(a.shape, b.shape, outShape, (aIdx, bIdx, i) => {
+    const r = callFn(elem(a, aIdx), elem(b, bIdx));
     if (typeof r === "number") {
       resultData[i] = r;
     } else {
@@ -908,16 +874,7 @@ export function bsxfunImpl(
         resultData[i] = toNumber(rv);
       }
     }
-    for (let d = 0; d < ndim; d++) {
-      subs[d]++;
-      aIdx += aStrides[d];
-      bIdx += bStrides[d];
-      if (subs[d] < outShape[d]) break;
-      aIdx -= subs[d] * aStrides[d];
-      bIdx -= subs[d] * bStrides[d];
-      subs[d] = 0;
-    }
-  }
+  });
 
   return RTV.tensor(resultData, outShape, resultImag);
 }

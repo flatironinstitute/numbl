@@ -8,7 +8,6 @@
 import {
   type RuntimeValue,
   RTV,
-  toNumber,
   valuesAreEqual,
   RuntimeError,
 } from "../runtime/index.js";
@@ -20,7 +19,6 @@ import {
   isRuntimeChar,
   isRuntimeString,
 } from "../runtime/types.js";
-import { sparseToDense } from "../../numbl-core/helpers/sparse-arithmetic.js";
 import { END_SENTINEL } from "./sentinels.js";
 import { allocFloat64Array } from "./alloc.js";
 import { isEnumInstance, enumScalarEquals } from "./runtimeEnum.js";
@@ -99,42 +97,6 @@ export function isNumericKind(v: RuntimeValue): boolean {
     isRuntimeLogical(v) ||
     isRuntimeSparseMatrix(v)
   );
-}
-
-export function elementWiseLogicalOp(
-  a: RuntimeValue,
-  b: RuntimeValue,
-  op: (x: number, y: number) => number
-): RuntimeValue {
-  if (isRuntimeSparseMatrix(a))
-    return elementWiseLogicalOp(sparseToDense(a), b, op);
-  if (isRuntimeSparseMatrix(b))
-    return elementWiseLogicalOp(a, sparseToDense(b), op);
-  const aIsT = isRuntimeTensor(a);
-  const bIsT = isRuntimeTensor(b);
-  const aData = aIsT ? a.data : allocFloat64Array([toNumber(a)]);
-  const bData = bIsT ? b.data : allocFloat64Array([toNumber(b)]);
-  const aShape = aIsT ? a.shape : [1, 1];
-  const bShape = bIsT ? b.shape : [1, 1];
-  if (aData.length === bData.length) {
-    const result = allocFloat64Array(aData.length);
-    for (let i = 0; i < aData.length; i++) result[i] = op(aData[i], bData[i]);
-    const t = RTV.logicalTensor(result, aIsT ? aShape : bShape);
-    return t;
-  }
-  if (aData.length === 1) {
-    const result = allocFloat64Array(bData.length);
-    for (let i = 0; i < bData.length; i++) result[i] = op(aData[0], bData[i]);
-    const t = RTV.logicalTensor(result, bShape);
-    return t;
-  }
-  if (bData.length === 1) {
-    const result = allocFloat64Array(aData.length);
-    for (let i = 0; i < aData.length; i++) result[i] = op(aData[i], bData[0]);
-    const t = RTV.logicalTensor(result, aShape);
-    return t;
-  }
-  throw new RuntimeError("Matrix dimensions must agree for logical operation");
 }
 
 // ── Call site type ──────────────────────────────────────────────────────

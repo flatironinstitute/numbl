@@ -250,17 +250,6 @@ static void jit_raise_error_deferred(void) {
   jit_raise(JIT_RAISE_ERROR, "", NULL);
 }
 
-/* numbl's shape spelling in error messages ("[2,3]"; trailing singleton
- * dims past the second dropped, as numbl's shapes are) into `out`. */
-static void jit__fmt_shape(char *out, size_t cap, int ndim, const long *dims) {
-  while (ndim > 2 && dims[ndim - 1] == 1) ndim--;
-  size_t k = (size_t)snprintf(out, cap, "[");
-  for (int i = 0; i < ndim && k < cap; i++) {
-    k += (size_t)snprintf(out + k, cap - k, i == 0 ? "%ld" : ",%ld", dims[i]);
-  }
-  if (k < cap) snprintf(out + k, cap - k, "]");
-}
-
 /* An invalid dimension argument (`sum(x, 0)`). */
 static void jit_raise_bad_dim(void) __attribute__((noreturn, cold));
 static void jit_raise_bad_dim(void) {
@@ -268,18 +257,12 @@ static void jit_raise_bad_dim(void) {
                   "Dimension argument must be a positive integer scalar, a vector of unique positive integers, or 'all'.");
 }
 
-/* "<what>: [a] vs [b]", the interpreter's operand-shape mismatch error. */
-static void jit_raise_dims_mismatch(const char *what, int andim,
-                                    const long *adims, int bndim,
-                                    const long *bdims)
-  __attribute__((noreturn, cold));
-static void jit_raise_dims_mismatch(const char *what, int andim,
-                                    const long *adims, int bndim,
-                                    const long *bdims) {
-  char sa[160], sb[160];
-  jit__fmt_shape(sa, sizeof sa, andim, adims);
-  jit__fmt_shape(sb, sizeof sb, bndim, bdims);
-  jit_raise_errorf("", "%s: %s vs %s", what, sa, sb);
+/* Operands whose sizes do not broadcast (the interpreter's
+ * `sizeMismatchError`, ops/broadcast.ts). */
+static void jit_raise_size_mismatch(void) __attribute__((noreturn, cold));
+static void jit_raise_size_mismatch(void) {
+  jit_raise_error("MATLAB:sizeDimensionsMustMatch",
+                  "Arrays have incompatible sizes for this operation.");
 }
 
 /* ── Host accessors (exported) ─────────────────────────────────────── */

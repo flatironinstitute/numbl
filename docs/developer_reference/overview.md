@@ -39,7 +39,7 @@ A single entry point (the `executeCode` function) accepts source, options, and a
 - [jit/ir-codegen.md](jit/ir-codegen.md): JIT IR and the JS backend.
 - [jit/fusion.md](jit/fusion.md): element-wise fusion.
 - [jit/cjit.md](jit/cjit.md): C-JIT (`--opt 2`): the C backend and how it shares the JS-JIT compiler.
-- [runtime/values-and-tensors.md](runtime/values-and-tensors.md): `RuntimeValue`, tensors, memory layout.
+- [runtime/values-and-tensors.md](runtime/values-and-tensors.md): `RuntimeValue`, tensors, memory layout, the element-wise kernel layer.
 - [runtime/refcount.md](runtime/refcount.md): refcounts, copy-on-write, slot ownership, transient scopes.
 - [runtime/indexing.md](runtime/indexing.md): the storage-independent index planner and per-container gather/scatter.
 - [runtime/native-addon.md](runtime/native-addon.md): LAPACK/FFTW bindings and JS fallbacks.

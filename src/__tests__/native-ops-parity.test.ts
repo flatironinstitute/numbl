@@ -30,9 +30,11 @@ import { describe, it, expect } from "vitest";
 import { createRequire } from "node:module";
 import {
   OpUnary,
-  OpRealBin,
+  OpBin,
   OpCmp,
   OpReduce,
+  NATIVE_BIN_OP_COUNT,
+  NATIVE_CMP_OP_COUNT,
 } from "../numbl-core/ops/opCodes.js";
 import { tsRealUnaryElemwise } from "../numbl-core/ops/realUnaryElemwise.js";
 import {
@@ -44,6 +46,14 @@ import {
   tsRealScalarComparison,
 } from "../numbl-core/ops/comparison.js";
 import { tsRealFlatReduce } from "../numbl-core/ops/reduce.js";
+
+/** The op codes the native addon implements (the rest are TS-only). */
+const NATIVE_BIN_OPS = Object.entries(OpBin).filter(
+  ([, op]) => op < NATIVE_BIN_OP_COUNT
+);
+const NATIVE_CMP_OPS = Object.entries(OpCmp).filter(
+  ([, op]) => op < NATIVE_CMP_OP_COUNT
+);
 
 /** The native addon, or null if it hasn't been built. Same load path as
  *  op-codes-sync.test.ts. */
@@ -229,7 +239,7 @@ describe("native ops parity (TS twin ↔ C addon)", () => {
       const n = SAMPLES.length;
       const a = Float64Array.from(SAMPLES);
       const b = Float64Array.from(SAMPLES_B);
-      for (const [name, op] of Object.entries(OpRealBin)) {
+      for (const [name, op] of NATIVE_BIN_OPS) {
         const ts = new Float64Array(n);
         const c = new Float64Array(n);
         tsRealBinaryElemwise(op, n, a, b, ts);
@@ -245,7 +255,7 @@ describe("native ops parity (TS twin ↔ C addon)", () => {
       const n = SAMPLES.length;
       const arr = Float64Array.from(SAMPLES);
       const scalar = -2.5;
-      for (const [name, op] of Object.entries(OpRealBin)) {
+      for (const [name, op] of NATIVE_BIN_OPS) {
         for (const left of [true, false]) {
           const ts = new Float64Array(n);
           const c = new Float64Array(n);
@@ -263,7 +273,7 @@ describe("native ops parity (TS twin ↔ C addon)", () => {
       const n = SAMPLES.length;
       const a = Float64Array.from(SAMPLES);
       const b = Float64Array.from(SAMPLES_B);
-      for (const [name, op] of Object.entries(OpCmp)) {
+      for (const [name, op] of NATIVE_CMP_OPS) {
         const ts = new Float64Array(n);
         const c = new Float64Array(n);
         tsRealComparison(op, n, a, b, ts);
@@ -279,7 +289,7 @@ describe("native ops parity (TS twin ↔ C addon)", () => {
       const n = SAMPLES.length;
       const arr = Float64Array.from(SAMPLES);
       const scalar = 0.5;
-      for (const [name, op] of Object.entries(OpCmp)) {
+      for (const [name, op] of NATIVE_CMP_OPS) {
         for (const left of [true, false]) {
           const ts = new Float64Array(n);
           const c = new Float64Array(n);
