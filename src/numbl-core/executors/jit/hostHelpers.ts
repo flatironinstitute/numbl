@@ -58,8 +58,10 @@ export interface JitElemwiseHost {
   ): void;
   /** False when `op` has no host kernel (the caller runs its own loop). */
   unary(op: string, a: Float64Array, out: Float64Array): boolean;
-  /** NaN-skipping `min` / `max` over all of `a` (non-empty). */
-  minmax(op: "min" | "max", a: Float64Array): number;
+  /** Reduce all of `a` (non-empty) in sequential order, as the
+   *  interpreter's `sum` / `prod` / `mean` and NaN-skipping `min` / `max`
+   *  do. */
+  reduce(op: "sum" | "prod" | "min" | "max", a: Float64Array): number;
 }
 
 const BINARY_OPS: Record<string, number> = {
@@ -90,6 +92,14 @@ const UNARY_OPS: Record<string, number> = {
   sign: OpUnary.SIGN,
 };
 
+const REDUCE_OPS: Record<string, number> = {
+  sum: OpReduce.SUM,
+  prod: OpReduce.PROD,
+  min: OpReduce.MIN,
+  max: OpReduce.MAX,
+};
+const reduceOut = new Float64Array(1);
+
 const elemwiseHost: JitElemwiseHost = {
   binary(op, a, b, out) {
     tensorOps.realBinaryElemwise(BINARY_OPS[op], out.length, a, b, out);
@@ -110,11 +120,9 @@ const elemwiseHost: JitElemwiseHost = {
     tensorOps.realUnaryElemwise(code, out.length, a, out);
     return true;
   },
-  minmax(op, a) {
-    const out = new Float64Array(1);
-    const code = op === "min" ? OpReduce.MIN : OpReduce.MAX;
-    tensorOps.realFlatReduce(code, a.length, a, out);
-    return out[0];
+  reduce(op, a) {
+    tensorOps.realFlatReduce(REDUCE_OPS[op], a.length, a, reduceOut);
+    return reduceOut[0];
   },
 };
 
