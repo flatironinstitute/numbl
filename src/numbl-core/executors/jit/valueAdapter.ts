@@ -59,8 +59,16 @@ import { isMultiElement } from "../../jit/index.js";
  *      complex-typed body reads `.re`/`.im`, so a bare number must be
  *      boxed into `{re, im:0}`.
  *   3. **real → complex-tensor param.** Likewise for a real tensor: it
- *      gets a zero `imag` lane. */
-export function numblToJit(v: RuntimeValue, paramType?: Type): unknown {
+ *      gets a zero `imag` lane.
+ *
+ *  `borrow` passes a tensor's buffers uncloned, for a spec that only
+ *  reads its parameters and returns none of them
+ *  (`CompileRequest.borrowsInputs`). */
+export function numblToJit(
+  v: RuntimeValue,
+  paramType?: Type,
+  borrow = false
+): unknown {
   if (paramType?.kind === "Numeric" && !isMultiElement(paramType)) {
     const nty = paramType as NumericType;
     // (1) Unwrap a 1×1 tensor flowing into a scalar param to its element.
@@ -91,13 +99,15 @@ export function numblToJit(v: RuntimeValue, paramType?: Type): unknown {
     } = {
       jitTag: "tensor",
       shape: [...v.shape],
-      data: new Float64Array(v.data),
+      data: borrow ? v.data : new Float64Array(v.data),
     };
-    if (v.imag !== undefined) out.imag = new Float64Array(v.imag);
-    // (3) Widening can reuse a complex specialization for a later real
-    // tensor; the complex-typed body reads `.imag`, so give it zeros.
-    else if (paramType?.kind === "Numeric" && paramType.isComplex)
+    if (v.imag !== undefined) {
+      out.imag = borrow ? v.imag : new Float64Array(v.imag);
+    } else if (paramType?.kind === "Numeric" && paramType.isComplex) {
+      // (3) Widening can reuse a complex specialization for a later real
+      // tensor; the complex-typed body reads `.imag`, so give it zeros.
       out.imag = new Float64Array(v.data.length);
+    }
     return out;
   }
   if (isRuntimeChar(v)) {

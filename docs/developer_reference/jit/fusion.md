@@ -56,3 +56,5 @@ The C output for element-wise kernels is the same as before the kernel IR existe
 ## Performance
 
 On `y = a.*b + c.*d - e` over 2M-element vectors, fusing at `--opt 2` reduces the per-statement cost by roughly 2.5x, mainly by removing the allocation and memory traffic of the intermediate tensors. At `--opt 1` the gain is smaller: V8 does not vectorize the loop and keeps a bounds check per array, so a fused JS loop runs at roughly 2 to 3 ns per element, against the host's SIMD kernels per operation. The `ew_*` and `sum_*` cases of `npm run bench` time these statements.
+
+Element-wise statements that no other JIT shape reaches (in a script or function body that was not compiled, or in a declined loop) can be compiled on their own; see the `stmt` shape in [executors.md](../executors.md#the-statement-shape).

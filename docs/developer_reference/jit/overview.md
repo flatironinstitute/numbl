@@ -6,7 +6,7 @@ The JIT compiler is an in-tree, self-contained subsystem under `src/numbl-core/j
 
 ## Trigger points
 
-The interpreter offers three kinds of unit to the executors, with no hotness or iteration-count threshold: a whole script body (once, at script start), each `for`/`while` loop it reaches, and each user-function call (see [executors.md](../executors.md)). All three share the same lowering pipeline and IR. Specializations are cached by input types (widened across calls, see [type-system.md](../compiler/type-system.md#executor-inputs)); a different signature compiles a new variant.
+The interpreter offers four kinds of unit to the executors: a whole script body (once, at script start), each `for`/`while` loop it reaches, each user-function call, and a large element-wise assignment it interprets (see [executors.md](../executors.md)). Only the last has a hotness threshold (its third execution). All four share the same lowering pipeline and IR. Specializations are cached by input types (widened across calls, see [type-system.md](../compiler/type-system.md#executor-inputs)); a different signature compiles a new variant.
 
 ## Optimization levels (`--opt`)
 

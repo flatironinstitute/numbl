@@ -5,7 +5,8 @@
  *   - `tryRunWholeScope(siblings, interp)` — whole-script attempt, called
  *     once before the per-stmt loop runs.
  *   - `dispatch(siblings, i, interp)` — per-stmt dispatch; loops are
- *     offered to the loop executors, everything else is interpreted.
+ *     offered to the loop executors, large element-wise assignments to
+ *     the stmt executors, everything else is interpreted.
  *   - `dispatchCall(fn, args, nargout, interp)` — user-function call.
  *
  * Executors are tried in registration order (at `--opt 2`: C-JIT, then
@@ -24,11 +25,13 @@ import {
   type ShapeKind,
 } from "./types.js";
 import { ExecutorCache } from "./cache.js";
+import { stmtDeclined } from "./stmtPrefilter.js";
 import { restoreRng, snapshotRng } from "../helpers/prng.js";
 import {
   WideningState,
   tryLowerCall,
   tryLowerLoop,
+  tryLowerStmt,
   tryLowerTopLevel,
 } from "./lowering.js";
 
@@ -36,6 +39,7 @@ export class Registry {
   private readonly executors: { [K in ShapeKind]: Executor<K>[] } = {
     "top-level": [],
     loop: [],
+    stmt: [],
     call: [],
   };
   private cache = new ExecutorCache();
@@ -87,6 +91,15 @@ export class Registry {
       const lowered = tryLowerLoop(interp, siblings, i, this.widening);
       if (lowered && this.runFirst(this.executors.loop, lowered, stmt, interp))
         return null;
+    } else if (stmt.type === "Assign" && this.executors.stmt.length > 0) {
+      const lowered = tryLowerStmt(interp, stmt, this.widening);
+      if (lowered) {
+        if (this.runFirst(this.executors.stmt, lowered, stmt, interp)) {
+          lowered.candidate.misses = 0;
+          return null;
+        }
+        stmtDeclined(lowered.candidate);
+      }
     }
     return this.interpretFallback(interp, stmt);
   }

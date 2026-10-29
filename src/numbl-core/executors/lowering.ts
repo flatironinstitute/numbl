@@ -25,16 +25,24 @@ import {
   classifyCall,
   classifyLoop,
   type TopLevelClassification,
+  classifyStmt,
   type CallClassification,
   type LoopClassification,
+  type StmtClassification,
 } from "./classification.js";
+import {
+  stmtCandidate,
+  stmtDeclined,
+  type StmtCandidate,
+} from "./stmtPrefilter.js";
 
 /** What `propose()` receives — a discriminated union of the shapes the
  *  registry knows how to lower. */
 export type LoweredStmt =
   | TopLevelLoweredStmt
   | LoopLoweredStmt
-  | CallLoweredStmt;
+  | CallLoweredStmt
+  | StmtLoweredStmt;
 
 export interface TopLevelLoweredStmt {
   readonly kind: "top-level";
@@ -44,6 +52,13 @@ export interface TopLevelLoweredStmt {
 export interface LoopLoweredStmt {
   readonly kind: "loop";
   readonly classification: LoopClassification;
+}
+
+export interface StmtLoweredStmt {
+  readonly kind: "stmt";
+  readonly classification: StmtClassification;
+  /** The statement's prefilter record, for the back-off (`stmtDeclined`). */
+  readonly candidate: StmtCandidate;
 }
 
 export interface CallLoweredStmt {
@@ -109,6 +124,47 @@ export function tryLowerTopLevel(
   if (!classification) return null;
   widening.set(head, "", classification.inputTypes);
   return { kind: "top-level", classification };
+}
+
+/** A statement is offered to the `stmt` shape from its `STMT_MIN_RUNS`th
+ *  dispatch on, and only when one of its tensor inputs has at least
+ *  `STMT_MIN_NUMEL` elements: compiling a statement, and the first runs of
+ *  its freshly compiled (cold) code, cost more than one fused run saves
+ *  (see `stmtExecutor.ts`). */
+export const STMT_MIN_RUNS = 3;
+export const STMT_MIN_NUMEL = 1 << 16;
+
+/** Lower an interpreted statement for the `stmt` shape. Null when it is
+ *  not a candidate (`stmtCandidate`, cached per AST node), is not yet hot,
+ *  or has no large tensor input. */
+export function tryLowerStmt(
+  interp: Interpreter,
+  stmt: Stmt,
+  widening: WideningState
+): StmtLoweredStmt | null {
+  const cand = stmtCandidate(stmt);
+  if (cand === null) return null;
+  if (cand.skip > 0) {
+    cand.skip--;
+    return null;
+  }
+  if (++cand.runs < STMT_MIN_RUNS) return null;
+  const head = stmt as Stmt & { type: "Assign" };
+  const prev = widening.get(head, "");
+  const classification = classifyStmt(
+    interp,
+    head,
+    cand.reads,
+    cand.calls,
+    STMT_MIN_NUMEL,
+    prev
+  );
+  if (!classification) {
+    stmtDeclined(cand);
+    return null;
+  }
+  widening.set(head, "", classification.inputTypes);
+  return { kind: "stmt", classification, candidate: cand };
 }
 
 /** Lower a user-function call. Null when classification declines (`~`
