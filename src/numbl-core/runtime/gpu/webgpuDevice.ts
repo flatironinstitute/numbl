@@ -364,6 +364,28 @@ export class WebGpuDevice implements GpuDevice, GpuKernels {
     return out;
   }
 
+  sort(
+    src: unknown,
+    inner: number,
+    len: number,
+    outer: number,
+    descend: boolean,
+    withIndex: boolean
+  ): { value: DeviceBuffer; index: DeviceBuffer | null } {
+    const value = this.result(inner * len * outer);
+    const index = withIndex ? this.result(inner * len * outer) : null;
+    this.helper.post(MODULE, "sort", {
+      out: value.id,
+      outIdx: index ? index.id : 0,
+      src: (src as DeviceBuffer).id,
+      inner,
+      len,
+      outer,
+      descend,
+    });
+    return { value, index };
+  }
+
   readAt(buffer: unknown, index: number): number {
     return this.helper.call(MODULE, "readAt", {
       id: (buffer as DeviceBuffer).id,

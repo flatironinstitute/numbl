@@ -377,9 +377,11 @@ stdVarBuiltin("var");
 // ── median / mode ──────────────────────────────────────────────────────
 
 function medianOf(arr: ArrayLike<number>): number {
-  const sorted = Array.from(arr).sort((a, b) => a - b);
+  // A typed array sorts numerically with NaN last; a NaN gives NaN
+  // ('includenan', the default; 'omitnan' filters them first).
+  const sorted = Float64Array.from(arr).sort();
   const n = sorted.length;
-  if (n === 0) return NaN;
+  if (n === 0 || isNaN(sorted[n - 1])) return NaN;
   if (n % 2 === 1) return sorted[(n - 1) / 2];
   return (sorted[n / 2 - 1] + sorted[n / 2]) / 2;
 }

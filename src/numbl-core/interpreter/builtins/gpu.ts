@@ -43,6 +43,8 @@ import {
   repmatKernel,
   reshapeKernel,
   scalarDivideKernel,
+  sortKernel,
+  medianKernel,
   scanKernel,
   mtimesKernel,
   reduceKernel,
@@ -518,6 +520,10 @@ for (const cls of ["single", "logical"] as const)
     nargout <= 1 ? castKernel(cls, args) : null
   );
 kernelMethod("find", (args, nargout) => findKernel(args, nargout));
+kernelMethod("sort", (args, nargout) => sortKernel(args, nargout));
+kernelMethod("median", (args, nargout) =>
+  nargout <= 1 ? medianKernel(args) : null
+);
 kernelMethod("nnz", (args, nargout) => (nargout <= 1 ? nnzKernel(args) : null));
 kernelMethod("reshape", (args, nargout) =>
   nargout <= 1 ? reshapeKernel(args) : null

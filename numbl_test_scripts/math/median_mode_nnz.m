@@ -56,4 +56,11 @@ assert(nnz([1, 0; 0, 2; 3, 0]) == 3);
 % Logical
 assert(nnz([true, false, true]) == 2);
 
+% a NaN gives NaN unless omitted
+assert(isnan(median([1 2 NaN])));
+m = median([1 NaN; 2 3; NaN 4; 5 6]);
+assert(all(isnan(m)));
+assert(isequal(median([1 NaN; 2 3; NaN 4; 5 6], 'omitnan'), [2 4]));
+assert(median([3 NaN 1 2], 'omitnan') == 2);
+
 disp('SUCCESS');

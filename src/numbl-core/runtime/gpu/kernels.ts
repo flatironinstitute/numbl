@@ -1217,6 +1217,91 @@ export function findKernel(
   return out;
 }
 
+/** `sort(X)`, `sort(X, dim)`, `sort(X, direction)`, `sort(X, dim,
+ *  direction)` of a real gpuArray, with the index output (double, f32 on
+ *  the device: sequences shorter than 2^24). Other forms (complex data,
+ *  'ComparisonMethod') run on the host. */
+export function sortKernel(
+  args: RuntimeValue[],
+  nargout: number
+): RuntimeValue | RuntimeValue[] | null {
+  const g = args[0];
+  if (!(g instanceof RuntimeGpuArray) || nargout > 2 || args.length > 3)
+    return null;
+  const k = g.device.kernels;
+  if (!k?.sort || !onDevice(g, k) || g.isComplex) return null;
+  let rest = args.slice(1);
+  let descend = false;
+  const last = rest[rest.length - 1];
+  if (last !== undefined && isText(last)) {
+    const dir = textOf(last).toLowerCase();
+    if (dir !== "ascend" && dir !== "descend") return null;
+    descend = dir === "descend";
+    rest = rest.slice(0, -1);
+  }
+  if (rest.some(isText)) return null;
+  const dim = reductionDim(g.shape, rest);
+  if (dim === null || dim === "all") return null;
+  const { inner, len, outer } = aroundDim(g.shape, dim);
+  if (len === 0 || len >= MASK_LIMIT) return null;
+  const r = k.sort(g.buffer, inner, len, outer, descend, nargout > 1);
+  const value = result(g.device, r.value, g.shape.slice(), g.cls);
+  if (nargout <= 1) return value;
+  return [value, result(g.device, r.index, g.shape.slice(), "double")];
+}
+
+/** `median(X)`, `median(X, dim)`, `median(X, 'all')` of a real single
+ *  gpuArray: each sequence sorted (NaN last), the middle element or the
+ *  mean of the middle two, and NaN where the sequence has a NaN. */
+export function medianKernel(args: RuntimeValue[]): RuntimeValue | null {
+  const g = args[0];
+  if (!(g instanceof RuntimeGpuArray) || args.length > 2) return null;
+  const k = g.device.kernels;
+  if (!k?.sort || !k.expand || !onDevice(g, k) || g.isComplex) return null;
+  if (g.cls !== "single") return null;
+  const dim = reductionDim(g.shape, args.slice(1));
+  if (dim === null) return null;
+  const { inner, len, outer, outShape } = aroundDim(g.shape, dim);
+  if (len === 0 || len >= MASK_LIMIT) return null;
+  const sorted = k.sort(g.buffer, inner, len, outer, false, false).value;
+  const n = inner * outer;
+  // Element j of every sequence: a grid over [inner, outer].
+  const at = (j: number) =>
+    k.take(sorted, {
+      n,
+      start: j * inner,
+      step: 0,
+      offsets: null,
+      grid: { counts: [inner, outer], strides: [1, inner * len] },
+    });
+  const free = (b: unknown) => g.device.release?.(b);
+  const lo = at((len - 1) >> 1);
+  let mid = lo;
+  if (len % 2 === 0) {
+    const hi = at(len >> 1);
+    const sum = k.elementwise(
+      "plus",
+      [
+        { buffer: lo, n },
+        { buffer: hi, n },
+      ],
+      n
+    );
+    mid = k.elementwise("times", [{ buffer: sum, n }, { scalar: 0.5 }], n);
+    free(hi);
+    free(sum);
+    free(lo);
+  }
+  const last = at(len - 1);
+  const nan = k.elementwise("isnan", [{ buffer: last, n }], n);
+  const out = k.expand(mid, nan, null, n, { scalar: NaN });
+  free(last);
+  free(nan);
+  free(mid);
+  free(sorted);
+  return result(g.device, out, outShape, "single");
+}
+
 /** `nnz(X)` of a real gpuArray: a double scalar (exact below 2^24). */
 export function nnzKernel(args: RuntimeValue[]): RuntimeValue | null {
   const g = args[0];
