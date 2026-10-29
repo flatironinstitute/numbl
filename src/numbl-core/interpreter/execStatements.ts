@@ -3,6 +3,7 @@
  */
 
 import type { Stmt, Expr } from "../parser/types.js";
+import { isNullAssignRhs } from "../parser/astUtils.js";
 import type { RuntimeValue } from "../runtime/types.js";
 import { isRuntimeTensor, isRuntimeCell } from "../runtime/types.js";
 import { RTV } from "../runtime/constructors.js";
@@ -112,7 +113,7 @@ function execStmtInner(interp: Interpreter, stmt: Stmt): ControlSignal | null {
     case "AssignLValue": {
       const val = evalExpr(interp, stmt.expr);
       const rv = val as RuntimeValue;
-      assignLValue(interp, stmt.lvalue, rv);
+      assignLValue(interp, stmt.lvalue, rv, isNullAssignRhs(stmt.expr));
       if (!stmt.suppressed) {
         if (stmt.lvalue.type === "Var") {
           rt.displayAssign(stmt.lvalue.name, rv);

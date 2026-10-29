@@ -32,7 +32,7 @@ The CLI provides:
 
 - a file-I/O adapter backed by Node's `fs` (byte-level primitives; fids and stream semantics are in the core `FileTable`, see [architecture.md](architecture.md#file-io));
 - a system adapter providing env vars, cwd, and platform info;
-- an output router that writes to stdout/stderr (or NDJSON stream mode);
+- an output router that writes to stdout/stderr (or NDJSON stream mode). `fprintf(2, ...)` text reaches the host through `ExecOptions.onErrorOutput` (falling back to `onOutput` when a host does not set it, as the browser does); the CLI writes it to stderr, and stream mode marks its `output` messages with `stream: "stderr"`;
 - an optional plot callback that forwards figures to an embedded HTTP server for a browser viewer.
 
 ## Options of note

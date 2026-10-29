@@ -42,6 +42,9 @@ export type { UihtmlSession } from "./runtime/uihtmlSession.js";
 
 export interface ExecOptions {
   onOutput?: (text: string) => void;
+  /** Standard-error text (`fprintf(2, ...)`); when omitted it goes to
+   *  `onOutput`. */
+  onErrorOutput?: (text: string) => void;
   onDrawnow?: (plotInstructions: PlotInstruction[]) => void;
   displayResults?: boolean;
   maxIterations?: number;

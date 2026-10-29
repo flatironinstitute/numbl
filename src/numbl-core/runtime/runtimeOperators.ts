@@ -200,6 +200,14 @@ export function not(v: unknown): RuntimeLogical | RuntimeTensor {
  *  cells, structs, strings, function handles and objects are rejected. */
 function logicalOperand(v: RuntimeValue): RuntimeValue {
   if (isRuntimeChar(v)) return charToNumericTensor(v);
+  if (isRuntimeComplexNumber(v) || (isRuntimeTensor(v) && v.imag)) {
+    const im = isRuntimeTensor(v) ? v.imag! : [v.im];
+    for (let i = 0; i < im.length; i++)
+      if (im[i] !== 0)
+        throw new RuntimeError("Argument must be real.", null, {
+          identifier: "MATLAB:math:mustBeReal",
+        });
+  }
   if (isNumericKind(v) || isRuntimeComplexNumber(v)) return v;
   throw invalidDataTypeError();
 }
@@ -422,6 +430,9 @@ export function range(start: unknown, step: unknown, end: unknown): unknown {
   if (start === END_SENTINEL || step === END_SENTINEL || end === END_SENTINEL) {
     return { _deferredRange: true, start, step, end } as DeferredRange;
   }
+  checkColonOperand(start);
+  checkColonOperand(step);
+  checkColonOperand(end);
   const startRV = typeof start === "number" ? null : ensureRuntimeValue(start);
   const endRV = typeof end === "number" ? null : ensureRuntimeValue(end);
   const isCharRange =
@@ -440,6 +451,23 @@ export function range(start: unknown, step: unknown, end: unknown): unknown {
     );
   }
   return result;
+}
+
+/** MATLAB's error for a `:` operand that is not numeric, char or logical
+ *  (a cell, struct, string, object, ...). */
+function checkColonOperand(v: unknown): void {
+  if (typeof v === "number" || typeof v === "boolean") return;
+  const rv = ensureRuntimeValue(v);
+  if (
+    isRuntimeTensor(rv) ||
+    isRuntimeChar(rv) ||
+    isRuntimeComplexNumber(rv) ||
+    isRuntimeSparseMatrix(rv)
+  )
+    return;
+  throw new RuntimeError("Inputs must be numeric, char, or logical.", null, {
+    identifier: "MATLAB:colon:inputsMustBeNumericCharLogical",
+  });
 }
 
 // ── For loop iteration ──────────────────────────────────────────────────

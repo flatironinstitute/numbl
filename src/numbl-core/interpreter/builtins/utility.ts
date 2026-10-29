@@ -32,52 +32,61 @@ import { sparseToDense } from "../../helpers/sparse-arithmetic.js";
 
 // ── isequal ──────────────────────────────────────────────────────────────
 
-function valuesEqualSimple(a: RuntimeValue, b: RuntimeValue): boolean {
+/** `isequal` (`nanEq` false) or `isequaln` (`nanEq` true, NaN equals NaN)
+ *  of two values. */
+function valuesEqualSimple(
+  a: RuntimeValue,
+  b: RuntimeValue,
+  nanEq = false
+): boolean {
+  const eq = (x: number, y: number) => x === y || (nanEq && x !== x && y !== y);
   // Enumeration members compare like `==` (value vs member/number, name vs
   // char) — so `isequal(patchtype.tri, 1)` and `isequal(x, 'tri')` hold.
   if (isEnumInstance(a)) return enumScalarEquals(a, b);
   if (isEnumInstance(b)) return enumScalarEquals(b, a);
   // A logical scalar compares by value with any numeric (a 1x1 tensor too).
-  if (typeof a === "boolean") return valuesEqualSimple(a ? 1 : 0, b);
-  if (typeof b === "boolean") return valuesEqualSimple(a, b ? 1 : 0);
+  if (typeof a === "boolean") return valuesEqualSimple(a ? 1 : 0, b, nanEq);
+  if (typeof b === "boolean") return valuesEqualSimple(a, b ? 1 : 0, nanEq);
   {
     const aText = textValue(a);
     const bText = textValue(b);
     if (aText !== null && bText !== null) return aText === bText;
   }
-  if (isRuntimeSparseMatrix(a)) return valuesEqualSimple(sparseToDense(a), b);
-  if (isRuntimeSparseMatrix(b)) return valuesEqualSimple(a, sparseToDense(b));
-  if (typeof a === "number" && typeof b === "number") return a === b;
+  if (isRuntimeSparseMatrix(a))
+    return valuesEqualSimple(sparseToDense(a), b, nanEq);
+  if (isRuntimeSparseMatrix(b))
+    return valuesEqualSimple(a, sparseToDense(b), nanEq);
+  if (typeof a === "number" && typeof b === "number") return eq(a, b);
   if (
     (isRuntimeNumber(a) || isRuntimeLogical(a)) &&
     (isRuntimeNumber(b) || isRuntimeLogical(b))
   ) {
     const av = isRuntimeLogical(a) ? (a ? 1 : 0) : (a as number);
     const bv = isRuntimeLogical(b) ? (b ? 1 : 0) : (b as number);
-    return av === bv;
+    return eq(av, bv);
   }
   if (isRuntimeComplexNumber(a) && isRuntimeComplexNumber(b))
-    return a.re === b.re && a.im === b.im;
+    return eq(a.re, b.re) && eq(a.im, b.im);
   if (isRuntimeComplexNumber(a) && typeof b === "number")
-    return a.re === b && a.im === 0;
+    return eq(a.re, b) && a.im === 0;
   if (typeof a === "number" && isRuntimeComplexNumber(b))
-    return b.re === a && b.im === 0;
-  if (isRuntimeTensor(a) && isRuntimeTensor(b)) return tensorsEqual(a, b);
+    return eq(b.re, a) && b.im === 0;
+  if (isRuntimeTensor(a) && isRuntimeTensor(b)) return tensorsEqual(a, b, eq);
   if (isRuntimeTensor(a) && typeof b === "number")
-    return a.data.length === 1 && (a.imag?.[0] ?? 0) === 0 && a.data[0] === b;
+    return a.data.length === 1 && (a.imag?.[0] ?? 0) === 0 && eq(a.data[0], b);
   if (typeof a === "number" && isRuntimeTensor(b))
-    return b.data.length === 1 && (b.imag?.[0] ?? 0) === 0 && b.data[0] === a;
+    return b.data.length === 1 && (b.imag?.[0] ?? 0) === 0 && eq(b.data[0], a);
   if (isRuntimeTensor(a) && isRuntimeComplexNumber(b))
     return (
       a.data.length === 1 &&
-      a.data[0] === b.re &&
-      (a.imag ? a.imag[0] === b.im : b.im === 0)
+      eq(a.data[0], b.re) &&
+      (a.imag ? eq(a.imag[0], b.im) : b.im === 0)
     );
   if (isRuntimeComplexNumber(a) && isRuntimeTensor(b))
     return (
       b.data.length === 1 &&
-      b.data[0] === a.re &&
-      (b.imag ? b.imag[0] === a.im : a.im === 0)
+      eq(b.data[0], a.re) &&
+      (b.imag ? eq(b.imag[0], a.im) : a.im === 0)
     );
   if (isRuntimeCell(a) && isRuntimeCell(b)) {
     if (a.shape.length !== b.shape.length) return false;
@@ -86,7 +95,7 @@ function valuesEqualSimple(a: RuntimeValue, b: RuntimeValue): boolean {
     }
     if (a.data.length !== b.data.length) return false;
     for (let i = 0; i < a.data.length; i++) {
-      if (!valuesEqualSimple(a.data[i], b.data[i])) return false;
+      if (!valuesEqualSimple(a.data[i], b.data[i], nanEq)) return false;
     }
     return true;
   }
@@ -94,7 +103,7 @@ function valuesEqualSimple(a: RuntimeValue, b: RuntimeValue): boolean {
     if (a.fields.size !== b.fields.size) return false;
     for (const [key, val] of a.fields) {
       if (!b.fields.has(key)) return false;
-      if (!valuesEqualSimple(val, b.fields.get(key)!)) return false;
+      if (!valuesEqualSimple(val, b.fields.get(key)!, nanEq)) return false;
     }
     return true;
   }
@@ -108,7 +117,7 @@ function valuesEqualSimple(a: RuntimeValue, b: RuntimeValue): boolean {
     if (as.names.length !== bs.names.length) return false;
     if (as.names.some(f => !bs.names.includes(f))) return false;
     for (let i = 0; i < as.elems.length; i++)
-      if (!valuesEqualSimple(as.elems[i], bs.elems[i])) return false;
+      if (!valuesEqualSimple(as.elems[i], bs.elems[i], nanEq)) return false;
     return true;
   }
   // Objects of the same class compare by their property values (a handle
@@ -119,7 +128,8 @@ function valuesEqualSimple(a: RuntimeValue, b: RuntimeValue): boolean {
     if (a.fields.size !== b.fields.size) return false;
     for (const [key, val] of a.fields) {
       const other = b.fields.get(key);
-      if (other === undefined || !valuesEqualSimple(val, other)) return false;
+      if (other === undefined || !valuesEqualSimple(val, other, nanEq))
+        return false;
     }
     return true;
   }
@@ -152,19 +162,23 @@ function textValue(v: RuntimeValue): string | null {
   return null;
 }
 
-function tensorsEqual(a: RuntimeTensor, b: RuntimeTensor): boolean {
+function tensorsEqual(
+  a: RuntimeTensor,
+  b: RuntimeTensor,
+  eq: (x: number, y: number) => boolean
+): boolean {
   if (a.data.length !== b.data.length) return false;
   if (a.shape.length !== b.shape.length) return false;
   for (let i = 0; i < a.shape.length; i++) {
     if (a.shape[i] !== b.shape[i]) return false;
   }
   for (let i = 0; i < a.data.length; i++) {
-    if (a.data[i] !== b.data[i]) return false;
+    if (!eq(a.data[i], b.data[i])) return false;
   }
   // Like MATLAB, compare values only: a missing imaginary part is zero.
   if (a.imag || b.imag) {
     for (let i = 0; i < a.data.length; i++) {
-      if ((a.imag?.[i] ?? 0) !== (b.imag?.[i] ?? 0)) return false;
+      if (!eq(a.imag?.[i] ?? 0, b.imag?.[i] ?? 0)) return false;
     }
   }
   return true;
@@ -176,6 +190,22 @@ builtin({
   apply: args => {
     for (let i = 1; i < args.length; i++) {
       if (!valuesEqualSimple(args[0], args[i])) return false;
+    }
+    return true;
+  },
+});
+
+builtin({
+  name: "isequaln",
+  help: {
+    signatures: ["tf = isequaln(A, B)", "tf = isequaln(A1, A2, ..., An)"],
+    description:
+      "True if all inputs are equal, treating NaN values as equal to each other.",
+  },
+  nargin: [2, Infinity],
+  apply: args => {
+    for (let i = 1; i < args.length; i++) {
+      if (!valuesEqualSimple(args[0], args[i], true)) return false;
     }
     return true;
   },
