@@ -4,8 +4,9 @@
  * Node.js implementations of the platform adapters consumed by executeCode
  * (ExecOptions.fileIO / ExecOptions.system), the directory scanner used
  * to build the workspace file set from search-path directories, and
- * initNodePlatform, which loads the native LAPACK addon and sets up the
- * C-JIT for optimization "2". These are the same implementations the numbl
+ * initNodePlatform, which fills a host (by default the process-default one)
+ * with the native LAPACK addon, qhull, the koffi bridge and the C-JIT for
+ * optimization "2". These are the same implementations the numbl
  * CLI uses; they are exported here so Node hosts embedding numbl do not
  * have to vendor them.
  *
@@ -18,7 +19,7 @@
  *     scanMFiles,
  *   } from "numbl/node";
  *
- *   const { nativeBridge } = await initNodePlatform();
+ *   await initNodePlatform();
  *   const searchPaths = ["/path/to/matlab/code"];
  *   const workspaceFiles = searchPaths.flatMap(p => scanMFiles(p));
  *   executeCode(
@@ -30,8 +31,7 @@
  *     },
  *     workspaceFiles,
  *     "eval.m",
- *     searchPaths,
- *     nativeBridge
+ *     searchPaths
  *   );
  */
 

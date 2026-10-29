@@ -16,6 +16,7 @@
  */
 
 import type { WorkspaceFile, NativeBridge } from "./workspace/index.js";
+import { defaultHost, type NumblHost } from "./host.js";
 import { RTV } from "./runtime/constructors.js";
 import { RuntimeError } from "./runtime/error.js";
 import { toNumber } from "./runtime/convert.js";
@@ -383,13 +384,16 @@ function resolveBindings(
 /** Sentinel value indicating a library is currently being loaded. */
 const LOADING = Symbol("loading");
 
-// Injected as the `gpu` global (see src/gpuHelper.ts); null outside the
-// browser worker or when WebGPU is unavailable.
-let jsGpuHelper: unknown = null;
-
+/** Give the process-default host a `gpu` object (see src/gpuHelper.ts).
+ *  @deprecated Set `host.gpu` (the browser workers get it from
+ *  `bootBrowserHost`). */
 export function setJsGpuHelper(helper: unknown): void {
-  jsGpuHelper = helper;
+  defaultHost().gpu = helper;
 }
+
+/** What `.numbl.js` files get from the host: the koffi bridge behind
+ *  `// native:` and the `gpu` global (null when there is none). */
+export type JsHostBindings = Pick<NumblHost, "nativeBridge" | "gpu">;
 
 /**
  * Load .numbl.js user function files and return them as LoadedJsUserFunction
@@ -410,8 +414,10 @@ export function setJsGpuHelper(helper: unknown): void {
 export function loadJsUserFunctions(
   jsFiles: WorkspaceFile[],
   wasmFiles?: WorkspaceFile[],
-  nativeBridge?: NativeBridge
+  host: JsHostBindings = {}
 ): LoadedJsUserFunction[] {
+  const { nativeBridge } = host;
+  const jsGpuHelper = host.gpu ?? null;
   const result: LoadedJsUserFunction[] = [];
   const wasmMap = wasmFiles ? buildWasmMap(wasmFiles) : new Map();
   // Cache compiled WASM instances so multiple .js files can share one module

@@ -228,7 +228,7 @@ register({ resolve: () => ({ outputTypes: [{ kind: 'number' }], apply: (args) =>
       },
     ];
     const mockBridge = { load: () => ({ fake: true }) };
-    const fns = loadJsUserFunctions(jsFiles, [], mockBridge);
+    const fns = loadJsUserFunctions(jsFiles, [], { nativeBridge: mockBridge });
     expect(callIBuiltin(fns, "myfunc", [])).toBe(true);
   });
 
@@ -241,7 +241,7 @@ register({ resolve: () => ({ outputTypes: [{ kind: 'number' }], apply: (args) =>
         source: `// native: mylib\nregister(() => native);`,
       },
     ];
-    const fns = loadJsUserFunctions(jsFiles, [], mockBridge);
+    const fns = loadJsUserFunctions(jsFiles, [], { nativeBridge: mockBridge });
     expect(callIBuiltin(fns, "myfunc", [])).toBe(mockLib);
   });
 
@@ -257,7 +257,7 @@ register({ resolve: () => ({ outputTypes: [{ kind: 'number' }], apply: (args) =>
         source: `// native: mylib\nregister(() => (typeof native === 'undefined'));`,
       },
     ];
-    const fns = loadJsUserFunctions(jsFiles, [], mockBridge);
+    const fns = loadJsUserFunctions(jsFiles, [], { nativeBridge: mockBridge });
     expect(callIBuiltin(fns, "myfunc", [])).toBe(true);
   });
 
@@ -276,7 +276,9 @@ register({ resolve: () => ({ outputTypes: [{ kind: 'number' }], apply: (args) =>
     const wasmFiles = [
       { name: "/path/to/mymod.wasm", source: "", data: wasmBytes },
     ];
-    const fns = loadJsUserFunctions(jsFiles, wasmFiles, mockBridge);
+    const fns = loadJsUserFunctions(jsFiles, wasmFiles, {
+      nativeBridge: mockBridge,
+    });
     const result = callIBuiltin(fns, "myfunc", []);
     expect(result).toEqual([true, true]);
   });

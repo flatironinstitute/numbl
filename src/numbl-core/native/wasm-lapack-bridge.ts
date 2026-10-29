@@ -26,8 +26,8 @@
 
 import {
   PROVIDER_PRIORITY,
-  registerProvider,
-  unregisterProvider,
+  defaultProviderStack,
+  type ProviderStack,
   type LapackBridge,
 } from "./lapack-bridge.js";
 
@@ -169,22 +169,26 @@ export function buildLapackBridgeFromWasm(
   return bridge;
 }
 
-/** Remove the accelerator, leaving matmul to the providers below it. */
-export function uninstallWasmLapackBridge(): void {
-  unregisterProvider("wasm");
+/** Remove the accelerator from `stack`, leaving matmul to the providers below it. */
+export function uninstallWasmLapackBridge(
+  stack: ProviderStack = defaultProviderStack
+): void {
+  stack.unregister("wasm");
 }
 
 /**
- * Register an instantiated module as the "wasm" provider. Its matmul
+ * Register an instantiated module as the "wasm" provider of `stack` (default:
+ * the process-default host's). Its matmul
  * declines products below `WASM_MATMUL_MIN_WORK`; errors propagate as with
  * any other provider.
  */
 export function installWasmLapackBridge(
   exports: WasmLapackExports,
-  manifest: AcceleratorManifest
+  manifest: AcceleratorManifest,
+  stack: ProviderStack = defaultProviderStack
 ): { matmul: boolean } {
   const entries = buildLapackBridgeFromWasm(exports, manifest);
-  registerProvider({
+  stack.register({
     name: "wasm",
     priority: PROVIDER_PRIORITY.wasm,
     entries,

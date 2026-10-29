@@ -1,8 +1,10 @@
 /**
  * Node platform setup shared by the numbl CLI and Node library hosts
- * (exported as `initNodePlatform` from "numbl/node"): the native LAPACK
- * addon, the C-JIT backend used by optimization "2", the koffi bridge for
- * native libraries, and the optional mip core package install.
+ * (exported as `initNodePlatform` from "numbl/node"): fills a `NumblHost`
+ * with the native LAPACK addon, the qhull geometry backends, the C-JIT
+ * backend used by optimization "2", the koffi bridge for native libraries
+ * and the Node file/system adapters, and optionally installs the mip core
+ * package.
  */
 
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
@@ -10,13 +12,14 @@ import { dirname, join } from "path";
 import { homedir } from "os";
 import { fileURLToPath } from "url";
 import { createRequire } from "module";
-import {
-  NATIVE_ADDON_EXPECTED_VERSION,
-  registerProvider,
-} from "./numbl-core/native/lapack-bridge.js";
+import { NATIVE_ADDON_EXPECTED_VERSION } from "./numbl-core/native/lapack-bridge.js";
 import { nativeAddonProvider } from "./numbl-core/native/native-provider.js";
-import { registerNodeCompileC } from "./numbl-core/executors/jit/compileC.node.js";
+import { nodeCJitBackend } from "./numbl-core/executors/jit/cjit.node.js";
+import { loadQhullNodeBackend } from "./numbl-core/native/qhull-node.js";
+import { defaultHost, type NumblHost } from "./numbl-core/host.js";
 import type { NativeBridge } from "./numbl-core/workspace/types.js";
+import { NodeFileIOAdapter } from "./cli-fileio.js";
+import { NodeSystemAdapter } from "./cli-system.js";
 import { unzipToFiles } from "./vfs/unzipToFiles.js";
 
 // ── Package directory & native addon paths ───────────────────────────────────
@@ -40,6 +43,7 @@ export function variantAddonPath(fastMath: boolean): string {
  *  matches; otherwise report why and keep the JS fallbacks. Returns whether
  *  the addon was installed. */
 function loadNativeAddon(
+  host: NumblHost,
   fastMath: boolean,
   onMessage: (msg: string) => void
 ): boolean {
@@ -65,7 +69,7 @@ function loadNativeAddon(
       );
       return false;
     }
-    registerProvider(nativeAddonProvider(addon));
+    host.numeric.register(nativeAddonProvider(addon));
     return true;
   } catch (e) {
     onMessage(
@@ -146,6 +150,9 @@ async function ensureMipCorePackage(
 // ── Entry point ─────────────────────────────────────────────────────────────
 
 export interface NodePlatformOptions {
+  /** The host to fill (default: the process-default host, which runs that
+   *  are not given a host use). Pass `createHost()` for a separate one. */
+  host?: NumblHost;
   /** Load the native LAPACK/FFTW addon if it is built (default true). The
    *  NUMBL_NO_NATIVE environment variable also disables it. */
   native?: boolean;
@@ -155,6 +162,13 @@ export interface NodePlatformOptions {
    *  It also needs `nativeBridge` (koffi) and a C compiler (`cc`, or
    *  NUMBL_CC); without them "2" behaves like "1". */
   cjit?: boolean;
+  /** Load the qhull WASM backends for delaunay/convhull (default true).
+   *  The NUMBL_NO_QHULL environment variable also disables them. */
+  geometry?: boolean;
+  /** Give the host the Node file and system adapters as its defaults for
+   *  runs that pass none (default false: such runs then have no file
+   *  access). */
+  adapters?: boolean;
   /** Install or refresh the mip core package under ~/.numbl/mip and return
    *  its directory in `searchPaths` (default false; downloads from GitHub). */
   mip?: boolean;
@@ -163,8 +177,11 @@ export interface NodePlatformOptions {
 }
 
 export interface NodePlatform {
-  /** Pass to executeCode (or the ExecSession constructor) to enable the
-   *  C-JIT and native shared libraries. Undefined when koffi is missing. */
+  /** The filled host; pass it as `ExecOptions.host` or
+   *  `new ExecSession({ host })` when it is not the process default. */
+  host: NumblHost;
+  /** The host's koffi bridge (also `host.nativeBridge`). Undefined when
+   *  koffi is missing. */
   nativeBridge: NativeBridge | undefined;
   /** Whether the native LAPACK addon was loaded. */
   nativeAddonLoaded: boolean;
@@ -173,12 +190,13 @@ export interface NodePlatform {
 }
 
 /**
- * Set up numbl's Node platform services. The addon and the C-JIT backend
- * are process-wide, so calling this again only reapplies the settings.
+ * Fill a host (default: the process-default host) with numbl's Node platform
+ * services. Calling this again on the same host reapplies the settings.
  */
 export async function initNodePlatform(
   opts: NodePlatformOptions = {}
 ): Promise<NodePlatform> {
+  const host = opts.host ?? defaultHost();
   const onMessage = opts.onMessage ?? (msg => console.error(msg));
   const searchPaths: string[] = [];
   if (opts.mip) {
@@ -186,9 +204,25 @@ export async function initNodePlatform(
     if (existsSync(mipCoreSearchPath)) searchPaths.push(mipCoreSearchPath);
   }
   const nativeAddonLoaded =
-    opts.native !== false && loadNativeAddon(!!opts.fastMath, onMessage);
-  // Installs the koffi C-JIT behind the browser-safe stub in compileC.ts;
-  // keeping that import Node-only is what lets the browser bundle stay green.
-  if (opts.cjit !== false) registerNodeCompileC();
-  return { nativeBridge: loadKoffiBridge(), nativeAddonLoaded, searchPaths };
+    opts.native !== false && loadNativeAddon(host, !!opts.fastMath, onMessage);
+  if (opts.geometry !== false && !process.env.NUMBL_NO_QHULL) {
+    try {
+      await loadQhullNodeBackend(host);
+    } catch (e) {
+      onMessage(
+        `Warning: failed to load qhull WASM backend: ${(e as Error).message}. ` +
+          `delaunay/delaunayn/convhull will be unavailable.`
+      );
+    }
+  }
+  const nativeBridge = loadKoffiBridge();
+  host.nativeBridge = nativeBridge;
+  // Importing the C backend only here (Node-only) keeps the C compile and
+  // codegen graph out of the browser bundle.
+  host.cjit = opts.cjit !== false ? nodeCJitBackend() : undefined;
+  if (opts.adapters) {
+    host.fileIO ??= new NodeFileIOAdapter();
+    host.system ??= new NodeSystemAdapter();
+  }
+  return { host, nativeBridge, nativeAddonLoaded, searchPaths };
 }

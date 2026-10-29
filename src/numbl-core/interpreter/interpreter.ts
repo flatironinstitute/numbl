@@ -162,10 +162,6 @@ export class Interpreter {
    *  decline stays silent (it's the normal "not JIT-able" path). */
   onJitBail?: (message: string) => void;
 
-  /** Bridge for loading native shared libraries. Undefined in browser
-   *  contexts. */
-  nativeBridge?: import("../workspace/types.js").NativeBridge;
-
   /** Verbose log sink (plumbed from ExecOptions.log). */
   log?: (message: string) => void;
 

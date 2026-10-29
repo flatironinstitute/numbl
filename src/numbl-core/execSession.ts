@@ -5,7 +5,8 @@
  * appdata, ...), which every run is given. The session also threads plot
  * hold state, figure handles, search paths and workspace files (as changed
  * by addpath/rmpath), the implicit cwd, and the uihtml session left by the
- * latest run. Used by the CLI REPL and the browser workers, and exported
+ * latest run, and holds the session's host (its platform capabilities).
+ * Used by the CLI REPL and the browser workers, and exported
  * from "numbl" for other hosts.
  */
 
@@ -18,12 +19,18 @@ import {
 } from "./executeCode.js";
 import type { RuntimeValue } from "./runtime/index.js";
 import { SessionState } from "./sessionState.js";
+import { defaultHost, type NumblHost } from "./host.js";
 import type { NativeBridge, WorkspaceFile } from "./workspace/types.js";
 
 export interface ExecSessionInit {
   workspaceFiles?: WorkspaceFile[];
   searchPaths?: string[];
-  /** From initNodePlatform in Node; enables the C-JIT and native libraries. */
+  /** The platform's capabilities for every run of the session (see
+   *  host.ts); default the process-default host. In Node, `initNodePlatform`
+   *  returns one. */
+  host?: NumblHost;
+  /** @deprecated Give the host a `nativeBridge` instead. Overrides
+   *  `host.nativeBridge` for this session. */
   nativeBridge?: NativeBridge;
 }
 
@@ -40,12 +47,22 @@ export class ExecSession {
   /** Appended to the search paths of every `execute` unless already present
    *  (e.g. the mip core directory). */
   extraSearchPaths: string[] = [];
-  nativeBridge: NativeBridge | undefined;
+  /** Capabilities every run of the session uses (`rt.host`). */
+  readonly host: NumblHost;
 
   constructor(init: ExecSessionInit = {}) {
     this.workspaceFiles = init.workspaceFiles ?? [];
     this.searchPaths = init.searchPaths;
-    this.nativeBridge = init.nativeBridge;
+    const host = init.host ?? defaultHost();
+    this.host =
+      init.nativeBridge && init.nativeBridge !== host.nativeBridge
+        ? { ...host, nativeBridge: init.nativeBridge }
+        : host;
+  }
+
+  /** @deprecated Read `host.nativeBridge`. */
+  get nativeBridge(): NativeBridge | undefined {
+    return this.host.nativeBridge;
   }
 
   /** The base workspace's variables (including the globals it declares). */
@@ -71,6 +88,7 @@ export class ExecSession {
       code,
       {
         session: this.state,
+        host: this.host,
         initialHoldState: this.holdState,
         initialFigureHandles: this.figureHandles,
         implicitCwdPath: this.implicitCwdPath,
@@ -78,8 +96,7 @@ export class ExecSession {
       },
       this.workspaceFiles,
       mainFileName,
-      searchPaths,
-      this.nativeBridge
+      searchPaths
     );
     this.adopt(result);
     return result;

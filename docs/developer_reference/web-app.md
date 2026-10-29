@@ -56,7 +56,7 @@ The base the Action passes is the one `actions/configure-pages` reports rather t
 
 ## Environment differences from the CLI
 
-- No access to the native addon; LAPACK and FFT use the in-tree JS fallbacks, optionally accelerated by a WASM LAPACK bridge (`set_wasm_bridge`).
+- No access to the native addon; LAPACK and FFT use the in-tree JS fallbacks, optionally accelerated by a WASM LAPACK bridge (`set_wasm_bridge`). The worker's capabilities (this accelerator, qhull, the WebGPU helper) are its host, built by `bootBrowserHost` (`src/browserHost.ts`); messages wait until `host.ready` resolves.
 - No C-JIT (no C compiler); `--opt 2` is unavailable in the browser.
 - File I/O is VFS-only; scripts cannot reach the real disk.
 - `input()` is interactive through the UI, not `stdin`.

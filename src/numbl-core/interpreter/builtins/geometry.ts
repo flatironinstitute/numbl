@@ -155,9 +155,9 @@ function triangulateToTensor(
   const backend = getDelaunayBackend();
   if (!backend)
     throw new RuntimeError(
-      "delaunay/delaunayn: triangulation backend not initialized. " +
-        "In Node call loadQhullNodeBackend() (the CLI and library do this " +
-        "automatically); in the browser worker it loads on startup."
+      "delaunay/delaunayn: this host has no triangulation backend. " +
+        "In Node, initNodePlatform() (or loadDelaunayBackend()) installs it; " +
+        "the numbl/browser session worker does not provide it."
     );
   const raw = backend(points, dim);
   // Discard degenerate (zero-volume) simplices. Triangulating cospherical /
@@ -347,9 +347,9 @@ function convexHullFacets(
   const backend = getConvexHullBackend();
   if (!backend)
     throw new RuntimeError(
-      `${name}: convex-hull backend not initialized. In Node call ` +
-        `loadQhullNodeBackend() (the CLI and library do this automatically); ` +
-        `in the browser worker it loads on startup.`
+      `${name}: this host has no convex-hull backend. In Node, ` +
+        `initNodePlatform() (or loadDelaunayBackend()) installs it; the ` +
+        `numbl/browser session worker does not provide it.`
     );
   return backend(points, dim);
 }

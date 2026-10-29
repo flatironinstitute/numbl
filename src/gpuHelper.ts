@@ -32,6 +32,10 @@ import { getCurrentRuntime } from "./numbl-core/runtime/refcount.js";
 export interface GpuHelper {
   load(name: string, factory: (() => unknown) | string): void;
   call(name: string, method: string, args?: unknown): unknown;
+  /** Resolves when the helper worker has started (or failed to). A run
+   *  before then would find it unstarted, so hosts await this first (it is
+   *  part of the host's `ready`). */
+  readonly ready: Promise<void>;
 }
 
 interface CallBody {
@@ -117,6 +121,7 @@ function helperMain(
       const ready = new Int32Array(m.ready);
       Atomics.store(ready, 0, 1);
       Atomics.notify(ready, 0);
+      self.postMessage({ type: "ready" });
     } else {
       server.handle(m);
     }
@@ -145,6 +150,12 @@ export function startGpuHelper(): GpuHelper | null {
   );
   const worker = new Worker(url);
   const ready = new Int32Array(new SharedArrayBuffer(4));
+  const started = new Promise<void>(resolve => {
+    worker.addEventListener("message", e => {
+      if ((e.data as { type?: string } | null)?.type === "ready") resolve();
+    });
+    worker.addEventListener("error", () => resolve());
+  });
   worker.postMessage({ type: "init", ready: ready.buffer });
 
   // The running code's channel, so Stop interrupts a call; a private one
@@ -158,6 +169,7 @@ export function startGpuHelper(): GpuHelper | null {
   }
 
   return {
+    ready: started,
     load(name, factory) {
       const source =
         typeof factory === "function" ? factory.toString() : factory;
@@ -166,7 +178,7 @@ export function startGpuHelper(): GpuHelper | null {
     call(name, method, args) {
       if (Atomics.load(ready, 0) !== 1) {
         throw new Error(
-          "gpu: helper worker has not started yet; try running again"
+          "gpu: helper worker has not started (await host.ready before running)"
         );
       }
       return channel().request(worker, "call", { name, method, args });

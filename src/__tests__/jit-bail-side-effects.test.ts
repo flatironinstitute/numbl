@@ -3,7 +3,7 @@
 import { describe, it, expect } from "vitest";
 import { createRequire } from "node:module";
 import { executeCode } from "../numbl-core/executeCode.js";
-import { registerNodeCompileC } from "../numbl-core/executors/jit/compileC.node.js";
+import { registerNodeCompileC } from "../numbl-core/executors/jit/cjit.node.js";
 import type { OptLevel } from "../numbl-core/executors/plugins.js";
 import type { NativeBridge } from "../numbl-core/workspace/types.js";
 
