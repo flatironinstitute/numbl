@@ -102,7 +102,10 @@ export function existsOnDevice(g: RuntimeGpuArray): boolean {
 /** The host tensor holding a gpuArray's elements (a fresh copy). */
 export function gatherTensor(g: RuntimeGpuArray): RuntimeTensor {
   checkExists(g);
-  return g.device.download(g.buffer, g.shape, g.cls, g.isComplex);
+  const h = g.device.download(g.buffer, g.shape, g.cls, g.isComplex);
+  return h instanceof RuntimeTensor
+    ? h
+    : new RuntimeTensor(h.data, h.shape, h.imag, h.cls);
 }
 
 /** `gather(g)`: the host value, a 1x1 double or logical array as a scalar

@@ -8,7 +8,7 @@ A gpuArray is a `RuntimeGpuArray` (kind `gpu_array`): its device, an opaque devi
 
 ## Devices
 
-A device (`GpuDevice` in `runtime/gpu/device.ts`) stores data (`upload`, `download`) and says whether it computes in double precision (`supportsDouble`, `gpuDevice().SupportsDouble`). The host lists its devices (`NumblHost.gpuDevices`, a `GpuDeviceSet`), one of which is selected; `gpuDevice(index)` selects and resets one, `gpuDevice([])` deselects, and `reset(D)` resets. Resetting increments the device's `generation`, so the arrays made before no longer exist (`existsOnGPU` is false and using one raises `The data no longer exists on the device.`).
+A device (`GpuDevice` in `runtime/gpu/deviceTypes.ts`) stores data (`upload`, `download`) and says whether it computes in double precision (`supportsDouble`, `gpuDevice().SupportsDouble`). The host lists its devices (`NumblHost.gpuDevices`, a `GpuDeviceSet`), one of which is selected; `gpuDevice(index)` selects and resets one, `gpuDevice([])` deselects, and `reset(D)` resets. Resetting increments the device's `generation`, so the arrays made before no longer exist (`existsOnGPU` is false and using one raises `The data no longer exists on the device.`).
 
 Without a GPU backend a host has two CPU reference devices (`runtime/gpu/cpuDevice.ts`), whose memory is host memory: device 1 computes in double precision and device 2 does not. They make gpuArray code run and testable without a GPU, and are the reference a real device's results are compared against.
 

@@ -10,32 +10,10 @@
  * complete.
  */
 
-import type { ElementClass, RuntimeTensor } from "../types.js";
 import { RuntimeError } from "../error.js";
+import type { GpuDevice } from "./deviceTypes.js";
 
-export interface GpuDevice {
-  /** `gpuDevice().Name`. */
-  readonly name: string;
-  /** Whether the device computes in double precision. On a device that
-   *  does not, creating a double gpuArray is an error. */
-  readonly supportsDouble: boolean;
-  /** `gpuDevice().TotalMemory`, in bytes. */
-  readonly totalMemory: number;
-  /** Incremented when the device is reset: arrays made in an earlier
-   *  generation no longer exist. */
-  generation: number;
-  /** A device copy of a host tensor's elements (real or complex). */
-  upload(t: RuntimeTensor): unknown;
-  /** A fresh host tensor with a buffer's elements. */
-  download(
-    buffer: unknown,
-    shape: number[],
-    cls: ElementClass,
-    isComplex: boolean
-  ): RuntimeTensor;
-  /** Wait for queued work to finish (`wait(D)`). */
-  synchronize?(): void;
-}
+export type { GpuDevice, HostArray } from "./deviceTypes.js";
 
 /** A host's GPU devices and which one is selected. */
 export class GpuDeviceSet {

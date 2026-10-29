@@ -1,4 +1,4 @@
-import type { GpuDevice } from "./gpu/device.js";
+import type { GpuDevice } from "./gpu/deviceTypes.js";
 import {
   Refcounted,
   type RefcountRuntime,
@@ -126,10 +126,8 @@ export const isRuntimeStringArray = (
 // enforcement comes in phase 3 when mutation methods replace direct
 // field writes.
 
-/** The MATLAB class of a tensor's elements (what `class` reports). Every
- *  class stores its elements in a Float64Array; the class fixes their
- *  semantics (a logical tensor holds 0/1 and is real). */
-export type ElementClass = "double" | "single" | "logical";
+import type { ElementClass } from "./elementClass.js";
+export type { ElementClass };
 
 export class RuntimeTensor extends Refcounted {
   readonly kind = "tensor" as const;
