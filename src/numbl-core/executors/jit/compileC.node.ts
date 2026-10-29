@@ -1,10 +1,10 @@
 /**
  * Node-only implementation of the koffi C-JIT pipeline.
  *
- * Cache layout: `~/.cache/numbl/c-jit/<sha>.so` (one per unique
- * `(declaration, source, flags)` triple). On hit, `dlopen` and reuse —
- * no `cc` invocation. On miss, write `<sha>.c`, exec `cc`, then
- * `dlopen`.
+ * Cache layout: `~/.cache/numbl/c-jit/<sha>.so` (or `$NUMBL_CJIT_CACHE`),
+ * one per unique `(declaration, source without comments, flags)` triple.
+ * On hit, `dlopen` and reuse, with no `cc` invocation. On miss, write
+ * `<sha>.c`, exec `cc`, then `dlopen`.
  *
  * Node-only (`node:fs`, `node:child_process`): reached only through the
  * C backend (`cBackend.ts`), which a host gets from `cjit.node.ts`.
@@ -23,20 +23,31 @@ import {
 import { join } from "node:path";
 import { homedir } from "node:os";
 import type { NativeBridge } from "../../workspace/types.js";
+import { stripCComments } from "../../jit/codegen/cSource.js";
 import type { CompiledC, KoffiLib } from "./compileC.js";
 
-const CACHE_DIR = join(homedir(), ".cache", "numbl", "c-jit");
+/** `NUMBL_CJIT_CACHE` overrides the cache directory (e.g. an empty one to
+ *  time cold compiles). */
+function cacheDir(): string {
+  return (
+    process.env.NUMBL_CJIT_CACHE || join(homedir(), ".cache", "numbl", "c-jit")
+  );
+}
 
 /** Compile (or look up cached) and load. The cache key is the SHA of
  *  `(flags, declaration, source)` so two different signatures or
- *  compile-flag sets against the same source get distinct artifacts. */
+ *  compile-flag sets against the same source get distinct artifacts.
+ *  Comments are left out of the key: the emitter's spec names do not
+ *  depend on argument types (see `cSource.ts`), so a module that differs
+ *  from a cached one only in its type comments reuses its object. */
 export function compileAndLoadC(
   source: string,
   declaration: string,
   bridge: NativeBridge
 ): CompiledC {
-  if (!existsSync(CACHE_DIR)) {
-    mkdirSync(CACHE_DIR, { recursive: true });
+  const dir = cacheDir();
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true });
   }
 
   const cc = process.env.NUMBL_CC || "cc";
@@ -65,11 +76,11 @@ export function compileAndLoadC(
 
   const flagKey = `${flags.join(" ")} ${libs.join(" ")}`;
   const hash = createHash("sha256")
-    .update(`${flagKey}\n${declaration}\n${source}`)
+    .update(`${flagKey}\n${declaration}\n${stripCComments(source)}`)
     .digest("hex")
     .slice(0, 32);
-  const libPath = join(CACHE_DIR, `${hash}.so`);
-  const srcPath = join(CACHE_DIR, `${hash}.c`);
+  const libPath = join(dir, `${hash}.so`);
+  const srcPath = join(dir, `${hash}.c`);
 
   let cacheHit = true;
   if (!existsSync(libPath)) {
@@ -78,8 +89,8 @@ export function compileAndLoadC(
     // load `libPath` as soon as it exists, so build under unique names and
     // rename into place (atomic within the cache directory).
     const tmp = `${hash}.${process.pid}.${Date.now()}`;
-    const tmpSrc = join(CACHE_DIR, `${tmp}.c`);
-    const tmpLib = join(CACHE_DIR, `${tmp}.so`);
+    const tmpSrc = join(dir, `${tmp}.c`);
+    const tmpLib = join(dir, `${tmp}.so`);
     writeFileSync(tmpSrc, source);
     try {
       execSync(
@@ -106,7 +117,7 @@ export function compileAndLoadC(
 
 /** Read a previously-compiled C source from disk. Diagnostic helper. */
 export function readCachedCSource(hash: string): string | null {
-  const srcPath = join(CACHE_DIR, `${hash}.c`);
+  const srcPath = join(cacheDir(), `${hash}.c`);
   if (!existsSync(srcPath)) return null;
   return readFileSync(srcPath, "utf8");
 }

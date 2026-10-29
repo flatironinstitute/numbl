@@ -11,6 +11,10 @@ import {
   type Type,
 } from "../numbl-core/jit/index.js";
 import { setCSnippets } from "../numbl-core/jit/codegen/runtime.js";
+import {
+  renameCIdentifiers,
+  stripCComments,
+} from "../numbl-core/jit/codegen/cSource.js";
 import { C_SNIPPETS } from "../numbl-core/jit/builtins/runtime/snippets.c.gen.js";
 
 // On a matrix of unknown size, `mask` lowers to a compare that C fuses
@@ -79,5 +83,49 @@ describe("compile pipeline", () => {
       /don't share static shape/
     );
     expect(() => compileSpec(args("inc", [scalarDouble()]))).not.toThrow();
+  });
+
+  it("emits the same C for specs that differ only in argument types", () => {
+    const { args } = session();
+    const col = tensorDoubleFromDims([
+      { kind: "unknown" },
+      { kind: "exact", value: 1 },
+    ]);
+    // `inc` enters the spec cache before `twice`, so call order (not cache
+    // order) must decide the order of the emitted functions.
+    compileSpecC(args("inc", [col]));
+    const a = compileSpecC(args("twice", [col]));
+    const b = compileSpecC(args("twice", [scalarDouble("positive")]));
+    const c = compileSpecC(args("twice", [scalarDouble()]));
+    expect(a.signature.cName).toBe("_jit_fn0_twice__host");
+    expect(stripCComments(a.source)).not.toMatch(/__[0-9a-f]{8}\b/);
+    expect(b.cName).not.toBe(c.cName);
+    expect(stripCComments(b.source)).toBe(stripCComments(c.source));
+    expect(b.signature.cName).toBe(c.signature.cName);
+  });
+});
+
+describe("C source passes", () => {
+  const src = [
+    "/* f__1 */ static int f__1(int x); // f__1",
+    `void g(void) { puts("f__1 // /* \\" f__1"); char c = '"'; f__1(1e5); }`,
+  ].join("\n");
+
+  it("renames identifiers only outside comments and literals", () => {
+    expect(renameCIdentifiers(src, new Map([["f__1", "h"]]))).toBe(
+      [
+        "/* f__1 */ static int h(int x); // f__1",
+        `void g(void) { puts("f__1 // /* \\" f__1"); char c = '"'; h(1e5); }`,
+      ].join("\n")
+    );
+  });
+
+  it("strips comments", () => {
+    expect(stripCComments(src)).toBe(
+      [
+        " static int f__1(int x); ",
+        `void g(void) { puts("f__1 // /* \\" f__1"); char c = '"'; f__1(1e5); }`,
+      ].join("\n")
+    );
   });
 });

@@ -155,17 +155,17 @@ export function compileWith<E extends EmitOutput>(
   }
 }
 
-/** `entry` and the specs it transitively calls, in the cache's order. The
+/** `entry` and the specs it transitively calls, in call order from the
+ *  entry, so that the order (and with it the emitted C, see `cSource.ts`)
+ *  does not depend on which specs earlier compiles left in the cache. The
  *  cache also holds every earlier entry of the session (other functions,
  *  and synthetic loop / script wrappers), which this module never calls. */
 function reachableProgram(lowerer: Lowerer, entry: IRFunc): IRProgram {
   const all: IRProgram = { functions: lowerer.specializations };
-  const reach = new Set<string>([entry.cName]);
-  for (const fn of reachableCallees(all, entry)) reach.add(fn.cName);
-  const functions = new Map<string, IRFunc>();
-  for (const [key, fn] of lowerer.specializations) {
-    if (reach.has(key)) functions.set(key, fn);
-  }
+  const functions = new Map<string, IRFunc>([
+    [entry.cName, lowerer.specializations.get(entry.cName) ?? entry],
+  ]);
+  for (const fn of reachableCallees(all, entry)) functions.set(fn.cName, fn);
   return { functions };
 }
 
