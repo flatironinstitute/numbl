@@ -50,8 +50,10 @@ export const imag: Builtin = {
         useRuntime("jit_cscalar");
         return `jit_tensor_imag_complex(${argsC[0]})`;
       }
-      useRuntime("jit_tensor_elemwise_real");
-      return `jit_tensor_times_ts(${argsC[0]}, 0.0)`;
+      // Zeros of the input's shape (not `x * 0`, which is -0 or NaN for
+      // some elements).
+      useRuntime("jit_tensor_fill_nd");
+      return `jit_tensor_fill_nd(0.0, (${argsC[0]}).ndim, (${argsC[0]}).dims)`;
     }
     if (a.isComplex) {
       useRuntime("jit_cscalar");
@@ -67,8 +69,8 @@ export const imag: Builtin = {
         useRuntime("jit_cscalar");
         return `jit_tensor_imag_complex(${argsJs[0]})`;
       }
-      useRuntime("jit_tensor_elemwise_real");
-      return `jit_tensor_times_ts(${argsJs[0]}, 0)`;
+      useRuntime("jit_tensor_fill_nd");
+      return `jit_tensor_fill_nd(0, ${argsJs[0]}.shape.length, ${argsJs[0]}.shape)`;
     }
     if (a.isComplex) {
       useRuntime("jit_cscalar");

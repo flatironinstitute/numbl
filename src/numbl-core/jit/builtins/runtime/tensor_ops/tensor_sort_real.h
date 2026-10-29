@@ -141,6 +141,9 @@ typedef struct {
 static int jit_sort_cmp_complex_asc(const void *pa, const void *pb) {
   const jit_sort_complex_pair_t *a = (const jit_sort_complex_pair_t *)pa;
   const jit_sort_complex_pair_t *b = (const jit_sort_complex_pair_t *)pb;
+  int aNaN = a->mag != a->mag;
+  int bNaN = b->mag != b->mag;
+  if (aNaN != bNaN) return aNaN ? 1 : -1; /* NaN last */
   if (a->mag < b->mag) return -1;
   if (a->mag > b->mag) return 1;
   if (a->phase < b->phase) return -1;
@@ -153,6 +156,9 @@ static int jit_sort_cmp_complex_asc(const void *pa, const void *pb) {
 static int jit_sort_cmp_complex_desc(const void *pa, const void *pb) {
   const jit_sort_complex_pair_t *a = (const jit_sort_complex_pair_t *)pa;
   const jit_sort_complex_pair_t *b = (const jit_sort_complex_pair_t *)pb;
+  int aNaN = a->mag != a->mag;
+  int bNaN = b->mag != b->mag;
+  if (aNaN != bNaN) return aNaN ? -1 : 1; /* NaN first */
   if (a->mag > b->mag) return -1;
   if (a->mag < b->mag) return 1;
   if (a->phase > b->phase) return -1;

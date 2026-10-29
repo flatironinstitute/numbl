@@ -166,18 +166,19 @@ export function chooseDefaultAxis(
   t: NumericType
 ): AxisAll | AxisFixed {
   // Concrete shape: numbl's `firstReduceDim` rule
-  // (helpers/reduction-helpers.ts) — count dims > 1; collapse to
-  // scalar when at most one dim is > 1 (matches `sum([1 2 3]) = 6`
-  // AND `sum([]) = 0` / `sum(zeros(0, 5)) = 0`); else reduce along
-  // the first dim > 1. Using `!== 1` here (the prior rule) would
-  // route empty shapes like `[0, 0]` and `[0, 5]` to a per-axis
-  // reduce and produce a non-scalar empty tensor — numbl produces
-  // the scalar identity instead.
+  // (helpers/reduction-helpers.ts). An all-zero shape (`[]`) reduces to
+  // the scalar identity; otherwise the result is scalar when at most one
+  // dim is not 1 (`sum([1 2 3]) = 6`), else the reduction runs along the
+  // first dim that is not 1 (`sum(zeros(0, 5))` is 1x5, as in MATLAB).
   if (t.shape !== undefined) {
-    const numGt1 = t.shape.filter(s => s > 1).length;
-    if (numGt1 <= 1) return { kind: "all" };
-    return { kind: "fixed", dim: t.shape.findIndex(s => s > 1) + 1 };
+    if (t.shape.length > 0 && t.shape.every(s => s === 0))
+      return { kind: "all" };
+    const nonSingleton = t.shape.filter(s => s !== 1).length;
+    if (nonSingleton <= 1) return { kind: "all" };
+    return { kind: "fixed", dim: t.shape.findIndex(s => s !== 1) + 1 };
   }
+  if (t.dims.every(d => d.kind === "exact" && d.value === 0))
+    return { kind: "all" };
   // Lattice walk. Same rule as the concrete-shape path but
   // articulated dim-by-dim:
   //   - exact == 0 or 1: doesn't count as a non-singleton.
@@ -190,7 +191,7 @@ export function chooseDefaultAxis(
   for (let i = 0; i < t.dims.length; i++) {
     const d = t.dims[i];
     if (d.kind === "exact") {
-      if (d.value > 1) {
+      if (d.value !== 1) {
         knownGt1++;
         if (firstGt1Idx === -1) firstGt1Idx = i;
       }
@@ -476,11 +477,11 @@ export function reductionTransfer(argTypes: Type[], spec: KernelSpec): Type {
       `'${spec.name}' arg must be double or logical (got ${inputType.elem})`
     );
   }
-  if (inputType.isComplex) {
-    return complexReductionTransfer(argTypes, spec);
-  }
   if (spec.dimArgIndex === 2 && argTypes.length === 2) {
     return elementwiseMinMaxTransfer(argTypes, spec.name as "min" | "max");
+  }
+  if (inputType.isComplex) {
+    return complexReductionTransfer(argTypes, spec);
   }
   if (spec.dimArgIndex === 2 && argTypes.length === 3) {
     if (!isEmptyBracketLiteral(argTypes[1])) {
@@ -773,6 +774,9 @@ export function reductionEmitJs(spec: {
         // number) — incorrect for `all(false)`. `Number(NaN) !== 0`
         // is `true`, matching MATLAB's `all(NaN) == 1` semantics
         // (anything non-zero counts as truthy).
+        // `any` ignores NaN (MATLAB: any(NaN) is 0).
+        if (spec.name === "any")
+          return `((_x) => _x !== 0 && _x === _x)(Number(${argsJs[0]}))`;
         return `(Number(${argsJs[0]}) !== 0)`;
       }
       return argsJs[0];
@@ -862,6 +866,8 @@ export function reductionEmit(spec: {
         if (isComplex) {
           return `(jit_cnonzero(${argsC[0]}) ? 1.0 : 0.0)`;
         }
+        if (spec.name === "any")
+          return `(((${argsC[0]}) != 0.0 && (${argsC[0]}) == (${argsC[0]})) ? 1.0 : 0.0)`;
         return `((${argsC[0]}) != 0.0 ? 1.0 : 0.0)`;
       }
       return argsC[0];

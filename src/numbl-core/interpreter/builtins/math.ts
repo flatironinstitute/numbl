@@ -518,7 +518,7 @@ builtin({
   nargin: 1,
   apply: unaryElemwise(
     {
-      realFn: Math.sign,
+      realFn: x => Math.sign(x) + 0, // sign(-0) is 0
       complexFn: (re, im) => {
         // Use hypot so magnitude stays finite when re*re or im*im overflow.
         const mag = Math.hypot(re, im);

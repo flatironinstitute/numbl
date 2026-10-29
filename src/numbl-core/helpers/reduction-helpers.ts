@@ -389,7 +389,7 @@ export function logicalAlongDim(
     // dim exceeds rank: element-wise cast to logical
     const result = allocFloat64Array(v.data.length);
     for (let i = 0; i < v.data.length; i++)
-      result[i] = v.data[i] !== 0 || (v.imag && v.imag[i] !== 0) ? 1 : 0;
+      result[i] = scanLogical([v.data[i]], v.imag && [v.imag[i]], mode) ? 1 : 0;
     const t = RTV.logicalTensor(result, [...v.shape]);
     return t;
   }
@@ -399,8 +399,10 @@ export function logicalAlongDim(
     let val: boolean = mode === "all";
     for (let k = 0; k < srcIndices.length; k++) {
       const srcIdx = srcIndices[k];
-      const isNonZero =
-        v.data[srcIdx] !== 0 || (v.imag !== undefined && v.imag[srcIdx] !== 0);
+      const re = v.data[srcIdx];
+      const im = v.imag !== undefined ? v.imag[srcIdx] : 0;
+      if (re !== re || im !== im) continue; // NaN is ignored, as in scanLogical
+      const isNonZero = re !== 0 || im !== 0;
       if (mode === "any" && isNonZero) {
         val = true;
         break;

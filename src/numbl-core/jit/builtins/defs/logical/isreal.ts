@@ -16,7 +16,12 @@
  * away when the value is constant).
  */
 import { TypeError, UnsupportedConstruct } from "../../../lowering/errors.js";
-import { scalarLogical, isNumeric, isScalar } from "../../../lowering/types.js";
+import {
+  scalarLogical,
+  isChar,
+  isNumeric,
+  isScalar,
+} from "../../../lowering/types.js";
 import type { Type } from "../../../lowering/types.js";
 import type { Builtin } from "../../registry.js";
 
@@ -35,7 +40,8 @@ function checkArity(argTypes: Type[], nargout: number): void {
  *  when it depends on the value's imaginary content (a complex scalar's
  *  imag, or a complex tensor's imag lane). */
 function staticVerdict(t: Type): boolean | "runtime" {
-  if (!isNumeric(t)) return true; // char / string / struct / cell
+  // MATLAB: a char array is real; a string, struct or cell is not.
+  if (!isNumeric(t)) return isChar(t);
   if (!t.isComplex) return true;
   if (!isScalar(t)) return "runtime"; // complex tensor → scan imag lane
   // Complex scalar: fold if we know the exact value.

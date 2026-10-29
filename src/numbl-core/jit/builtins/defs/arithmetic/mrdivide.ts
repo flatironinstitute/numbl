@@ -19,9 +19,9 @@ export const mrdivide: Builtin = {
     const b = argTypes[1];
     requireRealOrComplex(a, `'mrdivide' arg 1`);
     requireRealOrComplex(b, `'mrdivide' arg 2`);
-    if (isMultiElement(a) && isMultiElement(b)) {
+    if (isMultiElement(b)) {
       throw new UnsupportedConstruct(
-        `matrix right-division (a/b on two tensors) is not yet supported; use './' for elementwise`
+        `matrix right-division by a non-scalar is not yet supported; use './' for elementwise`
       );
     }
     return rdivide.transfer(argTypes, nargout);

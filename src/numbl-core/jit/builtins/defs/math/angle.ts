@@ -14,6 +14,12 @@ import {
 import type { Builtin } from "../../registry.js";
 import { requireRealOrComplex, exactDouble, exactComplex } from "../_shared.js";
 
+/** Angle of a real value: pi when negative, 0 otherwise (also for -0),
+ *  NaN for NaN. */
+function realAngle(x: number): number {
+  return x < 0 ? Math.PI : x === x ? 0 : x;
+}
+
 export const angle: Builtin = {
   name: "angle",
   transfer(argTypes, nargout) {
@@ -42,7 +48,7 @@ export const angle: Builtin = {
     }
     const v = exactDouble(a);
     if (v !== undefined) {
-      const r = Math.atan2(0, v);
+      const r = realAngle(v);
       if (Number.isFinite(r)) return [scalarDouble(signFromNumber(r), r)];
     }
     return [scalarDouble()];
@@ -53,7 +59,9 @@ export const angle: Builtin = {
       useRuntime("jit_cscalar");
       return `jit_cangle(${argsC[0]})`;
     }
-    return `atan2(0.0, ${argsC[0]})`;
+    // Not atan2(0, x), which is pi for x = -0.
+    const x = argsC[0];
+    return `((${x}) < 0.0 ? 3.141592653589793 : (${x}) == (${x}) ? 0.0 : (${x}))`;
   },
   emitJs({ argsJs, argTypes, useRuntime }) {
     const a = argTypes[0] as NumericType;
@@ -61,6 +69,6 @@ export const angle: Builtin = {
       useRuntime("jit_cscalar");
       return `jit_cangle(${argsJs[0]})`;
     }
-    return `Math.atan2(0, ${argsJs[0]})`;
+    return `((_x) => (_x < 0 ? Math.PI : _x === _x ? 0 : _x))(${argsJs[0]})`;
   },
 };
