@@ -55,7 +55,7 @@ interface KindRule {
   /** The key in `ArgKindPolicy`. */
   policy: keyof ArgKindPolicy;
   /** The default conversion, to a kind every builtin handles. */
-  convert(v: RuntimeValue): RuntimeValue;
+  convert(v: RuntimeValue, builtinName: string): RuntimeValue;
   /** The error for `"error"`. */
   error(builtinName: string): RuntimeError;
 }
@@ -65,7 +65,7 @@ interface KindRule {
 const RULES: { readonly [K in ValueKind]?: KindRule } = {
   gpu_array: {
     policy: "gpu",
-    convert: v => gatherValue(v as RuntimeGpuArray),
+    convert: (v, name) => gatherValue(v as RuntimeGpuArray, name),
     error: () =>
       new RuntimeError("Function is not supported for gpuArray input.", null, {
         identifier: "parallel:gpu:array:FunctionNotSupported",
@@ -92,7 +92,7 @@ export function resolveArgPolicy(
     const rule = RULES[kind]!;
     const a = accepts?.[rule.policy] ?? "convert";
     if (a === true) out[kind] = null;
-    else if (a === "convert") out[kind] = rule.convert;
+    else if (a === "convert") out[kind] = v => rule.convert(v, builtinName);
     else {
       const err =
         a === "error"

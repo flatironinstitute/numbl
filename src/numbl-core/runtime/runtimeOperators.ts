@@ -505,8 +505,8 @@ export function forIter(v: unknown): unknown[] {
   if (typeof v === "number") return [v];
   // A gpuArray iterates gpuArray columns.
   if (isGpuArray(v))
-    return forIter(gatherValue(v)).map(c =>
-      outputToGpu(ensureRuntimeValue(c), v.device)
+    return forIter(gatherValue(v, "for")).map(c =>
+      outputToGpu(ensureRuntimeValue(c), v.device, false, "for")
     );
   const mv = ensureRuntimeValue(v);
   if (isRuntimeNumber(mv)) return [mv];

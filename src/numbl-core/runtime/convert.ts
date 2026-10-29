@@ -37,7 +37,7 @@ export function toNumber(v: RuntimeValue): number {
         );
       return v.re;
     case "gpu_array":
-      return toNumber(gatherValue(v));
+      return toNumber(gatherValue(v, "scalar"));
     default:
       throw new RuntimeError(`Cannot convert ${v.kind} to number`);
   }
@@ -78,7 +78,7 @@ export function toBool(v: RuntimeValue): boolean {
     case "complex_number":
       return v.re !== 0 || v.im !== 0;
     case "gpu_array":
-      return toBool(gatherValue(v));
+      return toBool(gatherValue(v, "condition"));
     default:
       return true;
   }

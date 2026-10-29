@@ -826,7 +826,8 @@ export function concatKernel(
       g = toGpuArray(
         cls === "single" ? singleTensor(t.data, t.shape, t.imag) : t,
         dk.device,
-        false
+        false,
+        "concat"
       );
     } else if (v.cls !== cls && cls === "single" && v.cls !== "logical")
       return null;

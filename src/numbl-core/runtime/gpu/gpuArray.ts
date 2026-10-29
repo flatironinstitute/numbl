@@ -13,6 +13,7 @@ import { RuntimeError } from "../error.js";
 import { kstr } from "../kinds.js";
 import { currentHost } from "../../host.js";
 import type { GpuDevice } from "./device.js";
+import { gpuLogEnabled, logTransfer } from "./gpuLog.js";
 
 /** The selected device of the running code's host. */
 export function currentGpuDevice(): GpuDevice {
@@ -45,11 +46,12 @@ export function doubleNotSupportedError(): RuntimeError {
  *  `explicit` creation (gpuArray(X), zeros(n, 'gpuArray'), double(G)) of a
  *  double array on a device without double precision is an error; the
  *  results of operations are not checked (an index output of `max` is
- *  double). */
+ *  double). `site` names the caller for NUMBL_GPU_LOG. */
 export function toGpuArray(
   v: RuntimeValue,
   device: GpuDevice,
-  explicit: boolean
+  explicit: boolean,
+  site = explicit ? "gpuArray" : "upload"
 ): RuntimeGpuArray {
   let t: RuntimeTensor;
   if (typeof v === "number") t = new RuntimeTensor(Float64Array.of(v), [1, 1]);
@@ -76,9 +78,13 @@ export function toGpuArray(
   if (explicit && t.cls === "double" && !device.supportsDouble)
     throw doubleNotSupportedError();
   const shape = t.shape.length >= 2 ? t.shape.slice() : [1, t.data.length];
+  const t0 = gpuLogEnabled ? performance.now() : 0;
+  const buffer = device.upload(t);
+  if (gpuLogEnabled)
+    logTransfer("upload", site, t.data.length, performance.now() - t0);
   return new RuntimeGpuArray(
     device,
-    device.upload(t),
+    buffer,
     shape,
     t.cls,
     t.imag !== undefined,
@@ -99,10 +105,17 @@ export function existsOnDevice(g: RuntimeGpuArray): boolean {
   return g.generation === g.device.generation;
 }
 
-/** The host tensor holding a gpuArray's elements (a fresh copy). */
-export function gatherTensor(g: RuntimeGpuArray): RuntimeTensor {
+/** The host tensor holding a gpuArray's elements (a fresh copy). `site`
+ *  names the caller for NUMBL_GPU_LOG. */
+export function gatherTensor(
+  g: RuntimeGpuArray,
+  site = "gather"
+): RuntimeTensor {
   checkExists(g);
+  const t0 = gpuLogEnabled ? performance.now() : 0;
   const h = g.device.download(g.buffer, g.shape, g.cls, g.isComplex);
+  if (gpuLogEnabled)
+    logTransfer("gather", site, h.data.length, performance.now() - t0);
   return h instanceof RuntimeTensor
     ? h
     : new RuntimeTensor(h.data, h.shape, h.imag, h.cls);
@@ -110,8 +123,8 @@ export function gatherTensor(g: RuntimeGpuArray): RuntimeTensor {
 
 /** `gather(g)`: the host value, a 1x1 double or logical array as a scalar
  *  (a single 1x1 array stays a tensor). */
-export function gatherValue(g: RuntimeGpuArray): RuntimeValue {
-  const t = gatherTensor(g);
+export function gatherValue(g: RuntimeGpuArray, site = "gather"): RuntimeValue {
+  const t = gatherTensor(g, site);
   if (t.data.length !== 1 || t.shape.length !== 2 || t.cls === "single")
     return t;
   if (t.cls === "logical") return t.data[0] !== 0;
@@ -126,7 +139,8 @@ export function gatherValue(g: RuntimeGpuArray): RuntimeValue {
 export function outputToGpu(
   v: RuntimeValue,
   device: GpuDevice,
-  complex = false
+  complex = false,
+  site = "upload"
 ): RuntimeValue {
   if (complex && typeof v === "number") v = new RuntimeComplexNumber(v, 0);
   else if (
@@ -147,6 +161,6 @@ export function outputToGpu(
     v instanceof RuntimeComplexNumber ||
     v instanceof RuntimeTensor
   )
-    return toGpuArray(v, device, false);
+    return toGpuArray(v, device, false, site);
   return v;
 }

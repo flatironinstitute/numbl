@@ -89,7 +89,10 @@ export const valuesAreEqual = (a: RuntimeValue, b: RuntimeValue): boolean => {
     case "graphics_handle":
       return false;
     case "gpu_array":
-      return valuesAreEqual(gatherValue(a), gatherValue(b as typeof a));
+      return valuesAreEqual(
+        gatherValue(a, "isequal"),
+        gatherValue(b as typeof a, "isequal")
+      );
     default:
       return assertNever(a);
   }

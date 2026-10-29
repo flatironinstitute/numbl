@@ -74,7 +74,7 @@ export function withGpuOption(
       a => !(isText(a) && toString(a).toLowerCase() === "gpuarray")
     );
     if (rest.length === args.length) return apply(args);
-    return toGpuArray(apply(rest), currentGpuDevice(), true);
+    return toGpuArray(apply(rest), currentGpuDevice(), true, "constructor");
   };
 }
 
