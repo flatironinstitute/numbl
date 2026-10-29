@@ -174,6 +174,10 @@ export class Registry {
     let compiled = this.cache.get(executor.name, owner, key);
     if (this.cache.isBailed(compiled)) return null;
     if (compiled === undefined) {
+      if (this.cache.keepsBailing(executor.name, owner)) {
+        this.cache.markBailed(executor.name, owner, key);
+        return null;
+      }
       compiled = executor.compile(data, interp);
       this.cache.set(executor.name, owner, key, compiled);
     }
@@ -196,6 +200,10 @@ export class Registry {
       rt.commitOutputCapture();
       throw e;
     }
+    // A null artifact is a compile-time decline, which `run` reports as a
+    // bail; only a compiled unit's runs count towards `keepsBailing`.
+    if (compiled !== null && result !== RERUN)
+      this.cache.noteRun(executor.name, owner, result === null);
     if (result === null || result === RERUN) {
       if (result === null) this.cache.markBailed(executor.name, owner, key);
       rt.discardOutputCapture();

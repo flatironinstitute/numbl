@@ -52,7 +52,9 @@ runFirst(executors, lowered, owner):
     key = executor.cacheKey(data)
     compiled = cache.get(executor, owner, key)
     if compiled is BAILED: continue
-    if compiled is missing: compiled = cache.set(..., executor.compile(data))
+    if compiled is missing:
+      if cache.keepsBailing(executor, owner): mark key bailed; continue
+      compiled = cache.set(..., executor.compile(data))
     result = executor.run(compiled, data)   // output captured or streamed
                                             // (a throw commits it, then propagates)
     if result is null:                      // bail
@@ -72,7 +74,7 @@ runFirst(executors, lowered, owner):
 
 There is no cost model: the order is fixed by registration (`executors/plugins.ts`), C-JIT before JS-JIT. A C executor declines what it cannot marshal across the koffi ABI, so JS-JIT picks that up, and the interpreter takes whatever both decline.
 
-A compiler rejection (`UnsupportedConstruct` / `JitTypeError`) makes `compile` return null; `run` then bails, and the bail is cached, so the unit is not recompiled on every later dispatch. Runtime bails are cached the same way; runtime errors are not (see [Runtime errors](#runtime-errors-and-bails)). Side effects of a run that bails or re-runs are rolled back so the interpreter's re-run does not duplicate them: its output is discarded (or, for a streaming run, skipped on the re-run; see [Output streaming](#output-streaming)), plot instructions and plot state are restored (`Runtime.discardOutputCapture`), and the PRNG is rewound (`snapshotRng` / `restoreRng`). A run that throws (an error or a cancel) keeps the output it produced before, as the interpreter would.
+A compiler rejection (`UnsupportedConstruct` / `JitTypeError`) makes `compile` return null; `run` then bails, and the bail is cached, so the unit is not recompiled on every later dispatch. Runtime bails are cached the same way; runtime errors are not (see [Runtime errors](#runtime-errors-and-bails)). A bail is cached per specialization, but a unit that bails at run time usually does so for every input type (an array that grows in a loop), so once a unit has bailed at run time with `MAX_RUNTIME_BAILS` (2) specializations of one executor and never completed a run with it, that executor compiles no new specialization for it (`ExecutorCache.keepsBailing`). Without the bound, a unit whose input types keep changing paid a compile (a `cc` run at `--opt 2`) and a discarded partial run for each new type. Side effects of a run that bails or re-runs are rolled back so the interpreter's re-run does not duplicate them: its output is discarded (or, for a streaming run, skipped on the re-run; see [Output streaming](#output-streaming)), plot instructions and plot state are restored (`Runtime.discardOutputCapture`), and the PRNG is rewound (`snapshotRng` / `restoreRng`). A run that throws (an error or a cancel) keeps the output it produced before, as the interpreter would.
 
 ## Lowering
 
