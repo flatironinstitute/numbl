@@ -50,6 +50,7 @@ import {
   exactDouble,
   exactRealArray,
 } from "../_shared.js";
+import { keepsLogical } from "../_shared.js";
 
 /** Compile-time view of an input arg for the shape-derivation passes. */
 interface InputView {
@@ -66,6 +67,8 @@ interface InputView {
   isComplex: boolean;
   /** Original argTypes index (1-based wrt full argTypes). */
   idx: number;
+  /** True iff every dim of the source is statically 0 (a `0x0`). */
+  zero?: boolean;
 }
 
 /** Resolve and validate `dim` from `argTypes[0]`. Must be a static
@@ -157,9 +160,11 @@ function viewsForInputs(argTypes: Type[], ndim: number): InputView[] {
         total = null;
       }
     }
+    const zero = a.dims.every(d => d.kind === "exact" && d.value === 0);
     if (a.isComplex) {
       const cx = exactComplexArray(a);
       views.push({
+        zero,
         shape,
         total,
         exact: cx !== undefined ? cx.re : undefined,
@@ -170,6 +175,7 @@ function viewsForInputs(argTypes: Type[], ndim: number): InputView[] {
     } else {
       const arr = exactRealArray(a);
       views.push({
+        zero,
         shape,
         total,
         exact: arr,
@@ -209,11 +215,28 @@ function deriveResultShape(
     // or at least one view has unknown size. Pick the first view's shape
     // as a guess; result fully unknown otherwise.
     if (views.every(v => v.total === 0)) {
-      // Canonical empty.
-      const shape = new Array(ndim).fill(0);
-      shape[0] = 0;
-      shape[1] = 0;
-      return { shape, allStatic: true, refShape: shape.slice() };
+      // Every input is empty: as at runtime, the 0x0 ones drop and the
+      // rest concatenate (cat(2, zeros(0, 3), zeros(0, 2)) is 0x5).
+      const kept = views.filter(v => !v.zero);
+      if (kept.length === 0) {
+        // Canonical empty.
+        const shape = new Array(ndim).fill(0);
+        return { shape, allStatic: true, refShape: shape.slice() };
+      }
+      const ref = kept[0].shape as number[];
+      let sum = 0;
+      for (const v of kept) {
+        for (let d = 0; d < ndim; d++) {
+          if (d !== dimIdx && v.shape[d] !== ref[d])
+            throw new TypeError(
+              `'cat' dimension mismatch on dimension ${d + 1} of empty inputs`
+            );
+        }
+        sum += v.shape[dimIdx] as number;
+      }
+      const shape = ref.slice();
+      shape[dimIdx] = sum;
+      return { shape, allStatic: true, refShape: ref.slice() };
     }
     return { shape: new Array(ndim).fill(null), allStatic: false };
   }
@@ -362,7 +385,7 @@ function foldExact(
   return out;
 }
 
-export const cat: Builtin = {
+const catBase: Builtin = {
   name: "cat",
 
   transfer(argTypes, nargout) {
@@ -570,3 +593,5 @@ export const cat: Builtin = {
     return `${helper}(${dim}, ${nin}, [${items.join(", ")}])`;
   },
 };
+
+export const cat = keepsLogical(catBase, argTypes => argTypes.slice(1));

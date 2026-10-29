@@ -205,7 +205,7 @@ static int jit__creduce_all_imag_zero(jit_tensor_t a) {
 
 /* any/all template — real result; toBool per element (either lane
  * nonzero). Mirrors `JIT_DEFINE_LOGICAL_REDUCTION` shape. */
-#define JIT_DEFINE_CLOGICAL_REDUCTION(name, EMPTY_RESULT, SHORT_BODY)          \
+#define JIT_DEFINE_CLOGICAL_REDUCTION(name, EMPTY_RESULT, TO_BOOL, SHORT_BODY) \
   static double jit_##name##_complex_all(jit_tensor_t a) {                    \
     long n = 1;                                                               \
     for (int i = 0; i < a.ndim; i++) n *= a.dims[i];                          \
@@ -214,7 +214,7 @@ static int jit__creduce_all_imag_zero(jit_tensor_t a) {
     for (long i = 0; i < n; i++) {                                            \
       double xr = a.real[i];                                                  \
       double xi = (a.imag != NULL) ? a.imag[i] : 0.0;                         \
-      int x = (xr != 0.0 || xi != 0.0);                                       \
+      int x = TO_BOOL(xr, xi);                                                \
       SHORT_BODY;                                                             \
     }                                                                         \
     return acc;                                                               \
@@ -235,7 +235,7 @@ static int jit__creduce_all_imag_zero(jit_tensor_t a) {
       for (long i = 0; i < total; i++) {                                      \
         double xr = a.real[i];                                                \
         double xi = (a.imag != NULL) ? a.imag[i] : 0.0;                       \
-        out.real[i] = (xr != 0.0 || xi != 0.0) ? 1.0 : 0.0;                   \
+        out.real[i] = TO_BOOL(xr, xi) ? 1.0 : 0.0;                            \
       }                                                                       \
       return out;                                                             \
     }                                                                         \
@@ -260,7 +260,7 @@ static int jit__creduce_all_imag_zero(jit_tensor_t a) {
           long off = slabBase + inner + k * before;                           \
           double xr = a.real[off];                                            \
           double xi = (a.imag != NULL) ? a.imag[off] : 0.0;                   \
-          int x = (xr != 0.0 || xi != 0.0);                                   \
+          int x = TO_BOOL(xr, xi);                                            \
           SHORT_BODY;                                                         \
         }                                                                     \
         out.real[outer * before + inner] = acc;                               \
@@ -273,7 +273,10 @@ static int jit__creduce_all_imag_zero(jit_tensor_t a) {
 #define JIT_CACC_SUM(acc, x) jit_cadd((acc), (x))
 #define JIT_CACC_PROD(acc, x) jit_cmul((acc), (x))
 #define JIT_CFIN_ID(acc, n) (acc)
-#define JIT_CFIN_MEAN(acc, n) jit_cdiv((acc), jit_cmake((double)(n), 0.0))
+/* Divide each part by the real count (a complex divide would turn a NaN
+ * real part into a NaN imaginary part). */
+#define JIT_CFIN_MEAN(acc, n) \
+  jit_cmake(creal(acc) / (double)(n), cimag(acc) / (double)(n))
 
 JIT_DEFINE_CACCUM_REDUCTION(sum, jit_cmake(0.0, 0.0), JIT_CACC_SUM, JIT_CFIN_ID)
 JIT_DEFINE_CACCUM_REDUCTION(prod, jit_cmake(1.0, 0.0), JIT_CACC_PROD, JIT_CFIN_ID)
@@ -282,7 +285,12 @@ JIT_DEFINE_CACCUM_REDUCTION(mean, jit_cmake(0.0, 0.0), JIT_CACC_SUM, JIT_CFIN_ME
 JIT_DEFINE_CMINMAX_REDUCTION(min, <)
 JIT_DEFINE_CMINMAX_REDUCTION(max, >)
 
-JIT_DEFINE_CLOGICAL_REDUCTION(any, 0,
+/* `any` ignores NaN elements (either part NaN), as for real input; `all`
+ * counts them as nonzero. */
+#define JIT_CANY_BOOL(xr, xi) \
+  (((xr) != 0.0 || (xi) != 0.0) && (xr) == (xr) && (xi) == (xi))
+#define JIT_CALL_BOOL(xr, xi) ((xr) != 0.0 || (xi) != 0.0)
+JIT_DEFINE_CLOGICAL_REDUCTION(any, 0, JIT_CANY_BOOL,
   if (x) { acc = 1.0; break; })
-JIT_DEFINE_CLOGICAL_REDUCTION(all, 1,
+JIT_DEFINE_CLOGICAL_REDUCTION(all, 1, JIT_CALL_BOOL,
   if (!x) { acc = 0.0; break; })

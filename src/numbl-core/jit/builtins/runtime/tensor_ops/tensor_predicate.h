@@ -32,11 +32,31 @@
   }
 
 JIT_DEFINE_UNARY_PRED(jit_tensor_isnan, isnan(x))
-JIT_DEFINE_UNARY_PRED(jit_tensor_logical, x != 0.0)
 JIT_DEFINE_UNARY_PRED(jit_tensor_isinf, isinf(x))
 JIT_DEFINE_UNARY_PRED(jit_tensor_isfinite, isfinite(x))
 
 #undef JIT_DEFINE_UNARY_PRED
+
+/* `logical(x)` of one element: MATLAB raises on NaN. */
+static double jit_logical_elem(double x) {
+  if (x != x)
+    jit_raise_error("MATLAB:nologicalnan",
+                    "NaN values cannot be converted to logicals.");
+  return x != 0.0 ? 1.0 : 0.0;
+}
+
+/* No OpenMP pragma: the element helper may raise. */
+static jit_tensor_t jit_tensor_logical(jit_tensor_t a) {
+  long n = 1;
+  for (int i = 0; i < a.ndim; i++) n *= a.dims[i];
+  jit_tensor_t r;
+  r.real = jit_alloc((size_t)n * sizeof(double));
+  r.imag = NULL;
+  r.ndim = a.ndim;
+  for (int i = 0; i < a.ndim; i++) r.dims[i] = a.dims[i];
+  for (long i = 0; i < n; i++) r.real[i] = jit_logical_elem(a.real[i]);
+  return r;
+}
 
 #define JIT_DEFINE_UNARY_PRED_COMPLEX(name, EXPR)           \
   static jit_tensor_t name(jit_tensor_t a) {                \

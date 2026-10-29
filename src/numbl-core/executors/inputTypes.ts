@@ -91,8 +91,14 @@ function signature(v: RuntimeValue): string | null {
   if (isRuntimeLogical(v)) return "b";
   if (isRuntimeString(v)) return "S";
   if (isRuntimeChar(v)) return "C";
-  if (isRuntimeComplexNumber(v)) return "z";
+  // A complex value whose imaginary parts are all zero (`complex(2, 0)`)
+  // stays complex on the interpreter only through the operations that do
+  // not narrow (transpose, indexing, ...); a JIT value's complexness is
+  // fixed by its type and narrowed on the way out, so such a value is
+  // left to the interpreter.
+  if (isRuntimeComplexNumber(v)) return v.im === 0 ? null : "z";
   if (isRuntimeTensor(v)) {
+    if (v.imag && !v.imag.some(x => x !== 0)) return null;
     const tag = v.imag ? "tz" : v.cls === "logical" ? "tb" : "t";
     return v.shape.length >= 2
       ? `${tag}${v.shape.join("x")}`

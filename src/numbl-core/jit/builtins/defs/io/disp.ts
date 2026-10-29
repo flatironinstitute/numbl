@@ -46,6 +46,11 @@ export const disp: Builtin = {
       return [{ kind: "Void" }];
     }
     if (t.kind === "Struct") {
+      if (t.fields.length === 0) {
+        throw new UnsupportedConstruct(
+          `'disp' of a struct with no fields is left to the interpreter`
+        );
+      }
       // A struct field that is itself a struct/cell/class needs the
       // interpreter's recursive nested rendering (the JIT disp helpers
       // would emit a stray newline / leak the cell wrapper internals).

@@ -15,7 +15,8 @@
 #include <math.h>
 
 static double jit_signed_inf(double x) {
-  return x > 0 ? INFINITY : (x < 0 ? -INFINITY : 0.0);
+  /* x / 0 per component; a NaN part stays NaN. */
+  return x > 0 ? INFINITY : (x < 0 ? -INFINITY : (x == 0.0 ? 0.0 : NAN));
 }
 
 static double _Complex jit_cdiv(double _Complex a, double _Complex b) {

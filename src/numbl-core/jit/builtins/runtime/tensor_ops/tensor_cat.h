@@ -88,6 +88,22 @@ static jit_tensor_t jit_tensor_cat(long dim, int nin,
   for (int i = 0; i < nin; i++) {
     if (keep[i] == 1) { refIdx = i; break; }
   }
+  if (refIdx == -1) {
+    /* Every input is empty: as numbl's catAlongDim, drop the 0x0 ones
+     * (every dim 0) and concatenate the rest, whose non-cat dims must
+     * agree (cat(2, zeros(0, 3), zeros(0, 2)) is 0x5). */
+    for (int i = 0; i < nin; i++) {
+      const jit_tensor_t *t = &xs[i].tensor;
+      int zero = 1;
+      for (int d = 0; d < t->ndim; d++) {
+        if (t->dims[d] != 0) { zero = 0; break; }
+      }
+      if (!zero) {
+        keep[i] = 1;
+        if (refIdx == -1) refIdx = i;
+      }
+    }
+  }
 
   if (refIdx == -1) {
     /* All inputs are empty (or there are no inputs at all). Return the
@@ -220,6 +236,22 @@ static jit_tensor_t jit_tensor_cat_complex(
   int refIdx = -1;
   for (int i = 0; i < nin; i++) {
     if (keep[i] == 1) { refIdx = i; break; }
+  }
+  if (refIdx == -1) {
+    /* Every input is empty: as numbl's catAlongDim, drop the 0x0 ones
+     * (every dim 0) and concatenate the rest, whose non-cat dims must
+     * agree (cat(2, zeros(0, 3), zeros(0, 2)) is 0x5). */
+    for (int i = 0; i < nin; i++) {
+      const jit_tensor_t *t = &xs[i].tensor;
+      int zero = 1;
+      for (int d = 0; d < t->ndim; d++) {
+        if (t->dims[d] != 0) { zero = 0; break; }
+      }
+      if (!zero) {
+        keep[i] = 1;
+        if (refIdx == -1) refIdx = i;
+      }
+    }
   }
 
   if (refIdx == -1) {

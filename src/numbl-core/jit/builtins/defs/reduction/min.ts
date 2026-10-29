@@ -1,6 +1,7 @@
 import { defineReducer, minMaxSign } from "./_shape.js";
+import { keepsLogical } from "../_shared.js";
 
-export const min = defineReducer({
+const minBase = defineReducer({
   name: "min",
   // min(A, [], dim) — the [] placeholder sits in slot 2, so the
   // dim arg lives at slot 3.
@@ -16,3 +17,7 @@ export const min = defineReducer({
   outputElem: "double",
   resultSign: minMaxSign,
 });
+
+export const min = keepsLogical(minBase, argTypes =>
+  argTypes.length === 2 ? argTypes : argTypes.slice(0, 1)
+);

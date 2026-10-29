@@ -1,6 +1,7 @@
 import { defineReducer, minMaxSign } from "./_shape.js";
+import { keepsLogical } from "../_shared.js";
 
-export const max = defineReducer({
+const maxBase = defineReducer({
   name: "max",
   dimArgIndex: 2,
   emptyValue: NaN,
@@ -12,3 +13,7 @@ export const max = defineReducer({
   outputElem: "double",
   resultSign: minMaxSign,
 });
+
+export const max = keepsLogical(maxBase, argTypes =>
+  argTypes.length === 2 ? argTypes : argTypes.slice(0, 1)
+);

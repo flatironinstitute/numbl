@@ -67,6 +67,13 @@ function numStr(n) {
   return s;
 }
 
+// The sign a %f / %e / %g conversion prints before the digits of |x|:
+// '-' for a negative value or -0 (as C and MATLAB), '+' with the '+' flag.
+function floatSign(spec, x) {
+  if (x < 0 || Object.is(x, -0)) return "-";
+  return /^%[-+ #0]*\+/.test(spec) ? "+" : "";
+}
+
 function applyWidth(spec, str) {
   const m = spec.match(/^%([-+ #]*)0?(\d+)?/);
   if (!m) return str;
@@ -173,13 +180,10 @@ export function jit_sprintf_format(fmt, args) {
             if (!isFinite(n) || isNaN(n)) {
               result += applyWidth(spec, numStr(n));
             } else {
-              const fFlags = spec.slice(1);
-              const fHasPlus = fFlags.includes("+");
               const precMatch = spec.match(/\.(\d+)/);
               const prec = precMatch ? parseInt(precMatch[1]) : 6;
-              const formatted = n.toFixed(prec);
-              const fSign = n < 0 ? "" : fHasPlus ? "+" : "";
-              result += applyWidth(spec, fSign + formatted);
+              const formatted = Math.abs(n).toFixed(prec);
+              result += applyWidth(spec, floatSign(spec, n) + formatted);
             }
           } else if (ch === "e" || ch === "E") {
             const n = toNumber(flat[argIdx++]);
@@ -188,10 +192,10 @@ export function jit_sprintf_format(fmt, args) {
             } else {
               const precMatch = spec.match(/\.(\d+)/);
               const prec = precMatch ? parseInt(precMatch[1]) : 6;
-              let eStr = n.toExponential(prec);
+              let eStr = Math.abs(n).toExponential(prec);
               eStr = eStr.replace(/e([+-])(\d)$/, "e$1" + "0$2");
               if (ch === "E") eStr = eStr.toUpperCase();
-              result += applyWidth(spec, eStr);
+              result += applyWidth(spec, floatSign(spec, n) + eStr);
             }
           } else if (ch === "x" || ch === "X") {
             const n = Math.round(toNumber(flat[argIdx++]));
@@ -209,13 +213,13 @@ export function jit_sprintf_format(fmt, args) {
               const precMatch = spec.match(/\.(\d+)/);
               const gPrec = precMatch ? parseInt(precMatch[1]) : 6;
               let gStr;
-              if (gVal === 0) {
-                // Keep the sign of -0, like the interpreter (and C).
-                gStr = Object.is(gVal, -0) ? "-0" : "0";
+              const gAbs = Math.abs(gVal);
+              if (gAbs === 0) {
+                gStr = "0";
               } else {
-                const exp = Math.floor(Math.log10(Math.abs(gVal)));
+                const exp = Math.floor(Math.log10(gAbs));
                 if (exp < -4 || exp >= gPrec) {
-                  gStr = gVal.toExponential(gPrec - 1);
+                  gStr = gAbs.toExponential(gPrec - 1);
                   const ePos = gStr.indexOf("e");
                   let mantissa = gStr.slice(0, ePos);
                   let expPart = gStr.slice(ePos);
@@ -225,7 +229,7 @@ export function jit_sprintf_format(fmt, args) {
                   expPart = expPart.replace(/e([+-])(\d)$/, "e$1" + "0$2");
                   gStr = mantissa + expPart;
                 } else {
-                  gStr = gVal.toPrecision(gPrec);
+                  gStr = gAbs.toPrecision(gPrec);
                   if (gStr.includes(".")) {
                     gStr = gStr.replace(/\.?0+$/, "");
                   }
@@ -235,7 +239,7 @@ export function jit_sprintf_format(fmt, args) {
                 }
               }
               if (ch === "G") gStr = gStr.toUpperCase();
-              result += applyWidth(spec, gStr);
+              result += applyWidth(spec, floatSign(spec, gVal) + gStr);
             }
           } else if (ch === "s") {
             const sArg = flat[argIdx++];

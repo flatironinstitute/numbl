@@ -136,6 +136,24 @@ export function numblToJit(
   );
 }
 
+/** The imaginary part of a complex result as the interpreter would keep
+ *  it: undefined when every element is zero. The interpreter narrows the
+ *  result of each operation to real when its imaginary parts are all
+ *  zero; a JIT value's complexness is fixed by its static type, so it is
+ *  narrowed when it leaves compiled code. */
+export function narrowedImag(
+  imag: Float64Array | undefined
+): Float64Array | undefined {
+  if (imag === undefined) return undefined;
+  for (let i = 0; i < imag.length; i++) if (imag[i] !== 0) return imag;
+  return undefined;
+}
+
+/** A complex scalar result, narrowed to real as `narrowedImag` does. */
+export function complexScalarOut(re: number, im: number): RuntimeValue {
+  return im === 0 ? re : new RuntimeComplexNumber(re, im);
+}
+
 /** JIT emit-JS return value → numbl RuntimeValue.
  *
  *  `retType` is the compiler type the spec declares for this output. It is
@@ -172,7 +190,7 @@ export function jitToNumbl(v: unknown, retType?: Type): RuntimeValue {
     return new RuntimeTensor(
       tagged.data,
       [...tagged.shape],
-      tagged.imag,
+      narrowedImag(tagged.imag),
       logical ? "logical" : "double"
     );
   }
@@ -183,7 +201,7 @@ export function jitToNumbl(v: unknown, retType?: Type): RuntimeValue {
     return new RuntimeChar(tagged.value);
   }
   if (typeof tagged.re === "number" && typeof tagged.im === "number") {
-    return new RuntimeComplexNumber(tagged.re, tagged.im);
+    return complexScalarOut(tagged.re, tagged.im);
   }
   if (retType?.kind === "Struct") {
     // A struct: the JIT emits it as a plain, untagged JS object of field

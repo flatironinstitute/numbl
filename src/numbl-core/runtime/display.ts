@@ -282,6 +282,7 @@ function formatCell(c: RuntimeCell): string {
 }
 
 function formatStruct(s: RuntimeStruct): string {
+  if (s.fields.size === 0) return "  struct with no fields.";
   const lines: string[] = [];
   for (const [key, val] of s.fields) {
     lines.push(`    ${key}: ${propertyText(val)}`);

@@ -47,6 +47,7 @@ import {
   exactDouble,
   exactRealArray,
 } from "../_shared.js";
+import { keepsLogical, firstArg } from "../_shared.js";
 
 /** Resolve the optional `k` argument to a JS integer. Throws on
  *  dynamic / non-integer / non-scalar k. */
@@ -82,7 +83,7 @@ function diagonalLength(rows: number, cols: number, k: number): number {
     : Math.max(0, Math.min(rows + k, cols));
 }
 
-export const diag: Builtin = {
+const diagBase: Builtin = {
   name: "diag",
   transfer(argTypes, nargout) {
     if (argTypes.length < 1 || argTypes.length > 2) {
@@ -163,6 +164,13 @@ export const diag: Builtin = {
       );
     }
     const [rows, cols] = a.shape;
+    if (rows * cols === 0 && (rows === cols || rows === 1 || cols === 1)) {
+      // A 0x0, 1x0 or 0x1 input (MATLAB: diag(zeros(1, 0)) is 0x0, and
+      // diag(zeros(1, 0), k) a |k|x|k| zero matrix).
+      throw new UnsupportedConstruct(
+        `'diag' of an empty vector is left to the interpreter`
+      );
+    }
 
     if (rows === 1 || cols === 1) {
       // Construct path. vecLen = max(rows, cols) (one dim is 1).
@@ -347,3 +355,5 @@ export const diag: Builtin = {
     return `jit_tensor_diag_extract(${argsJs[0]}, ${k})`;
   },
 };
+
+export const diag = keepsLogical(diagBase, firstArg);

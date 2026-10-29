@@ -53,6 +53,7 @@ static double jit_norm_p_real(jit_tensor_t a, double p) {
     double m = 0.0;
     for (long i = 0; i < n; i++) {
       double x = fabs(a.real[i]);
+      if (x != x) return NAN; /* MATLAB: a NaN element gives NaN */
       if (x > m) m = x;
     }
     return m;
@@ -61,6 +62,7 @@ static double jit_norm_p_real(jit_tensor_t a, double p) {
     double m = fabs(a.real[0]);
     for (long i = 1; i < n; i++) {
       double x = fabs(a.real[i]);
+      if (x != x) return NAN;
       if (x < m) m = x;
     }
     return m;
@@ -84,6 +86,7 @@ static double jit_norm_p_complex(jit_tensor_t a, double p) {
     double m = 0.0;
     for (long i = 0; i < n; i++) {
       double x = hypot(a.real[i], a.imag[i]);
+      if (x != x) return NAN; /* MATLAB: a NaN element gives NaN */
       if (x > m) m = x;
     }
     return m;
@@ -92,6 +95,7 @@ static double jit_norm_p_complex(jit_tensor_t a, double p) {
     double m = hypot(a.real[0], a.imag[0]);
     for (long i = 1; i < n; i++) {
       double x = hypot(a.real[i], a.imag[i]);
+      if (x != x) return NAN;
       if (x < m) m = x;
     }
     return m;
