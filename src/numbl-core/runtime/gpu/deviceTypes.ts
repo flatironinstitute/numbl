@@ -43,8 +43,20 @@ export interface GpuDevice {
 }
 
 /** A kernel operand: a device buffer of `n` elements (1 broadcasts), or a
- *  scalar. */
-export type KernelOperand = { buffer: unknown; n: number } | { scalar: number };
+ *  scalar. With broadcasting, `strides` gives the buffer's stride along each
+ *  of the result's dimensions (0 where the operand has size 1). */
+export type KernelOperand =
+  | { buffer: unknown; n: number; strides?: number[] }
+  | { scalar: number };
+
+/** Linear offsets into column-major data: `start + k*step`, or
+ *  `offsets[k]`, for k < n. */
+export interface KernelSelection {
+  n: number;
+  start: number;
+  step: number;
+  offsets: Uint32Array | null;
+}
 
 /** Kernels over real f32 data. Each returns the result's buffer; the
  *  caller has checked the operands and shapes. */
@@ -52,8 +64,33 @@ export interface GpuKernels {
   /** Whether `buffer` is in device memory and can be a kernel operand. */
   holds(buffer: unknown): boolean;
   /** An element-wise operation (`plus`, `lt`, `sin`, ...) over `n`
-   *  elements. */
-  elementwise(op: string, inputs: KernelOperand[], n: number): unknown;
+   *  elements; with `dims` (at most 4), the operands are broadcast to the
+   *  result's dimensions by their `strides`. */
+  elementwise(
+    op: string,
+    inputs: KernelOperand[],
+    n: number,
+    dims?: number[]
+  ): unknown;
+  /** `elementwise` for an operation with a real domain (`sqrt`, `log`,
+   *  `power`, ...), waiting for it: also whether an element was outside
+   *  the domain (its real result is NaN). */
+  elementwiseChecked(
+    op: string,
+    inputs: KernelOperand[],
+    n: number,
+    dims?: number[]
+  ): { buffer: unknown; bad: boolean };
+  /** The selected elements of `src`. */
+  take(src: unknown, sel: KernelSelection): unknown;
+  /** A copy of `src` (`total` elements) with the selected elements set to
+   *  `rhs` (a buffer of `sel.n` elements or 1, or a scalar). */
+  put(
+    src: unknown,
+    total: number,
+    sel: KernelSelection,
+    rhs: KernelOperand
+  ): unknown;
   /** `sum`, `prod`, `max` or `min` (NaN skipped) over the middle dimension
    *  of `src` viewed as [inner, len, outer]. */
   reduce(

@@ -19,8 +19,15 @@ import {
   isRuntimeChar,
   isRuntimeString,
 } from "../types.js";
-import type { GpuDevice, GpuKernels, KernelOperand } from "./device.js";
+import type {
+  GpuDevice,
+  GpuKernels,
+  KernelOperand,
+  KernelSelection,
+} from "./device.js";
 import { checkExists, firstGpuArg } from "./gpuArray.js";
+import { RuntimeError } from "../error.js";
+import { planIndex, planStore, type Selection } from "../indexPlan.js";
 
 interface Arg {
   op: KernelOperand;
@@ -120,29 +127,148 @@ export function elementwiseKernel(
     if (!x) return null;
     xs.push(x);
   }
-  // The result has the shape of the operands that are not scalars.
+  // The result has the shape of the operands that are not scalars, or
+  // their implicit expansion.
   let shape: number[] | null = null;
+  let broadcast = false;
   for (const x of xs)
     if (x.shape && x.n !== 1) {
-      if (shape && !sameShape(shape, x.shape)) return null;
-      shape = x.shape;
+      if (shape && !sameShape(shape, x.shape)) {
+        shape = expandShapes(shape, x.shape);
+        if (!shape) return null;
+        broadcast = true;
+      } else shape ??= x.shape;
     }
   shape ??= xs.find(x => x.shape)!.shape!;
   let cls: ElementClass;
   if (LOGICAL_RESULT.has(op)) cls = "logical";
   else if (xs.some(x => x.cls === "single")) cls = "single";
   else return null; // a double result (logical + 1, abs of a logical, ...)
+  let dims: number[] | undefined;
+  let ops = xs.map(x => x.op);
+  if (broadcast) {
+    if (shape.length > 4) return null;
+    dims = [...shape, 1, 1, 1].slice(0, 4);
+    ops = xs.map(x =>
+      "scalar" in x.op
+        ? x.op
+        : { ...x.op, strides: expandStrides(x.shape!, dims!) }
+    );
+  }
   const n = numelOf(shape);
-  return result(
-    dk.device,
-    dk.k.elementwise(
-      op,
-      xs.map(x => x.op),
-      n
-    ),
-    shape.slice(),
-    cls
+  let buffer: unknown;
+  if (DOMAIN_OPS.has(op)) {
+    const r = dk.k.elementwiseChecked(op, ops, n, dims);
+    if (r.bad) throw complexResultError(op);
+    buffer = r.buffer;
+  } else buffer = dk.k.elementwise(op, ops, n, dims);
+  return result(dk.device, buffer, shape.slice(), cls);
+}
+
+/** The implicit expansion of two shapes (each dimension equal or 1), or
+ *  null when they are incompatible. */
+function expandShapes(a: number[], b: number[]): number[] | null {
+  const n = Math.max(a.length, b.length);
+  const out: number[] = [];
+  for (let d = 0; d < n; d++) {
+    const x = d < a.length ? a[d] : 1;
+    const y = d < b.length ? b[d] : 1;
+    if (x !== y && x !== 1 && y !== 1) return null;
+    out.push(x === 1 ? y : x);
+  }
+  return out;
+}
+
+/** An operand's strides over the result's dimensions `dims`: its
+ *  column-major strides, 0 where it has size 1. */
+function expandStrides(shape: number[], dims: number[]): number[] {
+  const out: number[] = [];
+  let stride = 1;
+  for (let d = 0; d < dims.length; d++) {
+    const s = d < shape.length ? shape[d] : 1;
+    out.push(s === 1 ? 0 : stride);
+    stride *= s;
+  }
+  return out;
+}
+
+/** The operations whose real input must lie in a domain for a real
+ *  result. */
+export const DOMAIN_OPS: ReadonlySet<string> = new Set([
+  "sqrt",
+  "log",
+  "log2",
+  "log10",
+  "log1p",
+  "asin",
+  "acos",
+  "atanh",
+  "acosh",
+  "power",
+]);
+
+/** MATLAB's error when an operation on real gpuArray data needs a complex
+ *  result. */
+export function complexResultError(op: string): RuntimeError {
+  const name = op.toUpperCase();
+  const use = op === "power" ? "POWER(COMPLEX(X), Y)" : `${name}(COMPLEX(X))`;
+  return new RuntimeError(
+    `${name}: needs to return a complex result, but this is not supported for real input X on the GPU. Use ${use}.`
   );
+}
+
+/** `G(indices)` for a real gpuArray, gathered on the device. */
+export function indexKernel(
+  g: RuntimeGpuArray,
+  indices: RuntimeValue[]
+): RuntimeValue | null {
+  const k = g.device.kernels;
+  if (!k) return null;
+  const x = kernelArg(g, g.device, k);
+  if (!x) return null;
+  const plan = planIndex(g.shape, x.n, indices);
+  const src = (x.op as { buffer: unknown }).buffer;
+  // All elements in order (`G(:)`): the same data in a new shape.
+  const buffer =
+    plan.offsets === null &&
+    plan.start === 0 &&
+    plan.step === 1 &&
+    plan.n === x.n
+      ? src
+      : k.take(src, selection(plan));
+  return result(g.device, buffer, plan.shape.slice(), g.cls);
+}
+
+/** `G(indices) = rhs` for a real gpuArray, on the device; null when the
+ *  assignment grows `G` or converts the values (into a logical array). */
+export function storeKernel(
+  g: RuntimeGpuArray,
+  indices: RuntimeValue[],
+  rhs: RuntimeValue
+): RuntimeValue | null {
+  const k = g.device.kernels;
+  if (!k) return null;
+  const x = kernelArg(g, g.device, k);
+  const r = kernelArg(rhs, g.device, k);
+  if (!x || !r) return null;
+  if (g.cls === "logical" && r.cls !== "logical") return null;
+  const plan = planStore(g.shape, x.n, indices, r.n, r.shape ?? [1, 1]);
+  if (plan.grow) return null;
+  const buffer = k.put(
+    (x.op as { buffer: unknown }).buffer,
+    x.n,
+    selection(plan),
+    r.op
+  );
+  return result(g.device, buffer, g.shape.slice(), g.cls);
+}
+
+function selection(sel: Selection): KernelSelection {
+  if (sel.offsets === null)
+    return { n: sel.n, start: sel.start, step: sel.step, offsets: null };
+  const offsets = new Uint32Array(sel.n);
+  for (let i = 0; i < sel.n; i++) offsets[i] = sel.offsets[i] - sel.bias;
+  return { n: sel.n, start: 0, step: 0, offsets };
 }
 
 const isText = (v: RuntimeValue) => isRuntimeChar(v) || isRuntimeString(v);

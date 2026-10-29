@@ -47,6 +47,7 @@ import {
   isGpuArray,
   outputToGpu,
 } from "./gpu/gpuArray.js";
+import { indexKernel, storeKernel } from "./gpu/kernels.js";
 import { matlabNumToString } from "./utils.js";
 import {
   COLON_INDEX,
@@ -1412,9 +1413,9 @@ export function indexIntoRTValue(
     case "sparse_matrix":
       return indexIntoSparse(base, indices);
     case "gpu_array":
-      return outputToGpu(
-        indexIntoRTValue(gatherValue(base), indices),
-        base.device
+      return (
+        indexKernel(base, indices) ??
+        outputToGpu(indexIntoRTValue(gatherValue(base), indices), base.device)
       );
     case "function":
     case "dictionary":
@@ -1450,6 +1451,10 @@ export function storeIntoRTValueIndex(
     isGpuArray(base) ||
     (isGpuArray(rhs) && (isNumericValue(base) || isRuntimeTensor(base)))
   ) {
+    if (isGpuArray(base) && !(nullAssign ?? isDeletionRhs(rhs))) {
+      const k = storeKernel(base, indices, rhs);
+      if (k) return k;
+    }
     const device = isGpuArray(base)
       ? base.device
       : (rhs as RuntimeGpuArray).device;

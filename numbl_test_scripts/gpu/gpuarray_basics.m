@@ -86,6 +86,16 @@ else
 end
 assert(ok);
 
+% A real input that needs a complex result is an error (declare the input
+% complex instead)
+expectComplexError(@() sqrt(gpuArray([-1 4])));
+expectComplexError(@() log(gpuArray(-2)));
+expectComplexError(@() gpuArray([-8 1]) .^ 0.5);
+expectComplexError(@() asin(gpuArray(2)));
+z = sqrt(gpuArray(complex([-4 9])));
+assert(isequal(gather(z), [2i 3]));
+assert(isequal(gather(sqrt(gpuArray([4 9]))), [2 3]));
+
 % Creation on the device
 Z = zeros(2, 3, 'gpuArray');
 assert(isgpuarray(Z) && isequal(size(Z), [2 3]) && strcmp(underlyingType(Z), 'double'));
@@ -121,3 +131,13 @@ catch e
 end
 
 disp('SUCCESS')
+
+function expectComplexError(f)
+  try
+    f();
+  catch e
+    assert(contains(e.message, 'needs to return a complex result'), e.message);
+    return
+  end
+  error('expected an error');
+end

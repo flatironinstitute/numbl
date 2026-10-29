@@ -18,6 +18,7 @@ export type {
   GpuKernels,
   HostArray,
   KernelOperand,
+  KernelSelection,
 } from "./deviceTypes.js";
 
 /** A host's GPU devices and which one is selected. */

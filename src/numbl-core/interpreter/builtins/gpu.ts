@@ -15,7 +15,7 @@ import {
 import { RTV } from "../../runtime/constructors.js";
 import { RuntimeError } from "../../runtime/error.js";
 import { toString } from "../../runtime/convert.js";
-import { valueClass, isaValue } from "../../runtime/kinds.js";
+import { valueClass, isaValue, isRealValue } from "../../runtime/kinds.js";
 import { currentHost } from "../../host.js";
 import type { GpuDevice } from "../../runtime/gpu/device.js";
 import {
@@ -27,6 +27,8 @@ import {
   toGpuArray,
 } from "../../runtime/gpu/gpuArray.js";
 import {
+  DOMAIN_OPS,
+  complexResultError,
   elementwiseKernel,
   mtimesKernel,
   reduceKernel,
@@ -353,6 +355,29 @@ for (const op of [
   kernelMethod(op, (args, nargout) =>
     nargout <= 1 ? elementwiseKernel(op, args) : null
   );
+
+// Functions whose real result needs the input in a domain (sqrt of a
+// negative number is complex): on real gpuArray data, MATLAB raises an
+// error rather than return a complex result, on every device.
+for (const op of DOMAIN_OPS)
+  classMethod("gpuArray", {
+    name: op,
+    nargout: [0, Infinity],
+    accepts: GPU,
+    apply: (args, nargout) => {
+      const k = nargout <= 1 ? elementwiseKernel(op, args) : null;
+      if (k) return k;
+      const r = getIBuiltin(op)!.call(args, nargout) as RuntimeValue;
+      if (isGpuArray(r) && r.isComplex && !args.some(isComplexValue))
+        throw complexResultError(op);
+      return r;
+    },
+  });
+
+/** Whether a value has complex data. */
+function isComplexValue(v: RuntimeValue): boolean {
+  return isGpuArray(v) ? v.isComplex : !isRealValue(v);
+}
 
 for (const op of ["max", "min"] as const)
   kernelMethod(op, (args, nargout) =>

@@ -38,6 +38,21 @@ fn round_(x: f32) -> f32 {
 }
 fn max_(a: f32, b: f32) -> f32 { return select(select(max(a, b), a, isnan_(b)), b, isnan_(a)); }
 fn min_(a: f32, b: f32) -> f32 { return select(select(min(a, b), a, isnan_(b)), b, isnan_(a)); }
+fn log1p_(x: f32) -> f32 {
+  let u = 1.0 + x;
+  return select(log(u) * x / (u - 1.0), x, u == 1.0);
+}
+// a^b for real results (a >= 0, or b an integer); WGSL's pow needs a > 0.
+fn pow_(a: f32, b: f32) -> f32 {
+  if (b == 0.0) { return 1.0; }
+  if (b == 1.0) { return a; }
+  if (b == 2.0) { return a * a; }
+  if (isnan_(a) || isnan_(b)) { return a + b; }
+  if (a == 0.0) { return select(0.0, 1.0 / a, b < 0.0); }
+  let r = pow(abs(a), b);
+  let odd = fract(b) == 0.0 && fract(b * 0.5) != 0.0;
+  return select(r, -r, a < 0.0 && odd);
+}
 `;
 
   /** Element-wise operations: a WGSL expression in `a` (and `b`). */
@@ -72,6 +87,31 @@ fn min_(a: f32, b: f32) -> f32 { return select(select(min(a, b), a, isnan_(b)), 
     fix: "trunc(a)",
     round: "round_(a)",
     sign: "sign(a)",
+    sqrt: "sqrt(a)",
+    log: "log(a)",
+    log2: "log2(a)",
+    log10: "log(a) * 0.4342944819032518",
+    log1p: "log1p_(a)",
+    asin: "asin(a)",
+    acos: "acos(a)",
+    atanh: "atanh(a)",
+    acosh: "acosh(a)",
+    power: "pow_(a, b)",
+  };
+
+  /** For the operations whose real result needs the input in a domain: the
+   *  condition under which an element would need a complex result. */
+  const DOMAIN: Record<string, string> = {
+    sqrt: "a < 0.0",
+    log: "a < 0.0",
+    log2: "a < 0.0",
+    log10: "a < 0.0",
+    log1p: "a < -1.0",
+    asin: "abs(a) > 1.0",
+    acos: "abs(a) > 1.0",
+    atanh: "abs(a) > 1.0",
+    acosh: "a < 1.0",
+    power: "a < 0.0 && fract(b) != 0.0",
   };
 
   const pipelines = new Map<string, GPUComputePipeline>();
@@ -150,7 +190,42 @@ fn min_(a: f32, b: f32) -> f32 { return select(select(min(a, b), a, isnan_(b)), 
     return buf;
   }
 
-  type Operand = { id: number; n: number } | { scalar: number };
+  type Operand =
+    | { id: number; n: number; strides?: number[] }
+    | { scalar: number };
+
+  /** A storage buffer holding `data`. */
+  function words32(
+    device: GPUDevice,
+    data: Uint32Array<ArrayBuffer>
+  ): GPUBuffer {
+    const b = device.createBuffer({
+      size: Math.max(4, data.byteLength),
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+    });
+    device.queue.writeBuffer(b, 0, data);
+    return b;
+  }
+
+  /** The first `n` u32 words of `src` (which allows COPY_SRC). */
+  async function readWords(
+    device: GPUDevice,
+    src: GPUBuffer,
+    n: number
+  ): Promise<Uint32Array> {
+    const staging = device.createBuffer({
+      size: n * 4,
+      usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
+    });
+    const enc = device.createCommandEncoder();
+    enc.copyBufferToBuffer(src, 0, staging, 0, n * 4);
+    device.queue.submit([enc.finish()]);
+    await staging.mapAsync(GPUMapMode.READ);
+    const out = new Uint32Array(staging.getMappedRange().slice(0));
+    staging.unmap();
+    staging.destroy();
+    return out;
+  }
 
   return {
     info(device: GPUDevice) {
@@ -211,44 +286,187 @@ fn min_(a: f32, b: f32) -> f32 { return select(select(min(a, b), a, isnan_(b)), 
      *  buffer of `n` elements, a buffer of 1 (broadcast), or a scalar. */
     async elementwise(
       device: GPUDevice,
-      args: { out: number; op: string; n: number; inputs: Operand[] }
+      args: {
+        out: number;
+        op: string;
+        n: number;
+        inputs: Operand[];
+        dims?: number[];
+        check?: boolean;
+      }
     ) {
       const expr = ELEMWISE[args.op];
       if (!expr) throw new Error("gpuArray: no kernel for " + args.op);
       const out = create(device, args.out, args.n);
-      if (args.n === 0) return;
+      if (args.n === 0) return { bad: false };
+      // With `dims` (at most 4), the operands are broadcast: each buffer
+      // operand has strides over the result's dimensions (0 where it has
+      // size 1).
+      const bcast = !!args.dims;
       const decls: string[] = [];
       const reads: string[] = [];
       const bufs: GPUBuffer[] = [out];
       const scalars: number[] = [];
+      const strides: number[][] = [];
       args.inputs.forEach((x, k) => {
         const v = "ab"[k];
         if ("scalar" in x) {
           reads.push(`let ${v} = p.s${scalars.length};`);
           scalars.push(x.scalar);
+          strides.push([0, 0, 0, 0]);
         } else {
           const binding = bufs.length + 1;
           bufs.push(buffer(x.id));
           decls.push(
             `@group(0) @binding(${binding}) var<storage, read> in${k}: array<f32>;`
           );
-          reads.push(`let ${v} = in${k}[${x.n === 1 ? "0u" : "i"}];`);
+          const idx = bcast ? `o${k}` : x.n === 1 ? "0u" : "i";
+          reads.push(`let ${v} = in${k}[${idx}];`);
+          strides.push(x.strides ?? [0, 0, 0, 0]);
         }
       });
+      while (strides.length < 2) strides.push([0, 0, 0, 0]);
+      const check = args.check ? DOMAIN[args.op] : undefined;
+      let flag: GPUBuffer | null = null;
+      if (check) {
+        flag = device.createBuffer({
+          size: 4,
+          usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+        });
+        decls.push(
+          `@group(0) @binding(${bufs.length + 1}) var<storage, read_write> flag: atomic<u32>;`
+        );
+        bufs.push(flag);
+      }
+      const index = bcast
+        ? `var r = i; var o0 = 0u; var o1 = 0u;
+  for (var d = 0u; d < 4u; d = d + 1u) {
+    let sub = r % p.dims[d]; r = r / p.dims[d];
+    o0 = o0 + sub * p.sa[d]; o1 = o1 + sub * p.sb[d];
+  }`
+        : "";
       const { groups, width } = grid(args.n);
       const code = `
-struct P { n: u32, w: u32, s0: f32, s1: f32 }
+struct P { n: u32, w: u32, s0: f32, s1: f32, dims: vec4u, sa: vec4u, sb: vec4u }
 @group(0) @binding(0) var<uniform> p: P;
 @group(0) @binding(1) var<storage, read_write> out: array<f32>;
 ${decls.join("\n")}
 @compute @workgroup_size(256) fn main(@builtin(global_invocation_id) g: vec3u) {
   let i = g.x + g.y * p.w;
   if (i >= p.n) { return; }
+  ${index}
   ${reads.join(" ")}
+  ${check ? `if (${check}) { atomicStore(&flag, 1u); }` : ""}
   out[i] = ${expr};
 }`;
       while (scalars.length < 2) scalars.push(0);
-      await run(device, code, uniforms([args.n, width], scalars), bufs, groups);
+      const dims = args.dims ?? [1, 1, 1, 1];
+      const words = new ArrayBuffer(64);
+      new Uint32Array(words, 0, 2).set([args.n, width]);
+      new Float32Array(words, 8, 2).set(scalars);
+      new Uint32Array(words, 16, 12).set([
+        ...dims,
+        ...strides[0],
+        ...strides[1],
+      ]);
+      await run(device, code, words, bufs, groups);
+      if (!flag) return { bad: false };
+      const bad = (await readWords(device, flag, 1))[0] !== 0;
+      flag.destroy();
+      return { bad };
+    },
+
+    /** out[k] = src[off(k)] for the selection's offsets: `start + k*step`,
+     *  or `offsets[k]`. */
+    async take(
+      device: GPUDevice,
+      args: {
+        out: number;
+        src: number;
+        n: number;
+        start: number;
+        step: number;
+        offsets: Uint32Array<ArrayBuffer> | null;
+      }
+    ) {
+      const out = create(device, args.out, args.n);
+      if (args.n === 0) return;
+      const offs = args.offsets && words32(device, args.offsets);
+      const code = `
+struct P { n: u32, w: u32, start: u32, step: u32 }
+@group(0) @binding(0) var<uniform> p: P;
+@group(0) @binding(1) var<storage, read_write> dst: array<f32>;
+@group(0) @binding(2) var<storage, read> src: array<f32>;
+${offs ? "@group(0) @binding(3) var<storage, read> offs: array<u32>;" : ""}
+@compute @workgroup_size(256) fn main(@builtin(global_invocation_id) g: vec3u) {
+  let k = g.x + g.y * p.w;
+  if (k >= p.n) { return; }
+  dst[k] = src[${offs ? "offs[k]" : "p.start + k * p.step"}];
+}`;
+      const { groups, width } = grid(args.n);
+      const bufs = [out, buffer(args.src)];
+      if (offs) bufs.push(offs);
+      await run(
+        device,
+        code,
+        uniforms([args.n, width, args.start, args.step]),
+        bufs,
+        groups
+      );
+      offs?.destroy();
+    },
+
+    /** out = src (`total` elements) with out[off(k)] = rhs for the
+     *  selection's `n` offsets; rhs is a buffer of `n` elements, a buffer
+     *  of 1, or a scalar. */
+    async put(
+      device: GPUDevice,
+      args: {
+        out: number;
+        src: number;
+        total: number;
+        n: number;
+        start: number;
+        step: number;
+        offsets: Uint32Array<ArrayBuffer> | null;
+        rhs: Operand;
+      }
+    ) {
+      const out = create(device, args.out, args.total);
+      if (args.total === 0) return;
+      const enc = device.createCommandEncoder();
+      enc.copyBufferToBuffer(buffer(args.src), 0, out, 0, args.total * 4);
+      device.queue.submit([enc.finish()]);
+      if (args.n === 0) return;
+      const offs = args.offsets && words32(device, args.offsets);
+      const rhs = args.rhs;
+      const scalar = "scalar" in rhs;
+      const code = `
+struct P { n: u32, w: u32, start: u32, step: u32, s: f32, p1: f32, p2: f32, p3: f32 }
+@group(0) @binding(0) var<uniform> p: P;
+@group(0) @binding(1) var<storage, read_write> dst: array<f32>;
+${scalar ? "" : "@group(0) @binding(2) var<storage, read> rhs: array<f32>;"}
+${offs ? `@group(0) @binding(${scalar ? 2 : 3}) var<storage, read> offs: array<u32>;` : ""}
+@compute @workgroup_size(256) fn main(@builtin(global_invocation_id) g: vec3u) {
+  let k = g.x + g.y * p.w;
+  if (k >= p.n) { return; }
+  dst[${offs ? "offs[k]" : "p.start + k * p.step"}] = ${scalar ? "p.s" : !scalar && rhs.n === 1 ? "rhs[0]" : "rhs[k]"};
+}`;
+      const { groups, width } = grid(args.n);
+      const bufs = [out];
+      if (!scalar) bufs.push(buffer(rhs.id));
+      if (offs) bufs.push(offs);
+      await run(
+        device,
+        code,
+        uniforms(
+          [args.n, width, args.start, args.step],
+          [scalar ? rhs.scalar : 0, 0, 0, 0]
+        ),
+        bufs,
+        groups
+      );
+      offs?.destroy();
     },
 
     /** out = op over the middle dimension of `src` viewed as
