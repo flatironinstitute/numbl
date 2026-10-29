@@ -37,7 +37,6 @@ import {
   NO_JS_JIT,
   TABLES,
   familyCases,
-  skipAtOpt2,
 } from "./jit-conformance/cases.js";
 
 registerNodeCompileC();
@@ -96,7 +95,6 @@ interface LevelStats {
   matched: number;
   declined: number;
   known: number;
-  skipped: number;
 }
 interface Row {
   name: string;
@@ -113,22 +111,18 @@ function check(
   name: string,
   cases: Case[],
   ref: Outcome[],
-  got: (Outcome | null)[],
+  got: Outcome[],
   opt: "1" | "2",
   row: Row,
   used: Set<string>
 ): string[] {
-  const stats: LevelStats = { matched: 0, declined: 0, known: 0, skipped: 0 };
+  const stats: LevelStats = { matched: 0, declined: 0, known: 0 };
   const failures: string[] = [];
   const known = KNOWN_DIVERGENCES.filter(
     d => d.opts.includes(opt) && d.names.includes(name)
   );
   got.forEach((o, i) => {
     const id = caseId(name, cases[i]);
-    if (o === null) {
-      stats.skipped++;
-      return;
-    }
     if (o.kind === "declined") {
       stats.declined++;
       row.declines.push(`opt${opt} ${id}: ${o.reason}`);
@@ -202,18 +196,14 @@ describe("JIT builtin conformance", () => {
       const failures = check(name, cases, ref, got1, "1", row, used);
       const ran = ["1"];
       if (bridge) {
-        // Batch the cases that ran without error at --opt 0; skip the
-        // ones that crash the process.
-        const idx = cases.flatMap((c, i) => (skipAtOpt2(name, c) ? [] : [i]));
-        const got = runBatched(
+        // Batch the cases that ran without error at --opt 0.
+        const got2 = runBatched(
           name,
-          idx.map(i => cases[i]),
-          idx.map(i => ref[i].kind === "value" && !cases[i].pre),
+          cases,
+          cases.map((c, i) => ref[i].kind === "value" && !c.pre),
           "2",
           bridge
         );
-        const got2: (Outcome | null)[] = cases.map(() => null);
-        idx.forEach((i, k) => (got2[i] = got[k]));
         failures.push(...check(name, cases, ref, got2, "2", row, used));
         ran.push("2");
       }
@@ -245,8 +235,7 @@ describe("JIT builtin conformance", () => {
       );
       lines.push(
         `  --opt ${opt}: ${total(opt, "matched")} compiled and matched, ` +
-          `${total(opt, "declined")} declined, ${total(opt, "known")} known divergences, ` +
-          `${total(opt, "skipped")} skipped; ` +
+          `${total(opt, "declined")} declined, ${total(opt, "known")} known divergences; ` +
           `nothing compiled for: ${none.map(r => r.name).join(" ") || "-"}`
       );
     }

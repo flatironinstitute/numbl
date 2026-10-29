@@ -76,6 +76,19 @@ static void jit__blk_unlink(jit__blk_t *b) {
   b->next->prev = b->prev;
 }
 
+/* The header of the block holding `p`. Tensor buffer pointers are
+ * `restrict` (tensor.h), so a header reached by arithmetic on one would
+ * count as accessed through that restrict pointer, while linking a
+ * neighbor writes the same header through another pointer. GCC then
+ * keeps stale links in registers and the list (and the heap) breaks.
+ * The empty asm hides the derivation from the optimizer. */
+static jit__blk_t *jit__blk_of(void *p) {
+#if defined(__GNUC__) || defined(__clang__)
+  __asm__("" : "+r"(p));
+#endif
+  return (jit__blk_t *)p - 1;
+}
+
 static void *jit__tmalloc(size_t n) {
   jit__blk_t *b = (jit__blk_t *)(malloc)(sizeof(jit__blk_t) + (n > 0 ? n : 1));
   if (!b) return NULL;
@@ -85,14 +98,14 @@ static void *jit__tmalloc(size_t n) {
 
 static void jit__tfree(void *p) {
   if (!p) return;
-  jit__blk_t *b = (jit__blk_t *)p - 1;
+  jit__blk_t *b = jit__blk_of(p);
   jit__blk_unlink(b);
   (free)(b);
 }
 
 static void *jit__trealloc(void *p, size_t n) {
   if (!p) return jit__tmalloc(n);
-  jit__blk_t *b = (jit__blk_t *)p - 1;
+  jit__blk_t *b = jit__blk_of(p);
   jit__blk_unlink(b);
   jit__blk_t *nb =
     (jit__blk_t *)(realloc)(b, sizeof(jit__blk_t) + (n > 0 ? n : 1));
