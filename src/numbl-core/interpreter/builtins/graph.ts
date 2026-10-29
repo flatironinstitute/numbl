@@ -252,7 +252,7 @@ function adjToEdges(
   fn: string
 ): { n: number; edges: Edge[]; weighted: boolean } {
   const n = squareDim(A, fn);
-  const weighted = !(isRuntimeTensor(A) && A._isLogical);
+  const weighted = !(isRuntimeTensor(A) && A.cls === "logical");
   const edges: Edge[] = [];
 
   const push = (r: number, c: number, val: number) => {

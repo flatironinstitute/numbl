@@ -155,7 +155,6 @@ export function enumEqualityOp(
     out[i] = (negate ? !eq : eq) ? 1 : 0;
   }
   if (n === 1) return RTV.logical(out[0] === 1);
-  const t = RTV.tensor(out, [shape[0], shape[1]]);
-  t._isLogical = true;
+  const t = RTV.logicalTensor(out, [shape[0], shape[1]]);
   return t;
 }

@@ -185,8 +185,7 @@ function minMaxAlongDim(
     result[outIdx] = mRe;
     if (idxArr) idxArr[outIdx] = mIdx + 1;
   });
-  const out = RTV.tensor(result, info.resultShape);
-  if (v._isLogical) out._isLogical = true;
+  const out = RTV.tensor(result, info.resultShape, undefined, v.cls);
   if (nargout > 1) return [out, RTV.tensor(idxArr!, info.resultShape)];
   return out;
 }
@@ -227,9 +226,9 @@ function minMaxElementwise(
   // MATLAB: min/max on two logical operands stays logical; a mixed
   // logical + double promotes to double.
   const aIsLogical =
-    isRuntimeLogical(a) || (isRuntimeTensor(a) && a._isLogical === true);
+    isRuntimeLogical(a) || (isRuntimeTensor(a) && a.cls === "logical");
   const bIsLogical =
-    isRuntimeLogical(b) || (isRuntimeTensor(b) && b._isLogical === true);
+    isRuntimeLogical(b) || (isRuntimeTensor(b) && b.cls === "logical");
   const bothLogical = aIsLogical && bIsLogical;
 
   // Both scalars, no complex
@@ -272,8 +271,12 @@ function minMaxElementwise(
           ? aVal
           : twoArgFn(aVal, bVal);
     });
-    const t = RTV.tensor(result, outShape);
-    if (bothLogical) t._isLogical = true;
+    const t = RTV.tensor(
+      result,
+      outShape,
+      undefined,
+      bothLogical ? "logical" : "double"
+    );
     return t;
   }
 
@@ -356,7 +359,7 @@ export function minMaxImpl(
           const op = name === "min" ? OpReduce.MIN : OpReduce.MAX;
           tensorOps.realFlatReduce(op, v.data.length, v.data, out);
           const val = out[0];
-          return v._isLogical ? RTV.logical(val !== 0) : RTV.num(val);
+          return v.cls === "logical" ? RTV.logical(val !== 0) : RTV.num(val);
         }
         const { mRe, mIm, mIdx } = minMaxScanDirect(
           v.data,
@@ -374,10 +377,10 @@ export function minMaxImpl(
         }
         if (nargout > 1)
           return [
-            v._isLogical ? RTV.logical(mRe !== 0) : RTV.num(mRe),
+            v.cls === "logical" ? RTV.logical(mRe !== 0) : RTV.num(mRe),
             RTV.num(mIdx + 1),
           ];
-        return v._isLogical ? RTV.logical(mRe !== 0) : RTV.num(mRe);
+        return v.cls === "logical" ? RTV.logical(mRe !== 0) : RTV.num(mRe);
       }
       return minMaxAlongDim(v, d, nargout, initial, isBetter, complexIsBetter);
     }

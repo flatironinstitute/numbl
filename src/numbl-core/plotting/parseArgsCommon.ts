@@ -14,7 +14,7 @@ import {
   isRuntimeChar,
 } from "../runtime/types.js";
 import { toString } from "../runtime/convert.js";
-import { allocFloat64Array } from "../runtime/alloc.js";
+import { RTV } from "../runtime/constructors.js";
 
 // ── Color mapping ───────────────────────────────────────────────────────
 
@@ -352,9 +352,5 @@ export function getStringValueIfString(v: RuntimeValue): string | undefined {
 
 /** Create a runtime tensor from a plain number array (for synthetic args). */
 export function tensorFromArray(arr: number[]): RuntimeValue {
-  return {
-    kind: "tensor",
-    data: allocFloat64Array(arr),
-    shape: [1, arr.length],
-  } as RuntimeTensor;
+  return RTV.tensorFromArray(arr, [1, arr.length]);
 }

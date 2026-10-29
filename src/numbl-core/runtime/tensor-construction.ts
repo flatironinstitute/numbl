@@ -180,7 +180,7 @@ function toStringBlock(v: RuntimeValue): StrBlock | null {
     const out: string[] = [];
     for (let i = 0; i < v.data.length; i++) {
       out.push(
-        v._isLogical
+        v.cls === "logical"
           ? v.data[i]
             ? "true"
             : "false"
@@ -580,21 +580,15 @@ function sparseCatAlongDim(
 
 /** N-D concatenation along a 0-based dimension index */
 function catAlongDim(values: RuntimeValue[], dimIdx: number): RuntimeValue {
-  // Track whether all inputs are logical so we can propagate _isLogical.
+  // Track whether all inputs are logical so we can keep the logical class.
   const allLogical = values.every(
-    v => isRuntimeLogical(v) || (isRuntimeTensor(v) && v._isLogical === true)
+    v => isRuntimeLogical(v) || (isRuntimeTensor(v) && v.cls === "logical")
   );
   let tensors: RuntimeTensor[] = values.map(v => {
     if (isRuntimeNumber(v))
       return RTV.tensor(allocFloat64Array([v]), [1, 1]) as RuntimeTensor;
-    if (isRuntimeLogical(v)) {
-      const t = RTV.tensor(
-        allocFloat64Array([v ? 1 : 0]),
-        [1, 1]
-      ) as RuntimeTensor;
-      t._isLogical = true;
-      return t;
-    }
+    if (isRuntimeLogical(v))
+      return RTV.logicalTensor(allocFloat64Array([v ? 1 : 0]), [1, 1]);
     if (isRuntimeComplexNumber(v))
       return RTV.tensor(
         allocFloat64Array([v.re]),
@@ -608,7 +602,13 @@ function catAlongDim(values: RuntimeValue[], dimIdx: number): RuntimeValue {
   // Filter out [0,0] tensors (always safe to drop).
   tensors = tensors.filter(t => t.shape.some(d => d > 0));
   if (tensors.length === 0) return RTV.tensor(allocFloat64Array(0), [0, 0]);
-  if (tensors.length === 1) return tensors[0];
+  if (tensors.length === 1) {
+    // A dropped empty double operand still makes the result double:
+    // MATLAB gives class([[], true]) == "double".
+    const t = tensors[0];
+    if (allLogical || t.cls !== "logical") return t;
+    return RTV.tensor(allocFloat64Array(t.data), t.shape);
+  }
 
   // Determine max ndim across all tensors (at least 2)
   const ndim = Math.max(2, ...tensors.map(t => t.shape.length));
@@ -692,8 +692,12 @@ function catAlongDim(values: RuntimeValue[], dimIdx: number): RuntimeValue {
     }
   }
 
-  const result = RTV.tensor(resultRe, resultShape, resultIm) as RuntimeTensor;
-  if (allLogical) result._isLogical = true;
+  const result = RTV.tensor(
+    resultRe,
+    resultShape,
+    resultIm,
+    allLogical ? "logical" : "double"
+  ) as RuntimeTensor;
   return result;
 }
 

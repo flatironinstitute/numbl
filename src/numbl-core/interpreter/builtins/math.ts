@@ -578,7 +578,7 @@ function roundDigitsArg(v: RuntimeValue): number {
       "MATLAB:round:SecondArg",
       "Second argument must be a real integer scalar."
     );
-  if (typeof v === "boolean" || (isRuntimeTensor(v) && v._isLogical))
+  if (typeof v === "boolean" || (isRuntimeTensor(v) && v.cls === "logical"))
     throw err();
   let a: NumericArg;
   try {

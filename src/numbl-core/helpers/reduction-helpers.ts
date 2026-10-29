@@ -390,8 +390,7 @@ export function logicalAlongDim(
     const result = allocFloat64Array(v.data.length);
     for (let i = 0; i < v.data.length; i++)
       result[i] = v.data[i] !== 0 || (v.imag && v.imag[i] !== 0) ? 1 : 0;
-    const t = RTV.tensor(result, [...v.shape]);
-    t._isLogical = true;
+    const t = RTV.logicalTensor(result, [...v.shape]);
     return t;
   }
 
@@ -414,8 +413,7 @@ export function logicalAlongDim(
     result[outIdx] = val ? 1 : 0;
   });
 
-  const t = RTV.tensor(result, info.resultShape);
-  t._isLogical = true;
+  const t = RTV.logicalTensor(result, info.resultShape);
   return t;
 }
 

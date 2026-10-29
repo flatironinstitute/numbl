@@ -13,6 +13,7 @@ import {
   type RuntimeValue,
   type RuntimeDictionary,
 } from "../../runtime/types.js";
+import { allocFloat64Array } from "../../runtime/alloc.js";
 import { RTV, RuntimeError } from "../../runtime/index.js";
 import { builtin, type Arity } from "./builtin.js";
 import { builtinError } from "./args.js";
@@ -99,13 +100,13 @@ dictMethod("keys", [1, 2], (d, args) => {
   for (const entry of d.entries.values()) k.push(entry.key);
   if (k.length === 0) {
     if (d.keyType === "string") return RTV.cell([], [0, 1]);
-    return RTV.tensor([], [0, 1]);
+    return RTV.tensorFromArray([], [0, 1]);
   }
   if (d.keyType === "double" || d.keyType === "logical") {
     const data = k.map(v =>
       isRuntimeNumber(v) ? v : isRuntimeLogical(v) ? (v ? 1 : 0) : 0
     );
-    return RTV.tensor(data, [k.length, 1]);
+    return RTV.tensorFromArray(data, [k.length, 1]);
   }
   // string keys or other
   return RTV.cell(k, [k.length, 1]);
@@ -118,14 +119,14 @@ dictMethod("values", [1, 2], (d, args) => {
   const v: RuntimeValue[] = [];
   for (const entry of d.entries.values()) v.push(entry.value);
   if (v.length === 0) {
-    if (d.valueType === "double") return RTV.tensor([], [0, 1]);
+    if (d.valueType === "double") return RTV.tensorFromArray([], [0, 1]);
     return RTV.cell([], [0, 1]);
   }
   if (d.valueType === "double" || d.valueType === "logical") {
     const data = v.map(x =>
       isRuntimeNumber(x) ? x : isRuntimeLogical(x) ? (x ? 1 : 0) : 0
     );
-    return RTV.tensor(data, [v.length, 1]);
+    return RTV.tensorFromArray(data, [v.length, 1]);
   }
   return RTV.cell(v, [v.length, 1]);
 });
@@ -160,9 +161,7 @@ dictMethod("isKey", 2, (d, args) => {
       return 0;
     }
   });
-  const t = RTV.tensor(data, [1, data.length]);
-  t._isLogical = true;
-  return t;
+  return RTV.logicalTensor(allocFloat64Array(data), [1, data.length]);
 });
 
 // entries(d). MATLAB returns a table; numbl returns a struct with keys and
@@ -183,14 +182,14 @@ dictMethod(
       // [keys, values] = entries(d)
       const keysOut =
         d.keyType === "double" || d.keyType === "logical"
-          ? RTV.tensor(
+          ? RTV.tensorFromArray(
               k.map(x => (isRuntimeNumber(x) ? x : 0)),
               [k.length, 1]
             )
           : RTV.cell(k, [k.length, 1]);
       const valsOut =
         d.valueType === "double" || d.valueType === "logical"
-          ? RTV.tensor(
+          ? RTV.tensorFromArray(
               v.map(x => (isRuntimeNumber(x) ? x : 0)),
               [v.length, 1]
             )

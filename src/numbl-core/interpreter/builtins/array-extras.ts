@@ -584,7 +584,7 @@ function coordOperand(v: RuntimeValue): RuntimeTensor {
     if (v.im !== 0) throw mustBeRealError();
     return RTV.tensor(allocFloat64Array([v.re]), [1, 1]) as RuntimeTensor;
   }
-  if (isRuntimeTensor(v) && !v._isLogical) {
+  if (isRuntimeTensor(v) && v.cls !== "logical") {
     if (v.imag) {
       if (!imagAllZero(v.imag)) throw mustBeRealError();
       return RTV.tensor(v.data, v.shape) as RuntimeTensor;
@@ -802,8 +802,7 @@ builtin({
       }
       r++;
     });
-    const result = RTV.tensor(re, [rows, k], im);
-    if (v._isLogical) result._isLogical = true;
+    const result = RTV.tensor(re, [rows, k], im, v.cls);
     return result;
   },
 });

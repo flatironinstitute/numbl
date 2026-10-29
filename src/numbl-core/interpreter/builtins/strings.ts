@@ -504,7 +504,7 @@ function strcmpApply(
       result[i] =
         isText(ai) && isText(bi) && cmp(toString(ai), toString(bi)) ? 1 : 0;
     }
-    return new RuntimeTensor(result, cellA.shape.slice(), undefined, true);
+    return new RuntimeTensor(result, cellA.shape.slice(), undefined, "logical");
   }
 
   // One cell, one scalar
@@ -520,7 +520,7 @@ function strcmpApply(
     result[i] =
       isText(s1) && isText(s2) && cmp(toString(s1), toString(s2)) ? 1 : 0;
   }
-  return new RuntimeTensor(result, cell.shape.slice(), undefined, true);
+  return new RuntimeTensor(result, cell.shape.slice(), undefined, "logical");
 }
 
 builtin({
@@ -622,7 +622,12 @@ function logicalRowFromString(
   const cps = stringCodePoints(s);
   const data = allocFloat64Array(cps.length);
   for (let i = 0; i < cps.length; i++) data[i] = pred(cps[i]) ? 1 : 0;
-  return new RuntimeTensor(data, shape ?? [1, cps.length], undefined, true);
+  return new RuntimeTensor(
+    data,
+    shape ?? [1, cps.length],
+    undefined,
+    "logical"
+  );
 }
 
 /** Build a logical tensor by applying a predicate to each element of a numeric tensor. */
@@ -635,7 +640,7 @@ function logicalFromNumericTensor(
   for (let i = 0; i < data.length; i++) {
     out[i] = pred(Math.round(data[i])) ? 1 : 0;
   }
-  return new RuntimeTensor(out, [...shape], undefined, true);
+  return new RuntimeTensor(out, [...shape], undefined, "logical");
 }
 
 function isstrpropApply(args: RuntimeValue[]): RuntimeValue {
@@ -690,7 +695,7 @@ function isstrpropApply(args: RuntimeValue[]): RuntimeValue {
     const cp = Math.round(toNumber(v));
     const data = allocFloat64Array(1);
     data[0] = pred(cp) ? 1 : 0;
-    result = new RuntimeTensor(data, [1, 1], undefined, true);
+    result = new RuntimeTensor(data, [1, 1], undefined, "logical");
   } else {
     throw unsupportedClassError("isstrprop", v);
   }
@@ -759,7 +764,7 @@ function textSubjectApply(
       allocFloat64Array(subject.data.map(s => (perElem(s) ? 1 : 0))),
       [subject.shape[0], subject.shape[1]],
       undefined,
-      true
+      "logical"
     );
   }
   if (isRuntimeCell(subject)) {
@@ -767,7 +772,7 @@ function textSubjectApply(
       allocFloat64Array(subject.data.map(e => (perElem(toString(e)) ? 1 : 0))),
       subject.shape.slice(),
       undefined,
-      true
+      "logical"
     );
   }
   return RTV.logical(perElem(toString(subject)));
@@ -1179,7 +1184,7 @@ builtin({
       if (isText(a1)) return RTV.char(sprintfFormat(toString(a1), [v]));
       if (
         !isRuntimeNumber(a1) &&
-        !(isRuntimeTensor(a1) && a1.data.length === 1 && !a1._isLogical)
+        !(isRuntimeTensor(a1) && a1.data.length === 1 && a1.cls !== "logical")
       )
         throw builtinError(
           "MATLAB:num2str:invalidSecondArgument",
@@ -1279,7 +1284,7 @@ builtin({
     const cell = (k: number): string =>
       im !== undefined
         ? fmtC(v.data[k], im[k])
-        : v._isLogical
+        : v.cls === "logical"
           ? fmtL(v.data[k])
           : fmt(v.data[k]);
     const nRows = v.shape[0] || 1;
@@ -1494,7 +1499,11 @@ builtin({
       const out: string[] = [];
       for (let i = 0; i < v.data.length; i++) {
         out.push(
-          v._isLogical ? (v.data[i] ? "true" : "false") : numStr(v.data[i])
+          v.cls === "logical"
+            ? v.data[i]
+              ? "true"
+              : "false"
+            : numStr(v.data[i])
         );
       }
       return stringArrayValue(out, [rows, cols]);
@@ -1716,19 +1725,17 @@ builtin({
       throw unsupportedFormError("ismissing", "the indicator argument");
     const v = args[0];
     if (isRuntimeStringArray(v)) {
-      const t = RTV.tensor(allocFloat64Array(v.data.length), [
+      const t = RTV.logicalTensor(allocFloat64Array(v.data.length), [
         v.shape[0],
         v.shape[1],
       ]);
-      t._isLogical = true;
       return t;
     }
     if (isRuntimeTensor(v)) {
-      const t = RTV.tensor(
+      const t = RTV.logicalTensor(
         allocFloat64Array(v.data.map(x => (isNaN(x) ? 1 : 0))),
         [...v.shape]
       );
-      t._isLogical = true;
       return t;
     }
     if (isRuntimeNumber(v)) return RTV.logical(isNaN(v));

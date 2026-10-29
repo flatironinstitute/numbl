@@ -61,8 +61,7 @@ function convertJsonArray(arr: unknown[]): RuntimeValue {
     for (let i = 0; i < arr.length; i++) {
       data[i] = arr[i] === null ? 0 : arr[i] ? 1 : 0;
     }
-    const t = RTV.tensor(data, [arr.length, 1]);
-    t._isLogical = true;
+    const t = RTV.logicalTensor(data, [arr.length, 1]);
     return t;
   }
 
@@ -81,8 +80,7 @@ function convertJsonArray(arr: unknown[]): RuntimeValue {
     for (let i = 0; i < arr.length; i++) {
       data[i] = arr[i] ? 1 : 0;
     }
-    const t = RTV.tensor(data, [arr.length, 1]);
-    t._isLogical = true;
+    const t = RTV.logicalTensor(data, [arr.length, 1]);
     return t;
   }
 

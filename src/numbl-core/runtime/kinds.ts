@@ -84,7 +84,7 @@ export const KINDS: { [K in ValueKind]: KindInfo<ValueOf<K>> } = {
     label: () => "string",
   },
   tensor: {
-    className: v => (v._isLogical ? "logical" : "double"),
+    className: v => v.cls,
     shape: v =>
       v.shape.length >= 2
         ? v.shape

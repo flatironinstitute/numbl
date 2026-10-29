@@ -152,8 +152,7 @@ function complexComparisonOp(
       true,
       result
     );
-    const t = RTV.tensor(result, bc.shape);
-    t._isLogical = true;
+    const t = RTV.logicalTensor(result, bc.shape);
     return t;
   }
 
@@ -171,8 +170,7 @@ function complexComparisonOp(
       false,
       result
     );
-    const t = RTV.tensor(result, ac.shape);
-    t._isLogical = true;
+    const t = RTV.logicalTensor(result, ac.shape);
     return t;
   }
 
@@ -207,12 +205,11 @@ function complexComparisonOp(
       bt.im,
       result
     );
-    const t = RTV.tensor(result, at.shape);
-    t._isLogical = true;
+    const t = RTV.logicalTensor(result, at.shape);
     return t;
   }
 
-  // Try broadcasting (broadcastComparisonComplex already sets _isLogical)
+  // Try broadcasting (broadcastComparisonComplex already returns a logical tensor)
   const broadcastShape = getBroadcastShape(at.shape, bt.shape);
   if (broadcastShape !== null) {
     return broadcastComparisonComplex(at, bt, broadcastShape, op);
@@ -550,8 +547,7 @@ function realIfZeroImag(v: RuntimeValue): RuntimeValue {
   if (isRuntimeTensor(v) && v.imag) {
     const im = v.imag;
     for (let i = 0; i < im.length; i++) if (im[i] !== 0) return v;
-    const out = RTV.tensorRaw(v.data, v.shape);
-    if (v._isLogical) out._isLogical = true;
+    const out = RTV.tensorRaw(v.data, v.shape, v.cls);
     return out;
   }
   return v;
@@ -677,7 +673,7 @@ function coerceToConcatString(v: RuntimeValue): string | null {
   // MATLAB by formatting the single value.
   if (isRuntimeTensor(v) && v.data.length === 1 && !v.imag) {
     const x = v.data[0];
-    if (v._isLogical === true) return x ? "true" : "false";
+    if (v.cls === "logical") return x ? "true" : "false";
     return num2strScalar(x);
   }
   return null;
@@ -1340,8 +1336,7 @@ function transposeCore(v: RuntimeTensor, conjugate: boolean): RuntimeValue {
     }
     return RTV.tensor(resultRe, [cols, rows], resultIm);
   }
-  const t = RTV.tensor(resultRe, [cols, rows]);
-  if (v._isLogical) t._isLogical = true;
+  const t = RTV.tensor(resultRe, [cols, rows], undefined, v.cls);
   return t;
 }
 
@@ -1495,8 +1490,7 @@ function stringComparisonOp(
       const y = bScalar ? tb.data[0] : tb.data[i];
       out[i] = op(x, y) ? 1 : 0;
     }
-    const t = RTV.tensor(out, [shape[0], shape[1]]);
-    t._isLogical = true;
+    const t = RTV.logicalTensor(out, [shape[0], shape[1]]);
     return t;
   }
   const pair = asStringPair(a, b);
@@ -1850,8 +1844,7 @@ function broadcastComparisonComplex(
   broadcastIterate(a.shape, b.shape, outShape, (aIdx, bIdx, i) => {
     result[i] = op(a.re[aIdx], a.im[aIdx], b.re[bIdx], b.im[bIdx]) ? 1 : 0;
   });
-  const t = RTV.tensor(result, outShape) as RuntimeTensor;
-  t._isLogical = true;
+  const t = RTV.logicalTensor(result, outShape) as RuntimeTensor;
   return t;
 }
 
@@ -1865,8 +1858,7 @@ function broadcastComparison(
   broadcastIterate(a.shape, b.shape, outShape, (aIdx, bIdx, i) => {
     result[i] = op(a.data[aIdx], b.data[bIdx]) ? 1 : 0;
   });
-  const t = RTV.tensor(result, outShape) as RuntimeTensor;
-  t._isLogical = true;
+  const t = RTV.logicalTensor(result, outShape) as RuntimeTensor;
   return t;
 }
 
@@ -2031,8 +2023,7 @@ function comparisonOp(
       true,
       result
     );
-    const t = RTV.tensor(result, bn.tensor.shape);
-    t._isLogical = true;
+    const t = RTV.logicalTensor(result, bn.tensor.shape);
     return t;
   }
 
@@ -2048,8 +2039,7 @@ function comparisonOp(
       false,
       result
     );
-    const t = RTV.tensor(result, an.tensor.shape);
-    t._isLogical = true;
+    const t = RTV.logicalTensor(result, an.tensor.shape);
     return t;
   }
 
@@ -2065,8 +2055,7 @@ function comparisonOp(
     const len = at.data.length;
     const result = allocFloat64Array(len);
     tensorOps.realComparison(opCode, len, at.data, bt.data, result);
-    const t = RTV.tensor(result, at.shape);
-    t._isLogical = true;
+    const t = RTV.logicalTensor(result, at.shape);
     return t;
   }
 

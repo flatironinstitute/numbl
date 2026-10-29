@@ -93,7 +93,7 @@ function signature(v: RuntimeValue): string | null {
   if (isRuntimeChar(v)) return "C";
   if (isRuntimeComplexNumber(v)) return "z";
   if (isRuntimeTensor(v)) {
-    const tag = v.imag ? "tz" : v._isLogical ? "tb" : "t";
+    const tag = v.imag ? "tz" : v.cls === "logical" ? "tb" : "t";
     return v.shape.length >= 2
       ? `${tag}${v.shape.join("x")}`
       : `${tag}1x${v.shape.join("x")}`;
@@ -121,7 +121,7 @@ function buildType(v: RuntimeValue): Type {
     if (v.imag) return tensorComplex(shape);
     const t = tensorDouble(shape);
     // A logical tensor used as an index is a mask, not a gather.
-    if (v._isLogical) t.elem = "logical";
+    if (v.cls === "logical") t.elem = "logical";
     return t;
   }
   // A struct (the `p.tol` parameter idiom). Field order is the struct's

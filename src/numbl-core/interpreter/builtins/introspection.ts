@@ -180,7 +180,7 @@ builtin({
     if (n === 1) return RTV.logical(answer);
     const data = allocFloat64Array(n);
     if (answer) data.fill(1);
-    return new RuntimeTensor(data, shape, undefined, true);
+    return new RuntimeTensor(data, shape, undefined, "logical");
   },
 });
 

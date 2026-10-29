@@ -163,7 +163,7 @@ export function jitToNumbl(v: unknown, retType?: Type): RuntimeValue {
       tagged.data,
       [...tagged.shape],
       tagged.imag,
-      logical || undefined
+      logical ? "logical" : "double"
     );
   }
   if (tagged.jitTag === "char") {

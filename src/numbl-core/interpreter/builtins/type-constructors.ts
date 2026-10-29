@@ -106,7 +106,7 @@ builtin({
     if (isRuntimeComplexNumber(v)) return v;
     if (isRuntimeSparseMatrix(v)) return v;
     if (isRuntimeTensor(v)) {
-      if (v._isLogical) {
+      if (v.cls === "logical") {
         return RTV.tensor(allocFloat64Array(v.data), v.shape);
       }
       return v;
@@ -362,9 +362,10 @@ function jsonEncodeTensor(v: RuntimeTensor): string {
     throw new RuntimeError("jsonencode: complex values are not supported");
   const data = v.data;
   const n = data.length;
-  const enc = v._isLogical
-    ? (x: number) => (x ? "true" : "false")
-    : jsonEncodeNumber;
+  const enc =
+    v.cls === "logical"
+      ? (x: number) => (x ? "true" : "false")
+      : jsonEncodeNumber;
   const shape = v.shape ?? [n];
   // scalar
   if (n === 1 && shape.every(s => s === 1)) return enc(data[0]);
@@ -636,8 +637,7 @@ builtin({
       for (let i = 0; i < v.data.length; i++) {
         result[i] = toLogicalElem(v.data[i]);
       }
-      const t = RTV.tensor(result, v.shape);
-      t._isLogical = true;
+      const t = RTV.logicalTensor(result, v.shape);
       return t;
     }
     if (isRuntimeSparseMatrix(v))
@@ -741,7 +741,7 @@ builtin({
 /** One cell() size argument, checked as MATLAB does. */
 function cellSizeArg(v: RuntimeValue): RuntimeValue {
   if (typeof v === "number") return v;
-  if (isRuntimeTensor(v) && !v._isLogical) {
+  if (isRuntimeTensor(v) && v.cls !== "logical") {
     if (v.imag && !imagAllZero(v.imag))
       throw builtinError(
         "MATLAB:obsoleteComplexInput",
@@ -903,7 +903,12 @@ builtin({
       for (let i = 0; i < cell.data.length; i++) {
         result[i] = hasField(toString(cell.data[i])) ? 1 : 0;
       }
-      return new RuntimeTensor(result, cell.shape.slice(), undefined, true);
+      return new RuntimeTensor(
+        result,
+        cell.shape.slice(),
+        undefined,
+        "logical"
+      );
     }
     return RTV.logical(hasField(toString(args[1])));
   },

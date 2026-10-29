@@ -434,7 +434,7 @@ export function unmarshalTensorOutput(
     realData,
     shape,
     imagData,
-    ty.elem === "logical" ? true : undefined
+    ty.elem === "logical" ? "logical" : "double"
   );
 }
 

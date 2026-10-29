@@ -35,8 +35,7 @@ export function imagAllZero(imag: ArrayLike<number> | undefined): boolean {
  *  its data; otherwise return `t` unchanged. */
 export function stripZeroImagTensor(t: RuntimeTensor): RuntimeTensor {
   if (t.imag && imagAllZero(t.imag)) {
-    const out = RTV.tensor(t.data, t.shape);
-    if (t._isLogical) out._isLogical = true;
+    const out = RTV.tensor(t.data, t.shape, undefined, t.cls);
     return out;
   }
   return t;

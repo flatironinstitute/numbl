@@ -174,7 +174,7 @@ export function index(
           const im = t.imag[lin];
           return im === 0 ? t.data[lin] : RTV.complex(t.data[lin], im);
         }
-        if (t._isLogical === true) return t.data[lin] !== 0;
+        if (t.cls === "logical") return t.data[lin] !== 0;
         return t.data[lin];
       }
     } else if (kind === "struct_array") {
@@ -414,7 +414,7 @@ export function indexStore(
     const kind = (base as { kind?: string }).kind;
     if (kind === "tensor" && typeof rhs === "number") {
       const t = base as RuntimeTensor;
-      if (t.imag === undefined && t._isLogical !== true) {
+      if (t.imag === undefined && t.cls !== "logical") {
         if (!isShared(t)) {
           const lin = scalarOffset(t, indices);
           if (lin >= 0) {
@@ -558,8 +558,7 @@ export function indexStore(
       mv = RTV.tensor(allocFloat64Array([mv]), [1, 1]);
       wasScalar = true;
     } else if (isRuntimeLogical(mv)) {
-      const t = RTV.tensor(allocFloat64Array([mv ? 1 : 0]), [1, 1]);
-      t._isLogical = true;
+      const t = RTV.logicalTensor(allocFloat64Array([mv ? 1 : 0]), [1, 1]);
       mv = t;
       wasScalar = true;
     } else if (isRuntimeComplexNumber(mv)) {
@@ -589,7 +588,7 @@ export function indexStore(
     if (result.imag && result.imag[0] !== 0) {
       return RTV.complex(result.data[0], result.imag[0]);
     }
-    if (result._isLogical === true) return result.data[0] !== 0;
+    if (result.cls === "logical") return result.data[0] !== 0;
     return result.data[0];
   }
   return result;
@@ -600,7 +599,7 @@ function scalarIndexValue(idx: unknown): number {
   if (typeof idx === "number") return idx;
   if (typeof idx === "object" && idx !== null) {
     const v = idx as RuntimeValue;
-    if (isRuntimeTensor(v) && v.data.length === 1 && !v._isLogical)
+    if (isRuntimeTensor(v) && v.data.length === 1 && v.cls !== "logical")
       return v.data[0];
   }
   return 0;

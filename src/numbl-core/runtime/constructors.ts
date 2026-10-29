@@ -22,6 +22,7 @@ import {
   RuntimeDictionary,
   RuntimeStringArray,
   type RuntimeValue,
+  type ElementClass,
 } from "./types.js";
 
 export const RTV = {
@@ -29,26 +30,50 @@ export const RTV = {
     return value;
   },
 
+  /** Tensor over `data` (taken, not copied), with trailing singleton
+   *  dimensions stripped. `data` and `imag` must be Float64Arrays: other
+   *  storage is rejected rather than silently widened to double. */
   tensor(
-    data: Float64Array | number[],
+    data: Float64Array,
     shape: number[],
-    imag?: Float64Array | number[]
+    imag?: Float64Array,
+    cls: ElementClass = "double"
   ): RuntimeTensor {
-    const d = data instanceof Float64Array ? data : allocFloat64Array(data);
-    const im = imag
-      ? imag instanceof Float64Array
-        ? imag
-        : allocFloat64Array(imag)
-      : undefined;
+    if (!(data instanceof Float64Array))
+      throw new Error("internal error: RTV.tensor data must be a Float64Array");
+    if (imag !== undefined && !(imag instanceof Float64Array))
+      throw new Error("internal error: RTV.tensor imag must be a Float64Array");
     // Strip trailing singleton dimensions (always keeps minimum 2D)
     const s = [...shape];
     while (s.length > 2 && s[s.length - 1] === 1) s.pop();
-    return new RuntimeTensor(d, s, im);
+    return new RuntimeTensor(data, s, imag, cls);
+  },
+
+  /** Logical tensor over `data` (0/1 values, taken, not copied). */
+  logicalTensor(data: Float64Array, shape: number[]): RuntimeTensor {
+    return RTV.tensor(data, shape, undefined, "logical");
+  },
+
+  /** Double tensor copied from plain number arrays. */
+  tensorFromArray(
+    data: number[],
+    shape: number[],
+    imag?: number[]
+  ): RuntimeTensor {
+    return RTV.tensor(
+      allocFloat64Array(data),
+      shape,
+      imag && allocFloat64Array(imag)
+    );
   },
 
   /** Fast tensor constructor — data must be Float64Array, shape already normalized (no trailing singletons). */
-  tensorRaw(data: Float64Array, shape: number[]): RuntimeTensor {
-    return new RuntimeTensor(data, shape);
+  tensorRaw(
+    data: Float64Array,
+    shape: number[],
+    cls: ElementClass = "double"
+  ): RuntimeTensor {
+    return new RuntimeTensor(data, shape, undefined, cls);
   },
 
   /** Create a scalar tensor (1x1) */
@@ -66,22 +91,6 @@ export const RTV = {
   col(data: number[], imag?: number[]): RuntimeTensor {
     const im = imag ? allocFloat64Array(imag) : undefined;
     return new RuntimeTensor(allocFloat64Array(data), [data.length, 1], im);
-  },
-
-  /** Create a matrix from row-major data */
-  matrix(
-    rows: number,
-    cols: number,
-    data: number[] | Float64Array,
-    imag?: number[] | Float64Array
-  ): RuntimeTensor {
-    const d = data instanceof Float64Array ? data : allocFloat64Array(data);
-    const im = imag
-      ? imag instanceof Float64Array
-        ? imag
-        : allocFloat64Array(imag)
-      : undefined;
-    return new RuntimeTensor(d, [rows, cols], im);
   },
 
   string(value: string): RuntimeString {

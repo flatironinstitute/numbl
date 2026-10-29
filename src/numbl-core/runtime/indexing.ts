@@ -218,7 +218,7 @@ function gatherTensor(
     const o = offsetAt(sel, 0);
     if (base.imag !== undefined && base.imag[o] !== 0)
       return RTV.complex(base.data[o], base.imag[o]);
-    if (base._isLogical === true) return base.data[o] !== 0;
+    if (base.cls === "logical") return base.data[o] !== 0;
     return base.data[o];
   }
   const data = allocFloat64Array(sel.n);
@@ -229,12 +229,7 @@ function gatherTensor(
     gatherNumbers(base.imag, sel, imag);
     if (!hasNonZero(imag)) imag = undefined;
   }
-  return new RuntimeTensor(
-    data,
-    shape,
-    imag,
-    base._isLogical === true ? true : undefined
-  );
+  return new RuntimeTensor(data, shape, imag, base.cls);
 }
 
 function indexIntoTensor(
@@ -268,7 +263,7 @@ function indexIntoScalar(
     data,
     plan.shape,
     imag,
-    typeof base === "boolean" ? true : undefined
+    typeof base === "boolean" ? "logical" : "double"
   );
 }
 
@@ -294,7 +289,7 @@ function growTensor(
       if (imag) imag.set(srcIm!.subarray(s, s + len), d);
     });
   }
-  return new RuntimeTensor(data, newShape, imag, base._isLogical);
+  return new RuntimeTensor(data, newShape, imag, base.cls);
 }
 
 /** Value assigned into a logical array: must be real and not NaN. */
@@ -346,12 +341,12 @@ function storeIntoTensor(
       )
     : planStore(shape, base.data.length, indices, 1, SCALAR_SHAPE);
 
-  const logical = base._isLogical === true;
+  const logical = base.cls === "logical";
   let rhsRe: Float64Array | null = rhsT ? rhsT.data : null;
   let rhsIm: Float64Array | undefined = rhsT ? rhsT.imag : undefined;
   if (logical) {
     if (rhsT) {
-      if (rhsT._isLogical !== true) {
+      if (rhsT.cls !== "logical") {
         const conv = allocFloat64Array(rhsT.data.length);
         for (let i = 0; i < conv.length; i++)
           conv[i] = toLogicalValue(rhsT.data[i], rhsIm ? rhsIm[i] : 0);
@@ -406,7 +401,7 @@ function deleteFromTensor(
     gatherNumbers(base.imag, plan, imag);
     if (!hasNonZero(imag)) imag = undefined;
   }
-  return new RuntimeTensor(data, plan.shape, imag, base._isLogical);
+  return new RuntimeTensor(data, plan.shape, imag, base.cls);
 }
 
 // ── Char arrays ──────────────────────────────────────────────────────────
