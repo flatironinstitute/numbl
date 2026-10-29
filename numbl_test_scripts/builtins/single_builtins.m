@@ -30,7 +30,7 @@ cases = {
   % shape and set operations
   'reshape(A, 1, 4)', 'single'; 'repmat(v, 2, 1)', 'single'; 'flip(v)', 'single';
   'circshift(v, 1)', 'single'; 'permute(A, [2 1])', 'single'; 'tril(A)', 'single';
-  'sort(v)', 'single'; 'unique(v)', 'single'; 'cat(1, v, v)', 'single'; 'horzcat(v, 1)', 'single';
+  'sort(v)', 'single'; 'unique(v)', 'single'; 'cat(1, v, v)', 'single'; 'cat(3, A, A)', 'single'; 'cat(single(2), 1, 2)', 'double'; 'horzcat(v, 1)', 'single';
   'diag(A)', 'single'; 'nonzeros(v)', 'single'; 'linspace(s, 1, 3)', 'single'; 'colon(s, 2)', 'single';
   % index and size outputs stay double
   'size(A)', 'double'; 'numel(A)', 'double'; 'find(v)', 'double'; 'length(v)', 'double';

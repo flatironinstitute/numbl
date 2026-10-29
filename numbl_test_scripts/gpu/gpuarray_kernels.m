@@ -119,6 +119,54 @@ H2(:, 1) = single(1:37)';
 same(G2, H2, 0);
 same(GA, A, 0);
 
+% predicates, mod/rem, atan2/hypot
+N = A;
+N(5) = NaN;
+N(9) = Inf;
+same(isnan(gpuArray(N)), isnan(N), 0);
+same(isinf(gpuArray(N)), isinf(N), 0);
+same(isfinite(gpuArray(N)), isfinite(N), 0);
+same(mod(GA * 3, 0.7), mod(A * 3, 0.7), 1e-6);
+same(rem(GA * 3, 0.7), rem(A * 3, 0.7), 1e-6);
+same(mod(gpuArray(single([5 -5 0])), 0), single([5 -5 0]), 0);
+same(rem(gpuArray(single([5 -5])), 0), single([NaN NaN]), 0);
+same(atan2(GA, GB), atan2(A, B), 1e-5);
+same(hypot(GA, GB), hypot(A, B), 1e-6);
+
+% any/all, index outputs, cumulative sums, dot, norm
+same(any(GA > 2), any(A > 2), 0);
+same(all(GA > -2, 2), all(A > -2, 2), 0);
+same(any(GA > 3, 'all'), any(A > 3, 'all'), 0);
+[m, i] = max(gpuArray(N));
+[mh, ih] = max(N);
+same(m, mh, 0);
+same(i, ih, 0);
+[m, i] = min(GB, [], 2);
+[mh, ih] = min(B, [], 2);
+same(m, mh, 0);
+same(i, ih, 0);
+[m, i] = max(gpuArray(v));
+[mh, ih] = max(v);
+same(m, mh, 0);
+same(i, ih, 0);
+same(cumsum(GA), cumsum(A), 1e-5);
+same(cumsum(GA, 2), cumsum(A, 2), 1e-5);
+same(cumprod(GA(1:6, :) / 2), cumprod(A(1:6, :) / 2), 1e-5);
+same(cumsum(gpuArray(v)), cumsum(v), 1e-5);
+same(dot(gpuArray(v), gpuArray(v)), dot(v, v), 1e-5);
+same(norm(gpuArray(v)), norm(v), 1e-5);
+same(norm(gpuArray(v), 1), norm(v, 1), 1e-5);
+same(norm(gpuArray(v), Inf), norm(v, Inf), 0);
+
+% concatenation and repmat
+same([GA, GB], [A, B], 0);
+same([GA; GB], [A; B], 0);
+same(cat(3, GA, GB), cat(3, A, B), 0);
+same([GA(:, 1), ones(37, 1)], [A(:, 1), ones(37, 1, 'single')], 0);
+same([gpuArray(single(1)), 2, 3], single([1 2 3]), 0);
+same(repmat(GA(1:3, 1:2), 2, 3), repmat(A(1:3, 1:2), 2, 3), 0);
+same(repmat(GA(1, :), [4 1]), repmat(A(1, :), [4 1]), 0);
+
 % classes and shapes of results
 assert(strcmp(underlyingType(GA + 1), 'single') && strcmp(underlyingType(GA < 1), 'logical'));
 assert(isequal(size(sum(GA)), [1 53]) && isequal(size(sum(GA, 2)), [37 1]));

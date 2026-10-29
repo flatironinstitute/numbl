@@ -29,7 +29,12 @@ import {
 import {
   DOMAIN_OPS,
   complexResultError,
+  concatKernel,
+  dotKernel,
   elementwiseKernel,
+  normKernel,
+  repmatKernel,
+  scanKernel,
   mtimesKernel,
   reduceKernel,
   transposeKernel,
@@ -311,7 +316,10 @@ classMethod(DEVICE_CLASS, {
 /** Register a gpuArray method `name` that tries `kernel` first. */
 function kernelMethod(
   name: string,
-  kernel: (args: RuntimeValue[], nargout: number) => RuntimeValue | null
+  kernel: (
+    args: RuntimeValue[],
+    nargout: number
+  ) => RuntimeValue | RuntimeValue[] | null
 ): void {
   classMethod("gpuArray", {
     name,
@@ -351,6 +359,13 @@ for (const op of [
   "fix",
   "round",
   "sign",
+  "isnan",
+  "isinf",
+  "isfinite",
+  "mod",
+  "rem",
+  "atan2",
+  "hypot",
 ])
   kernelMethod(op, (args, nargout) =>
     nargout <= 1 ? elementwiseKernel(op, args) : null
@@ -386,8 +401,28 @@ for (const op of ["max", "min"] as const)
       : reduceKernel(op, args, nargout)
   );
 
-for (const op of ["sum", "prod", "mean"] as const)
+for (const op of ["sum", "prod", "mean", "any", "all"] as const)
   kernelMethod(op, (args, nargout) => reduceKernel(op, args, nargout));
+
+for (const op of ["cumsum", "cumprod"] as const)
+  kernelMethod(op, (args, nargout) =>
+    nargout <= 1 ? scanKernel(op, args) : null
+  );
+
+kernelMethod("dot", (args, nargout) => (nargout <= 1 ? dotKernel(args) : null));
+kernelMethod("norm", (args, nargout) =>
+  nargout <= 1 ? normKernel(args) : null
+);
+kernelMethod("repmat", (args, nargout) =>
+  nargout <= 1 ? repmatKernel(args) : null
+);
+kernelMethod("horzcat", args => concatKernel(1, args));
+kernelMethod("vertcat", args => concatKernel(0, args));
+kernelMethod("cat", args =>
+  typeof args[0] === "number" && Number.isInteger(args[0]) && args[0] >= 1
+    ? concatKernel(args[0] - 1, args.slice(1))
+    : null
+);
 
 kernelMethod("mtimes", args => mtimesKernel(args));
 kernelMethod("transpose", args => transposeKernel(args));

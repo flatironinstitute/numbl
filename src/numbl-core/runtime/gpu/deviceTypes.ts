@@ -91,14 +91,40 @@ export interface GpuKernels {
     sel: KernelSelection,
     rhs: KernelOperand
   ): unknown;
-  /** `sum`, `prod`, `max` or `min` (NaN skipped) over the middle dimension
-   *  of `src` viewed as [inner, len, outer]. */
+  /** `sum`, `prod`, `max` or `min` (NaN skipped), `any` or `all` over the
+   *  middle dimension of `src` viewed as [inner, len, outer]. */
   reduce(
     op: string,
     src: unknown,
     inner: number,
     len: number,
     outer: number
+  ): unknown;
+  /** `max` or `min` over the middle dimension, with the 0-based position
+   *  of the first extreme value along it (as f32: positions below 2^24). */
+  reduceWithIndex(
+    op: string,
+    src: unknown,
+    inner: number,
+    len: number,
+    outer: number
+  ): { value: unknown; index: unknown };
+  /** `cumsum` or `cumprod` over the middle dimension. */
+  scan(
+    op: string,
+    src: unknown,
+    inner: number,
+    len: number,
+    outer: number
+  ): unknown;
+  /** Concatenation into a new buffer of `total` elements: each part puts
+   *  `block` contiguous elements per slab (`outer` slabs) at `offset`
+   *  within the slab of `stride` elements. */
+  concat(
+    total: number,
+    outer: number,
+    stride: number,
+    parts: { src: unknown; block: number; offset: number }[]
   ): unknown;
   /** a (m x k) * b (k x n). */
   matmul(a: unknown, b: unknown, m: number, k: number, n: number): unknown;
