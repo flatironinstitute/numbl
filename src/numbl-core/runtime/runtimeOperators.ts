@@ -5,7 +5,7 @@
  * None of these depend on the Runtime class instance.
  */
 
-import { BinaryOperation } from "../parser/index.js";
+import { BinaryOperation, UnaryOperation } from "../parser/index.js";
 import {
   type RuntimeValue,
   type RuntimeLogical,
@@ -38,6 +38,8 @@ import {
   RuntimeError,
   tensorSize2D,
 } from "../runtime/index.js";
+import { invalidDataTypeError } from "./error.js";
+import { charToNumericTensor } from "./indexing.js";
 import {
   isRuntimeNumber,
   isRuntimeLogical,
@@ -47,7 +49,9 @@ import {
   isRuntimeSparseMatrix,
   isRuntimeStringArray,
   isRuntimeStructArray,
+  isRuntimeClassInstance,
   isRuntimeClassInstanceArray,
+  isRuntimeComplexNumber,
   type RuntimeClassInstance,
   stringArrayValue,
 } from "../runtime/types.js";
@@ -81,11 +85,67 @@ import {
 } from "./runtimeHelpers.js";
 import { allocFloat64Array } from "./alloc.js";
 
-// ── Unary operators ─────────────────────────────────────────────────────
+// ── Operator methods ────────────────────────────────────────────────────
 
+/** The method each binary operator calls (its functional form): an object
+ *  operand dispatches the operator to this method of its class. `&&` and
+ *  `||` have none. */
+export const BINARY_OPERATOR_METHODS: Readonly<
+  Partial<Record<string, string>>
+> = {
+  [BinaryOperation.Add]: "plus",
+  [BinaryOperation.Sub]: "minus",
+  [BinaryOperation.Mul]: "mtimes",
+  [BinaryOperation.ElemMul]: "times",
+  [BinaryOperation.Div]: "mrdivide",
+  [BinaryOperation.ElemDiv]: "rdivide",
+  [BinaryOperation.LeftDiv]: "mldivide",
+  [BinaryOperation.ElemLeftDiv]: "ldivide",
+  [BinaryOperation.Pow]: "mpower",
+  [BinaryOperation.ElemPow]: "power",
+  [BinaryOperation.Equal]: "eq",
+  [BinaryOperation.NotEqual]: "ne",
+  [BinaryOperation.Less]: "lt",
+  [BinaryOperation.LessEqual]: "le",
+  [BinaryOperation.Greater]: "gt",
+  [BinaryOperation.GreaterEqual]: "ge",
+  [BinaryOperation.BitAnd]: "and",
+  [BinaryOperation.BitOr]: "or",
+};
+
+/** The method each unary operator calls. */
+export const UNARY_OPERATOR_METHODS: Readonly<Record<UnaryOperation, string>> =
+  {
+    [UnaryOperation.Plus]: "uplus",
+    [UnaryOperation.Minus]: "uminus",
+    [UnaryOperation.Not]: "not",
+    [UnaryOperation.Transpose]: "ctranspose",
+    [UnaryOperation.NonConjugateTranspose]: "transpose",
+  };
+
+// ── Unary operators ─────────────────────────────────────────────────────
+// These are the built-in operations, reached after method dispatch (see
+// `Runtime`) found no overload.
+
+/** `+v`: numeric values unchanged; char and logical become double. */
 export function uplus(v: unknown): RuntimeValue {
   if (typeof v === "number") return v;
-  return ensureRuntimeValue(v);
+  if (typeof v === "boolean") return v ? 1 : 0;
+  const mv = ensureRuntimeValue(v);
+  if (isRuntimeLogical(mv)) return mv ? 1 : 0;
+  if (isRuntimeChar(mv)) return charToNumericTensor(mv);
+  if (isRuntimeTensor(mv)) {
+    if (!mv._isLogical) return mv;
+    return RTV.tensor(allocFloat64Array(mv.data), mv.shape);
+  }
+  if (
+    isRuntimeNumber(mv) ||
+    isRuntimeComplexNumber(mv) ||
+    isRuntimeSparseMatrix(mv) ||
+    (isRuntimeClassInstance(mv) && mv._builtinData !== undefined)
+  )
+    return mv;
+  throw invalidDataTypeError();
 }
 
 export function uminus(v: unknown): unknown {
@@ -103,6 +163,12 @@ export function ctranspose(v: unknown): unknown {
   return mConjugateTranspose(ensureRuntimeValue(v));
 }
 
+function notRealError(): RuntimeError {
+  return new RuntimeError("Operands must be real.", null, {
+    identifier: "MATLAB:Not:operandsNotReal",
+  });
+}
+
 export function not(v: unknown): RuntimeLogical | RuntimeTensor {
   if (typeof v === "number") return RTV.logical(v === 0);
   if (typeof v === "boolean") return RTV.logical(!v);
@@ -110,15 +176,33 @@ export function not(v: unknown): RuntimeLogical | RuntimeTensor {
   if (isRuntimeNumber(mv)) return RTV.logical(mv === 0);
   if (isRuntimeLogical(mv)) return RTV.logical(!mv);
   if (isRuntimeSparseMatrix(mv)) return not(sparseToDenseFn(mv));
+  if (isRuntimeChar(mv)) return not(charToNumericTensor(mv));
+  if (isRuntimeComplexNumber(mv)) {
+    if (mv.im !== 0) throw notRealError();
+    return RTV.logical(mv.re === 0);
+  }
   if (isRuntimeTensor(mv)) {
     const result = allocFloat64Array(mv.data.length);
-    for (let i = 0; i < mv.data.length; i++)
-      result[i] = mv.data[i] === 0 && (!mv.imag || mv.imag[i] === 0) ? 1 : 0;
+    for (let i = 0; i < mv.data.length; i++) {
+      if (mv.imag && mv.imag[i] !== 0) throw notRealError();
+      result[i] = mv.data[i] === 0 ? 1 : 0;
+    }
     const t = RTV.tensor(result, mv.shape);
     t._isLogical = true;
     return t;
   }
-  return RTV.logical(false);
+  // `classdef Foo < logical` (or a numeric superclass) without a `not`.
+  if (isRuntimeClassInstance(mv) && mv._builtinData !== undefined)
+    return not(mv._builtinData);
+  throw invalidDataTypeError();
+}
+
+/** An operand of `&` / `|` as a numeric value: char becomes its codes;
+ *  cells, structs, strings, function handles and objects are rejected. */
+function logicalOperand(v: RuntimeValue): RuntimeValue {
+  if (isRuntimeChar(v)) return charToNumericTensor(v);
+  if (isNumericKind(v) || isRuntimeComplexNumber(v)) return v;
+  throw invalidDataTypeError();
 }
 
 // ── Binary operators ────────────────────────────────────────────────────
@@ -242,10 +326,16 @@ export function binop(op: string, a: unknown, b: unknown): unknown {
         : isRuntimeSparseMatrix(mb)
           ? sparseToDenseFn(mb)
           : mb;
-      if (!isRuntimeTensor(tensorA) || !isRuntimeTensor(tensorB))
+      if (!isRuntimeTensor(tensorA) || !isRuntimeTensor(tensorB)) {
+        if (
+          !(isNumericKind(tensorA) || isRuntimeChar(tensorA)) ||
+          !(isNumericKind(tensorB) || isRuntimeChar(tensorB))
+        )
+          throw invalidDataTypeError();
         throw new RuntimeError(
           "LeftDiv (\\): operands must be numeric matrices"
         );
+      }
       const [mA, nA] = tensorSize2D(tensorA);
       const [mB, nB] = tensorSize2D(tensorB);
       if (mB !== mA)
@@ -291,32 +381,38 @@ export function binop(op: string, a: unknown, b: unknown): unknown {
     case BinaryOperation.GreaterEqual:
       result = mGreaterEqual(ma, mb);
       break;
-    case BinaryOperation.BitAnd:
+    case BinaryOperation.BitAnd: {
+      const la = logicalOperand(ma);
+      const lb = logicalOperand(mb);
       if (
-        (isRuntimeTensor(ma) || isRuntimeTensor(mb)) &&
-        isNumericKind(ma) &&
-        isNumericKind(mb)
+        (isRuntimeTensor(la) || isRuntimeTensor(lb)) &&
+        isNumericKind(la) &&
+        isNumericKind(lb)
       ) {
-        result = elementWiseLogicalOp(ma, mb, (x, y) =>
+        result = elementWiseLogicalOp(la, lb, (x, y) =>
           x !== 0 && y !== 0 ? 1 : 0
         );
       } else {
-        result = RTV.logical(toBool(ma) && toBool(mb));
+        result = RTV.logical(toBool(la) && toBool(lb));
       }
       break;
-    case BinaryOperation.BitOr:
+    }
+    case BinaryOperation.BitOr: {
+      const la = logicalOperand(ma);
+      const lb = logicalOperand(mb);
       if (
-        (isRuntimeTensor(ma) || isRuntimeTensor(mb)) &&
-        isNumericKind(ma) &&
-        isNumericKind(mb)
+        (isRuntimeTensor(la) || isRuntimeTensor(lb)) &&
+        isNumericKind(la) &&
+        isNumericKind(lb)
       ) {
-        result = elementWiseLogicalOp(ma, mb, (x, y) =>
+        result = elementWiseLogicalOp(la, lb, (x, y) =>
           x !== 0 || y !== 0 ? 1 : 0
         );
       } else {
-        result = RTV.logical(toBool(ma) || toBool(mb));
+        result = RTV.logical(toBool(la) || toBool(lb));
       }
       break;
+    }
     default:
       throw new RuntimeError(`Unknown binary operator: ${op}`);
   }

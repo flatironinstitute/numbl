@@ -5,7 +5,11 @@
 
 import { ensureRuntimeValue } from "../runtime/runtimeHelpers.js";
 import { RuntimeError } from "../runtime/error.js";
-import { invokeBuiltin, NOT_A_BUILTIN } from "../runtime/runtimeDispatch.js";
+import {
+  invokeBuiltin,
+  invokeClassMethod,
+  NOT_A_BUILTIN,
+} from "../runtime/runtimeDispatch.js";
 import {
   resolveName,
   targetOf,
@@ -97,6 +101,14 @@ export function interpretTarget(
       return interpretClassMethod(interp, target, args, nargout);
     case "workspaceClassConstructor":
       return instantiateClass(interp, target.className, args, nargout);
+    case "builtinMethod":
+      return invokeClassMethod(
+        interp.rt,
+        target.className,
+        target.methodName,
+        nargout,
+        args
+      );
   }
 }
 

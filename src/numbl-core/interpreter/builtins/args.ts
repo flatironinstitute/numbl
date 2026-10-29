@@ -6,7 +6,7 @@
  * real-only argument) instead of silently dropping data.
  */
 
-import { RuntimeError } from "../../runtime/error.js";
+import { RuntimeError, invalidDataTypeError } from "../../runtime/error.js";
 import {
   isRuntimeChar,
   isRuntimeComplexNumber,
@@ -69,12 +69,7 @@ export function checkNargout(
 }
 
 /** MATLAB's error for a non-numeric argument to a math function. */
-export function invalidDataTypeError(): RuntimeError {
-  return builtinError(
-    "MATLAB:math:mustBeNumericCharOrLogical",
-    "Invalid data type. Argument must be numeric, char, or logical."
-  );
-}
+export { invalidDataTypeError };
 
 /** MATLAB's error for complex input to a real-only argument. */
 export function mustBeRealError(): RuntimeError {

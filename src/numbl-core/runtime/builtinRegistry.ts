@@ -79,3 +79,48 @@ export function getIBuiltinNargout(name: string): number | undefined {
   const max = ib.nargout[1];
   return max === Infinity ? -1 : max;
 }
+
+// ── Methods of TypeScript-implemented classes ───────────────────────────
+//
+// A class implemented in TypeScript (datetime, duration, decomposition,
+// ...) has no classdef, so its methods cannot come from a ClassInfo. It
+// registers them here by class name, as IBuiltins that take the objects as
+// ordinary arguments. Function resolution (a method of an object argument)
+// and the operator hooks consult this table for any value whose dispatch
+// class (`dispatchClassOf` in kinds.ts) has an entry, so `a + b` and
+// `plus(a, b)` both reach a registered `plus`.
+
+const classMethodTable = new Map<string, Map<string, IBuiltin>>();
+
+/** Register `method` (its `name` is the method name) as a method of the
+ *  TypeScript-implemented class `className`. */
+export function registerClassMethod(className: string, method: IBuiltin): void {
+  let methods = classMethodTable.get(className);
+  if (!methods) {
+    methods = new Map();
+    classMethodTable.set(className, methods);
+  }
+  if (methods.has(method.name))
+    throw new Error(
+      `registerClassMethod: duplicate method '${method.name}' for class '${className}'`
+    );
+  methods.set(method.name, method);
+}
+
+/** The registered method `methodName` of `className`, if any. */
+export function getClassMethod(
+  className: string,
+  methodName: string
+): IBuiltin | undefined {
+  return classMethodTable.get(className)?.get(methodName);
+}
+
+/** Whether `className` has registered methods. */
+export function hasClassMethods(className: string): boolean {
+  return classMethodTable.has(className);
+}
+
+/** The names of the registered methods of `className`. */
+export function classMethodNames(className: string): string[] {
+  return Array.from(classMethodTable.get(className)?.keys() ?? []);
+}

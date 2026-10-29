@@ -34,6 +34,7 @@ import {
 import { isaValue, kstr, valueClass, valueShape } from "./kinds.js";
 import { incref, decref } from "./refcount.js";
 import {
+  getClassMethod,
   getIBuiltin,
   getIBuiltinNargin,
   isBuiltin,
@@ -74,6 +75,30 @@ export function invokeBuiltin(
   const margs = args.map(a => ensureRuntimeValue(a));
   if (!rt.profilingEnabled) return ib.call(margs, nargout);
   rt.profileEnter("builtin:interp:" + name);
+  try {
+    return ib.call(margs, nargout);
+  } finally {
+    rt.profileLeave();
+  }
+}
+
+/** Call the method `methodName` a TypeScript-implemented class registered
+ *  (`registerClassMethod`). */
+export function invokeClassMethod(
+  rt: Runtime,
+  className: string,
+  methodName: string,
+  nargout: number,
+  args: unknown[]
+): unknown {
+  const ib = getClassMethod(className, methodName);
+  if (!ib)
+    throw new RuntimeError(
+      `No method '${methodName}' for class '${className}'`
+    );
+  const margs = args.map(a => ensureRuntimeValue(a));
+  if (!rt.profilingEnabled) return ib.call(margs, nargout);
+  rt.profileEnter(`builtin:interp:${className}.${methodName}`);
   try {
     return ib.call(margs, nargout);
   } finally {

@@ -10,6 +10,7 @@ import {
   isRuntimeLogical,
   isRuntimeString,
   isRuntimeChar,
+  isRuntimeFunction,
   isRuntimeTensor,
   isRuntimeCell,
   isRuntimeComplexNumber,
@@ -25,8 +26,8 @@ import {
   type RuntimeStruct,
   stringArrayValue,
 } from "../runtime/types.js";
-import { kstr } from "../runtime/kinds.js";
-import { RuntimeError } from "../runtime/error.js";
+import { kstr, valueNumel } from "../runtime/kinds.js";
+import { RuntimeError, invalidDataTypeError } from "../runtime/error.js";
 import { RTV } from "../runtime/constructors.js";
 import { tensorSize2D, colMajorIndex } from "../runtime/utils.js";
 import { toNumber } from "../runtime/convert.js";
@@ -54,6 +55,13 @@ import { allocFloat64Array } from "../runtime/alloc.js";
 
 // ── Complex helpers ──────────────────────────────────────────────────────
 
+/** The error for an operand the complex arithmetic path cannot use. */
+function complexOperandError(v: RuntimeValue): RuntimeError {
+  return isRuntimeChar(v)
+    ? new RuntimeError(`Cannot use ${kstr(v)} in complex arithmetic`)
+    : invalidDataTypeError();
+}
+
 function toComplex(v: RuntimeValue): { re: number; im: number } {
   if (isRuntimeComplexNumber(v)) return { re: v.re, im: v.im };
   if (isRuntimeNumber(v)) return { re: v, im: 0 };
@@ -62,7 +70,7 @@ function toComplex(v: RuntimeValue): { re: number; im: number } {
     return { re: v.data[0], im: v.imag ? v.imag[0] : 0 };
   }
   if (isRuntimeSparseMatrix(v)) return toComplex(densify(v));
-  throw new RuntimeError(`Cannot use ${kstr(v)} in complex arithmetic`);
+  throw complexOperandError(v);
 }
 
 function isComplexOrMixed(a: RuntimeValue, b: RuntimeValue): boolean {
@@ -110,7 +118,7 @@ function toComplexParts(v: RuntimeValue):
     return { scalar: false, re: v.data, im, shape: v.shape };
   }
   if (isRuntimeSparseMatrix(v)) return toComplexParts(densify(v));
-  throw new RuntimeError(`Cannot use ${kstr(v)} in complex arithmetic`);
+  throw complexOperandError(v);
 }
 
 /** Complex comparison operation supporting scalars and tensors.
@@ -1380,6 +1388,16 @@ function transposeStringArray(v: RuntimeStringArray): RuntimeValue {
   return stringArrayValue(out, [c, r]);
 }
 
+/** Transpose of a scalar object of another kind (a dictionary or graphics
+ *  handle is an identity); a function handle cannot be transposed. */
+function transposeOther(v: RuntimeValue): RuntimeValue {
+  if (isRuntimeFunction(v) || valueNumel(v) !== 1)
+    throw new RuntimeError("Data type not supported.", null, {
+      identifier: "MATLAB:transpose:unsupportedType",
+    });
+  return v;
+}
+
 /** Transpose (non-conjugate for complex scalars and tensors) */
 export function mTranspose(v: RuntimeValue): RuntimeValue {
   if (isRuntimeSparseMatrix(v)) return sparseTranspose(v);
@@ -1396,8 +1414,7 @@ export function mTranspose(v: RuntimeValue): RuntimeValue {
   if (isRuntimeClassInstanceArray(v)) return transposeClassInstanceArray(v);
   if (isRuntimeStruct(v)) return v;
   if (isRuntimeStructArray(v)) return transposeStructArray(v);
-  if (!isRuntimeTensor(v))
-    throw new RuntimeError("Cannot transpose non-numeric value");
+  if (!isRuntimeTensor(v)) return transposeOther(v);
   return transposeCore(v, false);
 }
 
@@ -1417,8 +1434,7 @@ export function mConjugateTranspose(v: RuntimeValue): RuntimeValue {
   if (isRuntimeClassInstanceArray(v)) return transposeClassInstanceArray(v);
   if (isRuntimeStruct(v)) return v;
   if (isRuntimeStructArray(v)) return transposeStructArray(v);
-  if (!isRuntimeTensor(v))
-    throw new RuntimeError("Cannot transpose non-numeric value");
+  if (!isRuntimeTensor(v)) return transposeOther(v);
   return transposeCore(v, true);
 }
 
@@ -1607,7 +1623,7 @@ function asNumeric(
       tensor: RTV.tensorRaw(codes, [1, v.value.length]),
     };
   }
-  throw new RuntimeError(`Cannot use ${kstr(v)} in numeric operation`);
+  throw invalidDataTypeError();
 }
 
 /**

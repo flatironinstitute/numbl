@@ -6,6 +6,7 @@
  */
 
 import type { RuntimeValue } from "./types.js";
+import { hasClassMethods } from "./builtinRegistry.js";
 
 /** Every kind of runtime value: the three primitives, then each
  *  container class's `kind`. */
@@ -244,6 +245,24 @@ export function isObjectValue(v: RuntimeValue): boolean {
 
 export function isRealValue(v: RuntimeValue): boolean {
   return kindInfo(v).isReal(v);
+}
+
+/** The class whose methods calls and operators on `v` dispatch to, or null
+ *  for a value of a built-in type (double, char, cell, struct, ...). A
+ *  classdef object (scalar or array) dispatches to its class, as does any
+ *  object (`isObject`) whose class has methods registered from TypeScript
+ *  (`registerClassMethod`). Resolution (a method of an object argument)
+ *  and the operator hooks in `Runtime` use this one rule. */
+export function dispatchClassOf(v: unknown): string | null {
+  if (typeof v === "string") return hasClassMethods("string") ? "string" : null;
+  if (typeof v !== "object" || v === null) return null;
+  const rv = v as Exclude<RuntimeValue, number | boolean | string>;
+  const info = KINDS[rv.kind] as KindInfo<RuntimeValue> | undefined;
+  if (!info?.isObject) return null;
+  if (rv.kind === "class_instance" || rv.kind === "class_instance_array")
+    return rv.className;
+  const cls = info.className(rv);
+  return hasClassMethods(cls) ? cls : null;
 }
 
 /** For the default of an exhaustive switch: a new kind that reaches it

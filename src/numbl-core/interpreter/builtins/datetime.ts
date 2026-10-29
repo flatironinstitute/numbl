@@ -41,7 +41,7 @@ import {
 } from "../../runtime/types.js";
 import { RTV, RuntimeError } from "../../runtime/index.js";
 import { toNumber, toString } from "../../runtime/convert.js";
-import { builtin } from "./builtin.js";
+import { builtin, classMethod } from "./builtin.js";
 import { builtinError } from "./args.js";
 import { unsupportedFormError } from "./text-args.js";
 
@@ -379,21 +379,18 @@ for (const unit of DURATION_UNITS) {
 // ── Arithmetic dispatch for datetime / duration ────────────────────────────
 
 /**
- * Attempt to handle a named binary operator ("plus", "minus", "lt", ...)
- * when at least one operand is a datetime or duration class_instance.
- * Returns the result value on success, or undefined to let the generic
- * numeric path run.
+ * A binary operator method ("plus", "minus", "lt", ...) of datetime and
+ * duration: at least one operand is a datetime or duration.
  */
-export function tryDatetimeDurationBinop(
+function datetimeDurationBinop(
   opName: string,
   a: RuntimeValue,
   b: RuntimeValue
-): RuntimeValue | undefined {
+): RuntimeValue {
   const aDt = isDatetime(a);
   const bDt = isDatetime(b);
   const aDur = isDuration(a);
   const bDur = isDuration(b);
-  if (!aDt && !bDt && !aDur && !bDur) return undefined;
 
   if (opName === "minus") {
     if (aDt && bDt) {
@@ -459,3 +456,11 @@ export function tryDatetimeDurationBinop(
     `Unsupported operator '${opName}' for datetime/duration`
   );
 }
+
+for (const className of ["datetime", "duration"])
+  for (const name of ["plus", "minus", "lt", "le", "gt", "ge", "eq", "ne"])
+    classMethod(className, {
+      name,
+      nargin: 2,
+      apply: args => datetimeDurationBinop(name, args[0], args[1]),
+    });

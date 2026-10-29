@@ -88,6 +88,7 @@ export function functionBodyFor(
         () => classMethodBody(code, target.className, target.methodName)
       );
     case "builtin":
+    case "builtinMethod":
     case "jsUserFunction":
     case "workspaceClassConstructor":
       return null;
