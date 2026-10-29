@@ -30,6 +30,7 @@ import {
 } from "../../runtime/gpu/gpuArray.js";
 import {
   DOMAIN_OPS,
+  castKernel,
   complexElementwiseKernel,
   complexResultError,
   concatKernel,
@@ -38,6 +39,8 @@ import {
   fftKernel,
   normKernel,
   repmatKernel,
+  reshapeKernel,
+  scalarDivideKernel,
   scanKernel,
   mtimesKernel,
   reduceKernel,
@@ -504,6 +507,17 @@ kernelMethod("cat", args =>
 );
 
 kernelMethod("mtimes", args => mtimesKernel(args));
+for (const op of ["mrdivide", "mldivide"] as const)
+  kernelMethod(op, (args, nargout) =>
+    nargout <= 1 ? scalarDivideKernel(op, args) : null
+  );
+for (const cls of ["single", "logical"] as const)
+  kernelMethod(cls, (args, nargout) =>
+    nargout <= 1 ? castKernel(cls, args) : null
+  );
+kernelMethod("reshape", (args, nargout) =>
+  nargout <= 1 ? reshapeKernel(args) : null
+);
 kernelMethod("transpose", args => transposeKernel(args));
 kernelMethod("ctranspose", args => transposeKernel(args, true));
 

@@ -26,14 +26,21 @@ export const COLON_INDEX: RuntimeValue = "__COLON__";
 
 /** Linear offsets into column-major storage. When `offsets` is null the
  *  k-th offset is `start + k * step`; otherwise it is `offsets[k] - bias`
- *  (so raw 1-based index data can be used without copying). */
+ *  (so raw 1-based index data can be used without copying). A planner
+ *  asked for a `grid` (the GPU kernels) may give one instead of offsets:
+ *  for k = i0 + counts[0] * (i1 + counts[1] * (...)), the offset is
+ *  `start + i0 * strides[0] + i1 * strides[1] + ...`. */
 export interface Selection {
   n: number;
   start: number;
   step: number;
   offsets: ArrayLike<number> | null;
   bias: number;
+  grid?: { counts: number[]; strides: number[] };
 }
+
+/** The most dimensions a `grid` selection has. */
+export const GRID_DIMS = 4;
 
 /** Result of planning. All plans share one object layout (fields not
  *  relevant to a plan kind keep their defaults). */
@@ -63,11 +70,23 @@ function mkPlan(
   bias: number,
   shape: number[]
 ): Plan {
-  return { n, start, step, offsets, bias, shape, grow: null, noop: false };
+  return {
+    n,
+    start,
+    step,
+    offsets,
+    bias,
+    grid: undefined,
+    shape,
+    grow: null,
+    noop: false,
+  };
 }
 
 function selPlan(sel: Selection, shape: number[]): Plan {
-  return mkPlan(sel.n, sel.start, sel.step, sel.offsets, sel.bias, shape);
+  const plan = mkPlan(sel.n, sel.start, sel.step, sel.offsets, sel.bias, shape);
+  if (sel.grid) plan.grid = sel.grid;
+  return plan;
 }
 
 /** The k-th offset of a selection. */
@@ -336,10 +355,12 @@ function subPlan(s: Sub, shape: number[]): Plan {
 
 /** Offsets of the cartesian product of per-dimension subscripts over
  *  `dims`, in column-major order. Strided and contiguous selections
- *  (columns, rows, slabs, ranges) avoid materializing offsets. */
+ *  (columns, rows, slabs, ranges) avoid materializing offsets, and so,
+ *  with `grid`, does a product of ranges (`A(2:end-1, 2:end-1)`). */
 function buildSelection(
   dims: readonly number[],
-  ss: readonly Sub[]
+  ss: readonly Sub[],
+  grid = false
 ): Selection {
   const k = ss.length;
   let n = 1;
@@ -383,6 +404,25 @@ function buildSelection(
         break;
       }
     if (block) return { n, start: first, step: 1, offsets: null, bias: 0 };
+  }
+
+  if (grid && ss.every(s => s.pos === null)) {
+    const counts: number[] = [];
+    const gs: number[] = [];
+    for (let d = 0; d < k; d++)
+      if (ss[d].count > 1) {
+        counts.push(ss[d].count);
+        gs.push(strides[d]);
+      }
+    if (counts.length <= GRID_DIMS)
+      return {
+        n,
+        start: first,
+        step: 0,
+        offsets: null,
+        bias: 0,
+        grid: { counts, strides: gs },
+      };
   }
 
   // General case: materialize. Dimension 0 is the inner loop; the rest
@@ -475,11 +515,13 @@ export function scalarSubsOffset(
   return lin;
 }
 
-/** Plan `A(subs{:})` for an array of the given shape. */
+/** Plan `A(subs{:})` for an array of the given shape (with `grid`, see
+ *  `Selection`). */
 export function planIndex(
   shape: readonly number[],
   numel: number,
-  subs: readonly RuntimeValue[]
+  subs: readonly RuntimeValue[],
+  grid = false
 ): ReadPlan {
   const k = subs.length;
   if (k === 1) {
@@ -518,7 +560,7 @@ export function planIndex(
     }
   }
   const { dims, ss } = readSubs(shape, subs);
-  return selPlan(buildSelection(dims, ss), readShape(ss));
+  return selPlan(buildSelection(dims, ss, grid), readShape(ss));
 }
 
 /** Resolve and bounds-check `k >= 2` read subscripts. */
@@ -665,13 +707,14 @@ function inferColonExtents(
  *  shape `rhsShape`. A one-element RHS is scalar-expanded; otherwise its
  *  element count (linear indexing) or non-singleton dimensions (subscript
  *  indexing) must match the selection. Out-of-range subscripts grow the
- *  target (`grow`). */
+ *  target (`grow`). With `grid`, see `Selection`. */
 export function planStore(
   shape: readonly number[],
   numel: number,
   subs: readonly RuntimeValue[],
   rhsNumel: number,
-  rhsShape: readonly number[]
+  rhsShape: readonly number[],
+  grid = false
 ): StorePlan {
   const k = subs.length;
   if (k === 1) {
@@ -711,7 +754,7 @@ export function planStore(
     rhsNumel,
     rhsShape
   );
-  const plan = selPlan(buildSelection(newDims, ss), SCALAR_SHAPE_OUT);
+  const plan = selPlan(buildSelection(newDims, ss, grid), SCALAR_SHAPE_OUT);
   if (grows) {
     const full = collapsed
       ? newDims.slice(0, k - 1).concat(shape.slice(k - 1))

@@ -450,7 +450,7 @@ export function indexKernel(
   const k = g.device.kernels;
   if (!k || !onDevice(g, k)) return null;
   const n = numelOf(g.shape);
-  const plan = planIndex(g.shape, n, indices);
+  const plan = planIndex(g.shape, n, indices, true);
   const shape = plan.shape.slice();
   // All elements in order (`G(:)`): the same data in a new shape.
   if (
@@ -479,7 +479,7 @@ export function storeKernel(
   const cplx = g.isComplex || isComplexArg(rhs);
   if (g.cls === "logical" && cplx) return null;
   const n = numelOf(g.shape);
-  const plan = planStore(g.shape, n, indices, r.n, r.shape ?? [1, 1]);
+  const plan = planStore(g.shape, n, indices, r.n, r.shape ?? [1, 1], true);
   if (plan.grow) return null;
   const sel = selection(plan);
   const shape = g.shape.slice();
@@ -503,6 +503,14 @@ export function storeKernel(
 }
 
 function selection(sel: Selection): KernelSelection {
+  if (sel.grid)
+    return {
+      n: sel.n,
+      start: sel.start,
+      step: 0,
+      offsets: null,
+      grid: sel.grid,
+    };
   if (sel.offsets === null)
     return { n: sel.n, start: sel.start, step: sel.step, offsets: null };
   const offsets = new Uint32Array(sel.n);
@@ -1053,6 +1061,91 @@ export function fftKernel(
   const outShape = shape.slice();
   outShape[dim] = n;
   return result(g.device, buf, outShape, "single", !symmetric);
+}
+
+/** `single(G)` or `logical(G)` on the device: the array itself when it
+ *  has the class, and the same buffer for `single(L)` of a logical array
+ *  (its 0/1 values are f32 data). Other conversions run on the host. */
+export function castKernel(
+  cls: "single" | "logical",
+  args: RuntimeValue[]
+): RuntimeValue | null {
+  const g = args[0];
+  if (args.length !== 1 || !(g instanceof RuntimeGpuArray)) return null;
+  const k = g.device.kernels;
+  if (!k || !onDevice(g, k)) return null;
+  if (g.cls === cls) return g;
+  if (cls === "single" && g.cls === "logical")
+    return result(g.device, g.buffer, g.shape.slice(), "single");
+  return null;
+}
+
+/** `reshape(G, m, n, ...)` or `reshape(G, [m n ...])`, with at most one
+ *  `[]`: the same buffer in the new shape. An invalid size runs on the
+ *  host, which raises the error. */
+export function reshapeKernel(args: RuntimeValue[]): RuntimeValue | null {
+  const g = args[0];
+  if (args.length < 2 || !(g instanceof RuntimeGpuArray)) return null;
+  const k = g.device.kernels;
+  if (!k || !onDevice(g, k)) return null;
+  let dims: (number | null)[];
+  const v = args[1];
+  if (args.length === 2) {
+    if (!(v instanceof RuntimeTensor) || v.imag || v.data.length < 2)
+      return null;
+    dims = Array.from(v.data);
+  } else {
+    dims = [];
+    for (const a of args.slice(1)) {
+      if (typeof a === "number") dims.push(a);
+      else if (a instanceof RuntimeTensor && a.data.length === 0)
+        dims.push(null);
+      else return null;
+    }
+  }
+  const n = numelOf(g.shape);
+  let known = 1;
+  let free = -1;
+  for (let d = 0; d < dims.length; d++) {
+    const x = dims[d];
+    if (x === null) {
+      if (free >= 0) return null;
+      free = d;
+    } else if (!Number.isInteger(x) || x < 0) return null;
+    else known *= x;
+  }
+  if (free >= 0) {
+    if (known === 0 || n % known !== 0) return null;
+    dims[free] = n / known;
+  } else if (known !== n) return null;
+  const shape = dims as number[];
+  while (shape.length > 2 && shape[shape.length - 1] === 1) shape.pop();
+  return result(g.device, g.buffer, shape, g.cls, g.isComplex);
+}
+
+/** The element count of a value (1 for a scalar), or -1 for a value that
+ *  is not numeric or logical. */
+function numelOfValue(v: RuntimeValue): number {
+  if (typeof v === "number" || typeof v === "boolean") return 1;
+  if (v instanceof RuntimeComplexNumber) return 1;
+  if (v instanceof RuntimeGpuArray) return numelOf(v.shape);
+  if (v instanceof RuntimeTensor) return v.data.length;
+  return -1;
+}
+
+/** `A / s` and `s \ A` with a scalar `s`: element-wise division. */
+export function scalarDivideKernel(
+  op: "mrdivide" | "mldivide",
+  args: RuntimeValue[]
+): RuntimeValue | null {
+  if (args.length !== 2) return null;
+  return op === "mrdivide"
+    ? numelOfValue(args[1]) === 1
+      ? elementwiseKernel("rdivide", args)
+      : null
+    : numelOfValue(args[0]) === 1
+      ? elementwiseKernel("ldivide", args)
+      : null;
 }
 
 /** A length or dimension argument: undefined when absent or [], a
