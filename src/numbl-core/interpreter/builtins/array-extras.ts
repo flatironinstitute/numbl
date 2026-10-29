@@ -152,7 +152,9 @@ function triPart(
       }
     }
   }
-  return RTV.tensor(data, [nrows, ncols], idata);
+  // MATLAB narrows a result whose imaginary parts are all zero.
+  const im = idata && idata.some(x => x !== 0) ? idata : undefined;
+  return RTV.tensor(data, [nrows, ncols], im);
 }
 
 builtin({

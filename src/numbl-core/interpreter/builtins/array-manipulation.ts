@@ -619,8 +619,13 @@ builtin({
     if (!isRuntimeTensor(v))
       throw new RuntimeError("diag: argument must be numeric");
     const [rows, cols] = tensorSize2D(v);
+    // MATLAB: diag of a 0x0 is 0x0 for every k.
+    if (rows === 0 && cols === 0)
+      return RTV.tensor(allocFloat64Array(0), [0, 0], undefined, v.cls);
     if (rows === 1 || cols === 1) {
-      const vecLen = Math.max(rows, cols);
+      // A 1x0 or 0x1 vector has no elements (MATLAB: diag(zeros(1, 0))
+      // is 0x0).
+      const vecLen = rows * cols;
       const m2 = vecLen + absK;
       const data = allocFloat64Array(m2 * m2);
       const imag = v.imag ? allocFloat64Array(m2 * m2) : undefined;

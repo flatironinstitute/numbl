@@ -4,6 +4,8 @@
 // otherwise). Result carries `isLogical: true` so downstream index-
 // slot resolution treats it as a mask.
 
+import { jit_raise_error } from "../system/raise.js";
+
 function pred_kernel(a, fn) {
   const out = new Float64Array(a.data.length);
   for (let i = 0; i < a.data.length; i++) out[i] = fn(a.data[i]) ? 1 : 0;
@@ -33,8 +35,18 @@ export function jit_tensor_isnan(a) {
   return pred_kernel(a, Number.isNaN);
 }
 
+// `logical(x)` of one element: MATLAB raises on NaN.
+export function jit_logical_elem(x) {
+  if (Number.isNaN(x))
+    jit_raise_error(
+      "MATLAB:nologicalnan",
+      "NaN values cannot be converted to logicals."
+    );
+  return x !== 0;
+}
+
 export function jit_tensor_logical(a) {
-  return pred_kernel(a, x => x !== 0);
+  return pred_kernel(a, jit_logical_elem);
 }
 
 export function jit_tensor_isinf(a) {

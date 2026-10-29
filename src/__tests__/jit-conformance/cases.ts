@@ -837,29 +837,6 @@ export type KnownDivergence = DivergenceKind & {
  *  Unless noted, the interpreter agrees with MATLAB. */
 export const KNOWN_DIVERGENCES: KnownDivergence[] = [
   {
-    kind: "zero-imag",
-    reason:
-      "a complex result whose imaginary parts are all zero stays complex " +
-      "(e.g. exp(complex(2, 0)), log(NaN), sqrt(zeros(0, 3)))",
-    opts: ["1", "2"],
-    names: [
-      ...["atan", "besselh", "ceil", "conj", "cos", "cosh", "double", "exp"],
-      "fix",
-      ...["floor", "log", "log10", "log2", "max", "minus", "mrdivide"],
-      ...["mtimes", "plus", "power", "rdivide", "round", "sign", "sin"],
-      ...["sinh", "sqrt", "tan", "tanh", "times"],
-    ],
-  },
-  {
-    kind: "logical-class",
-    reason: "a logical input comes back double (e.g. flip, reshape, max)",
-    opts: ["1", "2"],
-    names: [
-      ...["cat", "cummax", "cummin", "diag", "flip", "fliplr", "flipud"],
-      ...["max", "min", "repmat", "reshape"],
-    ],
-  },
-  {
     kind: "ulp",
     ulps: 4,
     reason:
@@ -919,92 +896,5 @@ export const KNOWN_DIVERGENCES: KnownDivergence[] = [
     opts: ["2"],
     names: ["besselh"],
     ids: ["besselh(0, 1, 0)", "besselh(1, 1, -1.5)", "besselh(0, 1, Inf)"],
-  },
-  {
-    kind: "case",
-    reason: "logical(x) does not raise for NaN",
-    opts: ["1", "2"],
-    names: ["logical"],
-    ids: [
-      "logical(NaN)",
-      "logical([1 -2 3.5 0 -0 NaN Inf -Inf])",
-      "logical([1 -2 3; 4 NaN -6; -0 8 Inf; 0.25 -1 2])",
-      "logical([2 2 -1; 0.5 3 NaN; 1 -0 4; -7 1 0])",
-      "logical(reshape([1 -2 3 0.5 -0 6 NaN 8 -9 10 11 -12], 2, 3, 2))",
-    ],
-  },
-  {
-    kind: "case",
-    reason: "any(z, dim) of a complex array counts NaN + 1i as nonzero",
-    opts: ["1", "2"],
-    names: ["any"],
-    ids: ["any([1+2i, -3i, 4, NaN+1i, -2-0.5i], 1)"],
-  },
-  {
-    kind: "case",
-    reason: "cat(2, zeros(0, 3), zeros(0, 2)) is 0x0, not 0x5",
-    opts: ["1", "2"],
-    names: ["cat"],
-    ids: ["cat(2, zeros(0, 3), zeros(0, 2))"],
-  },
-  {
-    kind: "case",
-    reason: "norm(v, Inf) and norm(v, -Inf) skip NaN instead of returning NaN",
-    opts: ["1", "2"],
-    names: ["norm"],
-    ids: [
-      "norm([1 -2 3.5 0 -0 NaN Inf -Inf], Inf)",
-      "norm([1 -2 3.5 0 -0 NaN Inf -Inf], -Inf)",
-      "norm([1+2i, -3i, 4, NaN+1i, -2-0.5i], Inf)",
-    ],
-  },
-  {
-    kind: "case",
-    reason: "complex ./ 0: (NaN + 1i) / 0 has real part 0, not NaN",
-    opts: ["1", "2"],
-    names: ["rdivide"],
-    ids: ["rdivide([1+2i, -3i, 4, NaN+1i, -2-0.5i], [2, 1i, -1, 0, 3])"],
-  },
-  {
-    kind: "case",
-    reason:
-      "disp(struct()) prints nothing (the interpreter prints a blank line, " +
-      "MATLAB 'struct with no fields.')",
-    opts: ["1"],
-    names: ["disp"],
-    ids: ["disp(struct()); y1 = 0;"],
-  },
-  {
-    kind: "case",
-    reason:
-      "C-JIT emits C that does not compile for diag(zeros(1, 0)) (the " +
-      "interpreter returns NaN, MATLAB a 0x0 empty)",
-    opts: ["2"],
-    names: ["diag"],
-    ids: ["diag(zeros(1, 0))"],
-  },
-  {
-    kind: "case",
-    reason:
-      "C-JIT formats -0 as '0' under %g and '+0.000e+00' under %+.3e " +
-      "(MATLAB: '-0' and '-0.000e+00'; the interpreter: '-0' and '0.000e+00')",
-    opts: ["2"],
-    names: ["fprintf"],
-    ids: [
-      "fprintf('%g|', [1 -2 3.5 0 -0 NaN Inf -Inf]); y1 = 0;",
-      "fprintf('%+.3e\\n', -0); y1 = 0;",
-    ],
-  },
-  {
-    kind: "case",
-    reason:
-      "C-JIT mean of a complex NaN + 1i element makes the imaginary part NaN",
-    opts: ["2"],
-    names: ["mean"],
-    ids: [
-      "mean([1+2i, -3i, 4, NaN+1i, -2-0.5i])",
-      "mean([1+2i, -3i, 4, NaN+1i, -2-0.5i], 1)",
-      "mean([1+2i, -3i, 4, NaN+1i, -2-0.5i], 2)",
-    ],
   },
 ];

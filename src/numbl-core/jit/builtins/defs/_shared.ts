@@ -12,6 +12,7 @@ import {
   isScalar,
   isDoubleOrLogical,
 } from "../../lowering/types.js";
+import type { Builtin } from "../registry.js";
 
 export function requireScalarRealDouble(
   t: Type,
@@ -134,3 +135,34 @@ export function exactScalarAsComplex(
   if (r !== undefined) return { re: r, im: 0 };
   return exactComplex(t);
 }
+
+/** `b` with a logical first output when the arguments `pick` selects are
+ *  all real logical: the shape builtins and min/max keep the class of a
+ *  logical input (`flip(true)`, `max([true false])`). */
+export function keepsLogical(
+  b: Builtin,
+  pick: (argTypes: Type[]) => Type[]
+): Builtin {
+  return {
+    ...b,
+    transfer(argTypes, nargout) {
+      const out = b.transfer(argTypes, nargout);
+      const picked = pick(argTypes);
+      const first = out[0];
+      if (
+        picked.length > 0 &&
+        picked.every(
+          t => isNumeric(t) && t.elem === "logical" && !t.isComplex
+        ) &&
+        first !== undefined &&
+        isNumeric(first) &&
+        !first.isComplex
+      )
+        return [{ ...first, elem: "logical" }, ...out.slice(1)];
+      return out;
+    },
+  };
+}
+
+/** The first argument, for `keepsLogical`. */
+export const firstArg = (argTypes: Type[]): Type[] => argTypes.slice(0, 1);

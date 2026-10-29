@@ -17,7 +17,6 @@
 
 import {
   RuntimeTensor,
-  RuntimeComplexNumber,
   isRuntimeTensor,
   isRuntimeNumber,
   isRuntimeLogical,
@@ -28,6 +27,7 @@ import type { Type, NumericType } from "../../jit/index.js";
 import { isMultiElement } from "../../jit/index.js";
 import type { KoffiLib } from "./compileC.js";
 import { JIT_MAX_NDIM } from "./typeAdapterC.js";
+import { complexScalarOut, narrowedImag } from "./valueAdapter.js";
 import { getLapackBridge } from "../../native/lapack-bridge.js";
 import { MATMUL_INLINE_MAX_WORK } from "../../native/inline-matmul.js";
 
@@ -427,7 +427,9 @@ export function unmarshalTensorOutput(
   const imagPtr = ret.imag;
   const realData = copyOut(ctx, realPtr, n);
   const imagData =
-    ty.isComplex && imagPtr ? copyOut(ctx, imagPtr, n) : undefined;
+    ty.isComplex && imagPtr
+      ? narrowedImag(copyOut(ctx, imagPtr, n))
+      : undefined;
   if (realPtr) ctx.free(realPtr);
   if (imagPtr) ctx.free(imagPtr);
   return new RuntimeTensor(
@@ -443,14 +445,15 @@ export function unmarshalTensorOutput(
  *  Real / logical scalars ride the `double` ABI, so koffi hands us a
  *  JS number (logical coerces to `Boolean`). Complex scalars ride the
  *  `jit_cscalar_t` struct, so koffi hands us a `{re, im}` object,
- *  which becomes a `RuntimeComplexNumber`. */
+ *  which becomes a `RuntimeComplexNumber` (or a real number when its
+ *  imaginary part is zero, see `narrowedImag`). */
 export function unmarshalScalarOutput(
   v: unknown,
   ty: NumericType
 ): RuntimeValue {
   if (ty.isComplex) {
     const c = v as { re: number; im: number };
-    return new RuntimeComplexNumber(c.re, c.im);
+    return complexScalarOut(c.re, c.im);
   }
   if (ty.elem === "logical") return Boolean(v);
   return v as number;

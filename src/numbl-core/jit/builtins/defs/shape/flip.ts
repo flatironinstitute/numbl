@@ -25,6 +25,7 @@ import {
   exactDouble,
   exactRealArray,
 } from "../_shared.js";
+import { keepsLogical, firstArg } from "../_shared.js";
 
 function flipExact(
   src: Float64Array,
@@ -200,23 +201,29 @@ function defineFlip(opts: {
   };
 }
 
-export const flipud = defineFlip({
+const flipudBase = defineFlip({
   name: "flipud",
   fixedAxis: 0,
   minArgs: 1,
   maxArgs: 1,
 });
 
-export const fliplr = defineFlip({
+const fliplrBase = defineFlip({
   name: "fliplr",
   fixedAxis: 1,
   minArgs: 1,
   maxArgs: 1,
 });
 
-export const flip = defineFlip({
+const flipBase = defineFlip({
   name: "flip",
   fixedAxis: null,
   minArgs: 1,
   maxArgs: 2,
 });
+
+export const flipud = keepsLogical(flipudBase, firstArg);
+
+export const fliplr = keepsLogical(fliplrBase, firstArg);
+
+export const flip = keepsLogical(flipBase, firstArg);

@@ -184,25 +184,21 @@ export const jit_max_complex_all = t => complexMinmaxAll(t, ">");
 export const jit_max_complex_dim = (t, d) => complexMinmaxDim(t, d, ">");
 
 // any / all — real result; toBool per element (either lane nonzero).
-function complexLogicalAll(t, emptyResult, shortPredicate) {
+function complexLogicalAll(t, emptyResult, shortPredicate, toBool) {
   if (t.data.length === 0) return emptyResult;
   for (let i = 0; i < t.data.length; i++) {
-    const xr = t.data[i];
-    const xi = cReduceLaneIm(t, i);
-    const x = xr !== 0 || xi !== 0;
+    const x = toBool(t.data[i], cReduceLaneIm(t, i));
     if (shortPredicate(x)) return emptyResult === 1 ? 0 : 1;
   }
   return emptyResult;
 }
 
-function complexLogicalDim(t, dim, emptyResult, shortPredicate) {
+function complexLogicalDim(t, dim, emptyResult, shortPredicate, toBool) {
   if (dim < 1) jit_raise_bad_dim();
   if (dim > t.shape.length) {
     const out = jit_tensor_alloc_nd(t.shape.length, t.shape.slice());
     for (let i = 0; i < t.data.length; i++) {
-      const xr = t.data[i];
-      const xi = cReduceLaneIm(t, i);
-      out.data[i] = xr !== 0 || xi !== 0 ? 1 : 0;
+      out.data[i] = toBool(t.data[i], cReduceLaneIm(t, i)) ? 1 : 0;
     }
     return out;
   }
@@ -222,7 +218,7 @@ function complexLogicalDim(t, dim, emptyResult, shortPredicate) {
       let res = emptyResult;
       for (let k = 0; k < axis; k++) {
         const off = base + k * before;
-        const x = t.data[off] !== 0 || cReduceLaneIm(t, off) !== 0;
+        const x = toBool(t.data[off], cReduceLaneIm(t, off));
         if (shortPredicate(x)) {
           res = emptyResult === 1 ? 0 : 1;
           break;
@@ -236,9 +232,16 @@ function complexLogicalDim(t, dim, emptyResult, shortPredicate) {
 
 const cAnyShort = x => x;
 const cAllShort = x => !x;
-export const jit_any_complex_all = t => complexLogicalAll(t, 0, cAnyShort);
+// `any` ignores NaN elements (either part NaN), as for real input; `all`
+// counts them as nonzero.
+const cAnyBool = (xr, xi) =>
+  (xr !== 0 || xi !== 0) && !Number.isNaN(xr) && !Number.isNaN(xi);
+const cAllBool = (xr, xi) => xr !== 0 || xi !== 0;
+export const jit_any_complex_all = t =>
+  complexLogicalAll(t, 0, cAnyShort, cAnyBool);
 export const jit_any_complex_dim = (t, d) =>
-  complexLogicalDim(t, d, 0, cAnyShort);
-export const jit_all_complex_all = t => complexLogicalAll(t, 1, cAllShort);
+  complexLogicalDim(t, d, 0, cAnyShort, cAnyBool);
+export const jit_all_complex_all = t =>
+  complexLogicalAll(t, 1, cAllShort, cAllBool);
 export const jit_all_complex_dim = (t, d) =>
-  complexLogicalDim(t, d, 1, cAllShort);
+  complexLogicalDim(t, d, 1, cAllShort, cAllBool);

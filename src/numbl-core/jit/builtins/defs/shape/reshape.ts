@@ -64,6 +64,7 @@ import {
   exactRealArray,
 } from "../_shared.js";
 import { CHECK_DIM_SNIPPET } from "./_construct.js";
+import { keepsLogical, firstArg } from "../_shared.js";
 
 /** Per-axis resolution. `argIndex` (when present) refers to the index
  *  into the original Form A dim arg list (i.e. `argTypes.slice(1)` —
@@ -230,7 +231,7 @@ function dimC(axis: ResolvedAxis, dimArgsC: string[]): string {
   return `jit_check_dim(${dimArgsC[axis.argIndex]})`;
 }
 
-export const reshape: Builtin = {
+const reshapeBase: Builtin = {
   name: "reshape",
   transfer(argTypes, nargout) {
     if (argTypes.length < 2 || argTypes.length > MAX_DIM_ARGS + 1) {
@@ -402,3 +403,5 @@ export const reshape: Builtin = {
     return `jit_reshape_nd(${argsJs[0]}, ${resolved.axes.length}, [${dimList}])`;
   },
 };
+
+export const reshape = keepsLogical(reshapeBase, firstArg);

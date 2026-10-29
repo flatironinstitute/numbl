@@ -24,6 +24,7 @@ The executors (see [executors.md](../executors.md)) type each input of a unit wi
 - A dense tensor carries its shape and its real, complex or logical element type, but not its sign, which would take a pass over the data on every dispatch.
 - Strings and char arrays map to `String` and `Char` without a value.
 - A struct maps to a `Struct` whose fields are typed the same way.
+- A complex value whose imaginary parts are all zero (`complex(2, 0)`) is `Unknown`. The interpreter narrows the result of each operation to real when its imaginary parts are all zero, while a compiled value's complexness is fixed by its type; the boundary adapters therefore narrow such a complex output on the way out (`narrowedImag` in `valueAdapter.ts`), and leave the rare zero-imaginary input, which only some operations keep complex, to the interpreter.
 - Anything else (cells, objects, sparse matrices, dictionaries, function handles, string arrays) is `Unknown`, and the executors decline the unit. A capture-free function handle input to a loop is inlined instead (see [executors.md](../executors.md#lowering)).
 
 Each backend then decides which input types it accepts: the JS backend takes everything but `Unknown`, the C backend only the types it can marshal across the koffi ABI (numeric scalars and tensors).

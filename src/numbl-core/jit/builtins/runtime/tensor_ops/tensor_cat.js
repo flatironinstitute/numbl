@@ -37,6 +37,7 @@ export function jit_tensor_cat(dim, nin, xs) {
   const ndim = maxIn;
   // Pad shapes to ndim with 1s.
   for (const p of parts) {
+    p.zero = p.shape.every(d => d === 0);
     while (p.shape.length < ndim) p.shape.push(1);
   }
 
@@ -56,6 +57,11 @@ export function jit_tensor_cat(dim, nin, xs) {
       break;
     }
   }
+  // Every input is empty: as numbl's catAlongDim, drop the 0x0 ones
+  // (every dim 0) and concatenate the rest, whose non-cat dims must agree
+  // (cat(2, zeros(0, 3), zeros(0, 2)) is 0x5).
+  const allEmpty = refIdx === -1;
+  if (allEmpty) refIdx = parts.findIndex(p => !p.zero);
   if (refIdx === -1) {
     // All inputs empty (or none given): canonical [0, 0] empty.
     return jit_tensor_alloc_nd(2, [0, 0]);
@@ -65,7 +71,7 @@ export function jit_tensor_cat(dim, nin, xs) {
 
   // Step 3: keep[] decides which inputs participate.
   const keep = parts.map((p, i) => {
-    if (p.total > 0) {
+    if (p.total > 0 || (allEmpty && !p.zero)) {
       if (i === refIdx) return true;
       for (let d = 0; d < ndim; d++) {
         if (d === dimIdx) continue;
@@ -154,6 +160,7 @@ export function jit_tensor_cat_complex(dim, nin, xs) {
   }
   const ndim = maxIn;
   for (const p of parts) {
+    p.zero = p.shape.every(d => d === 0);
     while (p.shape.length < ndim) p.shape.push(1);
   }
   for (const p of parts) {
@@ -169,13 +176,18 @@ export function jit_tensor_cat_complex(dim, nin, xs) {
       break;
     }
   }
+  // Every input is empty: as numbl's catAlongDim, drop the 0x0 ones
+  // (every dim 0) and concatenate the rest, whose non-cat dims must agree
+  // (cat(2, zeros(0, 3), zeros(0, 2)) is 0x5).
+  const allEmpty = refIdx === -1;
+  if (allEmpty) refIdx = parts.findIndex(p => !p.zero);
   if (refIdx === -1) {
     return jit_tensor_alloc_nd_complex(2, [0, 0]);
   }
   const refShape = parts[refIdx].shape;
 
   const keep = parts.map((p, i) => {
-    if (p.total > 0) {
+    if (p.total > 0 || (allEmpty && !p.zero)) {
       if (i === refIdx) return true;
       for (let d = 0; d < ndim; d++) {
         if (d === dimIdx) continue;

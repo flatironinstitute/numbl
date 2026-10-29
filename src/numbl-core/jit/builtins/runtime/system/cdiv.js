@@ -12,7 +12,10 @@ export function jit_cdiv(a, b) {
   // algorithm below would otherwise produce NaN+NaNi here.
   if (br === 0 && bi === 0) {
     if (ar === 0 && ai === 0) return { re: NaN, im: 0 };
-    const signedInf = x => (x > 0 ? Infinity : x < 0 ? -Infinity : 0);
+    // x / 0 per component: a NaN part stays NaN (MATLAB: (NaN + 1i) / 0
+    // is NaN + Inf i).
+    const signedInf = x =>
+      x > 0 ? Infinity : x < 0 ? -Infinity : x === 0 ? 0 : NaN;
     return { re: signedInf(ar), im: signedInf(ai) };
   }
   if (Math.abs(br) >= Math.abs(bi)) {

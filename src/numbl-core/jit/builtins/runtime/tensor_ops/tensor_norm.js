@@ -30,6 +30,7 @@ export function jit_norm_p_real(a, p) {
     let m = 0;
     for (let i = 0; i < n; i++) {
       const x = Math.abs(a.data[i]);
+      if (Number.isNaN(x)) return NaN; // MATLAB: a NaN element gives NaN
       if (x > m) m = x;
     }
     return m;
@@ -38,6 +39,7 @@ export function jit_norm_p_real(a, p) {
     let m = Math.abs(a.data[0]);
     for (let i = 1; i < n; i++) {
       const x = Math.abs(a.data[i]);
+      if (Number.isNaN(x)) return NaN;
       if (x < m) m = x;
     }
     return m;
@@ -66,6 +68,7 @@ export function jit_norm_p_complex(a, p) {
     let m = 0;
     for (let i = 0; i < n; i++) {
       const x = abs(i);
+      if (Number.isNaN(x)) return NaN; // MATLAB: a NaN element gives NaN
       if (x > m) m = x;
     }
     return m;
@@ -74,6 +77,7 @@ export function jit_norm_p_complex(a, p) {
     let m = abs(0);
     for (let i = 1; i < n; i++) {
       const x = abs(i);
+      if (Number.isNaN(x)) return NaN;
       if (x < m) m = x;
     }
     return m;

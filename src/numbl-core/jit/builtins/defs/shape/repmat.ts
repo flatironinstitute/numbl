@@ -62,6 +62,7 @@ import {
   exactRealArray,
 } from "../_shared.js";
 import { CHECK_DIM_SNIPPET } from "./_construct.js";
+import { keepsLogical, firstArg } from "../_shared.js";
 
 /** Per-axis rep resolution. `argIndex` is the position in the original
  *  argTypes array (i.e. `argsC[axis.argIndex]`) that supplies the rep
@@ -321,7 +322,7 @@ function repJs(axis: RepAxis, argsJs: string[]): string {
   return `jit_check_dim(${argsJs[axis.argIndex]})`;
 }
 
-export const repmat: Builtin = {
+const repmatBase: Builtin = {
   name: "repmat",
   transfer(argTypes, nargout) {
     if (nargout !== 1) {
@@ -549,3 +550,5 @@ export const repmat: Builtin = {
     return `jit_tensor_repmat(${argsJs[0]}, ${ndim}, [${dimList}])`;
   },
 };
+
+export const repmat = keepsLogical(repmatBase, firstArg);

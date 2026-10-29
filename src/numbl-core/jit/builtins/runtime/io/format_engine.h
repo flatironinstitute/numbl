@@ -523,7 +523,7 @@ static void jit__emit_float(jit__writer_fn writer, void *ctx,
     }
   }
   char sign_ch = 0;
-  if (x < 0.0) sign_ch = '-';
+  if (signbit(x)) sign_ch = '-'; /* -0 prints as -0, as in MATLAB */
   else if (has_plus) sign_ch = '+';
   else if (has_space) sign_ch = ' ';
   long sign_len = sign_ch ? 1 : 0;
