@@ -542,6 +542,7 @@ export const TABLES: Record<string, Case[]> = {
     ...[V.mat, V.t3, V.e03, V.pos].map(x => ({ args: [x], nargout: 2 })),
     ...[V.mat, V.t3].map(x => ({ args: [x], nargout: 3 })),
     { args: [V.mat, lit("[1 2]")] },
+    { args: [V.t3], body: "[y1] = size($1);" },
   ],
   length: each(ANY),
   numel: each(ANY),
@@ -566,6 +567,8 @@ export const TABLES: Record<string, Case[]> = {
       nargout: 2,
     })),
     { args: [V.mat, lit("2"), lit("'descend'")], nargout: 2 },
+    { args: [V.row], body: "[y1] = sort($1);" },
+    { args: [V.row], body: "[~] = sort($1); y1 = 0;" },
   ],
   meshgrid: [
     ...each([V.row3, V.col, V.e10, V.crow]),
@@ -919,16 +922,6 @@ export const KNOWN_DIVERGENCES: KnownDivergence[] = [
   },
   {
     kind: "case",
-    reason:
-      "a bracketed single output of a builtin, [y] = f(x), lowers to a " +
-      "multi-output call: JS throws 'object is not iterable', C returns a " +
-      "wrong value ([y] = cumsum(2.5) gives 0)",
-    opts: ["1", "2"],
-    names: ["cumsum"],
-    ids: ["[y1] = cumsum([1 -2 3; 4 NaN -6; -0 8 Inf; 0.25 -1 2]);"],
-  },
-  {
-    kind: "case",
     reason: "logical(x) does not raise for NaN",
     opts: ["1", "2"],
     names: ["logical"],
@@ -1015,14 +1008,3 @@ export const KNOWN_DIVERGENCES: KnownDivergence[] = [
     ],
   },
 ];
-
-/** Why a case is not run at `--opt 2`, or undefined. Only for cases that
- *  take the process down (a crash would end the test worker). */
-export function skipAtOpt2(name: string, c: Case): string | undefined {
-  if (
-    (name === "min" || name === "max") &&
-    c.args.some(a => typeof a !== "string" && a.lit === "[]")
-  )
-    return "heap corruption after a C-JIT min/max(x, [], dim) call";
-  return undefined;
-}

@@ -809,7 +809,7 @@ export class Lowerer {
     return `_jit_t${this.tempCounter}`;
   }
 
-  private lowerAssign(s: Extract<Stmt, { type: "Assign" }>): IRStmt | IRStmt[] {
+  lowerAssign(s: Extract<Stmt, { type: "Assign" }>): IRStmt | IRStmt[] {
     const expr = this.lowerExpr(s.expr);
     this.requireValueType(expr, `assigning to '${s.name}'`);
     // ANF the RHS. When the RHS is itself owned-producing and the

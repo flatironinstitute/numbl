@@ -181,6 +181,16 @@ export function lowerMultiAssign(
   // true multi-output uses.
   if (target?.kind === "builtin") {
     const builtin = getBuiltin(callName);
+    if (builtin !== undefined && s.lvalues.length === 1) {
+      // `[y] = f(x)` is `y = f(x)`: a builtin's emit hooks produce a
+      // value at nargout 1, not the multi-output call shape.
+      return lowerSingleBuiltinAssign.call(
+        this,
+        s.lvalues[0],
+        { type: "FuncCall", name: callName, args: argExprs, span: callSpan },
+        s
+      );
+    }
     if (builtin !== undefined) {
       return buildBuiltinMultiAssign.call(
         this,
@@ -498,6 +508,33 @@ function buildBuiltinMultiAssign(
   const postStmts = lowerPostStores.call(this, sub.postStores);
   const head: IRStmt[] = argHoists.length === 0 ? [mac] : [...argHoists, mac];
   return [...head, ...postStmts];
+}
+
+/** Lowers `[lv] = f(x)` for a builtin `f` as the single assignment
+ *  `lv = f(x)`; `[~] = f(x)` assigns to a temp. */
+function lowerSingleBuiltinAssign(
+  this: Lowerer,
+  lv: LValue,
+  call: Expr,
+  s: Extract<Stmt, { type: "MultiAssign" }>
+): IRStmt | IRStmt[] {
+  if (lv.type === "Var" || lv.type === "Ignore") {
+    const name = lv.type === "Var" ? lv.name : this.freshTempName();
+    return this.lowerAssign({
+      type: "Assign",
+      name,
+      expr: call,
+      suppressed: s.suppressed,
+      span: s.span,
+    });
+  }
+  return this.lowerAssignLValue({
+    type: "AssignLValue",
+    lvalue: lv,
+    expr: call,
+    suppressed: s.suppressed,
+    span: s.span,
+  });
 }
 
 /** Expand `[out{1:nout}]` / `[out{start:end}]` style multi-assign
