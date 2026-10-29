@@ -196,6 +196,17 @@ export class RuntimeError extends Error {
   }
 }
 
+/** MATLAB's error for an operand of a type an operator or math function
+ *  does not take: a cell, struct, function handle, or an object whose
+ *  class does not define the operator's method. */
+export function invalidDataTypeError(): RuntimeError {
+  return new RuntimeError(
+    "Invalid data type. Argument must be numeric, char, or logical.",
+    null,
+    { identifier: "MATLAB:math:mustBeNumericCharOrLogical" }
+  );
+}
+
 /**
  * Extract code snippet with context lines around the error location.
  */

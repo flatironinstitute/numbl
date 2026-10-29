@@ -18,9 +18,10 @@ import { ensureRuntimeValue } from "../runtime/runtimeHelpers.js";
 import { RuntimeError } from "../runtime/error.js";
 import {
   binop,
-  uplus,
   range as runtimeRange,
+  BINARY_OPERATOR_METHODS,
 } from "../runtime/runtimeOperators.js";
+import { dispatchClassOf } from "../runtime/kinds.js";
 import { enumEqualityOp } from "../runtime/runtimeEnum.js";
 import { mPow } from "../helpers/arithmetic.js";
 import { COLON_SENTINEL, END_SENTINEL } from "../runtime/sentinels.js";
@@ -174,19 +175,6 @@ export function evalArgs(interp: Interpreter, argExprs: Expr[]): unknown[] {
 
 // ── Operators ────────────────────────────────────────────────────────────
 
-const binopProfileName: Record<string, string> = {
-  [BinaryOperation.Add]: "plus",
-  [BinaryOperation.Sub]: "minus",
-  [BinaryOperation.Mul]: "mtimes",
-  [BinaryOperation.ElemMul]: "times",
-  [BinaryOperation.Div]: "mrdivide",
-  [BinaryOperation.ElemDiv]: "rdivide",
-  [BinaryOperation.LeftDiv]: "mldivide",
-  [BinaryOperation.ElemLeftDiv]: "ldivide",
-  [BinaryOperation.Pow]: "mpower",
-  [BinaryOperation.ElemPow]: "power",
-};
-
 function evalBinary(
   interp: Interpreter,
   expr: Extract<Expr, { type: "Binary" }>
@@ -214,7 +202,7 @@ function evalBinary(
   // members and member arrays; returns null for other ops / non-enum operands.
   const enumResult = enumEqualityOp(expr.op, lv, rv);
   if (enumResult !== null) return enumResult;
-  if (isRuntimeClassInstance(lv) || isRuntimeClassInstance(rv)) {
+  if (dispatchClassOf(lv) !== null || dispatchClassOf(rv) !== null) {
     return rt.binop(expr.op, left, right);
   }
 
@@ -234,7 +222,7 @@ function evalBinary(
     rt.profilingEnabled &&
     (typeof left !== "number" || typeof right !== "number")
   ) {
-    const opName = binopProfileName[expr.op] ?? expr.op;
+    const opName = BINARY_OPERATOR_METHODS[expr.op] ?? expr.op;
     rt.profileEnter("builtin:interp:" + opName);
     const result = binop(expr.op, left, right);
     rt.profileLeave();
@@ -283,7 +271,7 @@ export function evalCondition(interp: Interpreter, expr: Expr): unknown {
     }
     // Non-scalar left: no short-circuit, evaluate element-wise as usual.
     const right = evalExpr(interp, expr.right);
-    return binop(expr.op, left, right);
+    return interp.rt.binop(expr.op, left, right);
   }
   return evalExpr(interp, expr);
 }
@@ -295,7 +283,7 @@ function evalUnary(
   const operand = evalExpr(interp, expr.operand);
   switch (expr.op) {
     case UnaryOperation.Plus:
-      return uplus(operand);
+      return interp.rt.uplus(operand);
     case UnaryOperation.Minus:
       return interp.rt.uminus(operand);
     case UnaryOperation.Not: {

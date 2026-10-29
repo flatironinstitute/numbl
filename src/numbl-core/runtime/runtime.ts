@@ -41,7 +41,6 @@ import {
   type RuntimeComplexNumber,
   type RuntimeClassInstance,
 } from "../runtime/types.js";
-import { BinaryOperation } from "../parser/index.js";
 import { getConstant } from "../helpers/constants.js";
 import { globToRegExp } from "../helpers/glob.js";
 import { COLON_SENTINEL, END_SENTINEL } from "./sentinels.js";
@@ -69,6 +68,7 @@ import {
   opHorzcat,
   opVertcat,
   switchMatch as _switchMatch,
+  BINARY_OPERATOR_METHODS,
 } from "./runtimeOperators.js";
 import {
   getFuncHandle as _getFuncHandle,
@@ -110,7 +110,7 @@ import {
 } from "../plotting/figuresReducer.js";
 import { computeAxisLimits } from "../plotting/axisLimits.js";
 import { isRuntimeChar, isRuntimeString } from "./types.js";
-import { kstr, valueClass, valueShape } from "./kinds.js";
+import { dispatchClassOf, kstr, valueClass, valueShape } from "./kinds.js";
 import { allocFloat64Array } from "./alloc.js";
 
 /** One `beginOutputCapture()` frame: where its output goes, plus the plot
@@ -1059,70 +1059,43 @@ export class Runtime {
 
   // ── Thin wrappers to runtimeOperators ─────────────────────────────
 
-  public uplus(v: unknown): RuntimeValue {
+  // Operators: a value with a dispatch class (a classdef object, or an
+  // object of a class with TypeScript-registered methods) sends the
+  // operator to its method by name, which resolution looks up like any
+  // call; with no method the call reaches the builtin of that name, which
+  // runs the built-in operation (or raises MATLAB's error).
+  public uplus(v: unknown): unknown {
+    if (typeof v !== "number" && dispatchClassOf(v) !== null)
+      return this.dispatch("uplus", 1, [v]);
     return _uplus(v);
   }
   public uminus(v: unknown): unknown {
-    if (typeof v !== "number") {
-      const mv = ensureRuntimeValue(v);
-      if (isRuntimeClassInstance(mv)) return this.dispatch("uminus", 1, [v]);
-    }
+    if (typeof v !== "number" && dispatchClassOf(v) !== null)
+      return this.dispatch("uminus", 1, [v]);
     return _uminus(v);
   }
   public transpose(v: unknown): unknown {
-    if (typeof v !== "number") {
-      const mv = ensureRuntimeValue(v);
-      if (isRuntimeClassInstance(mv) || isRuntimeClassInstanceArray(mv))
-        return this.dispatch("transpose", 1, [v]);
-    }
+    if (typeof v !== "number" && dispatchClassOf(v) !== null)
+      return this.dispatch("transpose", 1, [v]);
     return _transpose(v);
   }
   public ctranspose(v: unknown): unknown {
-    if (typeof v !== "number") {
-      const mv = ensureRuntimeValue(v);
-      if (isRuntimeClassInstance(mv) || isRuntimeClassInstanceArray(mv))
-        return this.dispatch("ctranspose", 1, [v]);
-    }
+    if (typeof v !== "number" && dispatchClassOf(v) !== null)
+      return this.dispatch("ctranspose", 1, [v]);
     return _ctranspose(v);
   }
-  public not(v: unknown): RuntimeLogical | RuntimeTensor {
+  public not(v: unknown): unknown {
+    if (typeof v !== "number" && dispatchClassOf(v) !== null)
+      return this.dispatch("not", 1, [v]);
     return _not(v);
   }
-  private static readonly binopMethodMap: Record<string, string> = {
-    [BinaryOperation.Add]: "plus",
-    [BinaryOperation.Sub]: "minus",
-    [BinaryOperation.Mul]: "mtimes",
-    [BinaryOperation.Div]: "mrdivide",
-    [BinaryOperation.Pow]: "mpower",
-    [BinaryOperation.LeftDiv]: "mldivide",
-    [BinaryOperation.ElemMul]: "times",
-    [BinaryOperation.ElemDiv]: "rdivide",
-    [BinaryOperation.ElemPow]: "power",
-    [BinaryOperation.ElemLeftDiv]: "ldivide",
-    [BinaryOperation.Equal]: "eq",
-    [BinaryOperation.NotEqual]: "ne",
-    [BinaryOperation.Less]: "lt",
-    [BinaryOperation.LessEqual]: "le",
-    [BinaryOperation.Greater]: "gt",
-    [BinaryOperation.GreaterEqual]: "ge",
-    [BinaryOperation.BitAnd]: "and",
-    [BinaryOperation.BitOr]: "or",
-  };
   public binop(op: string, a: unknown, b: unknown): unknown {
-    // Class operator dispatch: if either operand is a class instance,
-    // try to call the overloaded operator method
-    if (typeof a !== "number" || typeof b !== "number") {
-      const ma = typeof a === "number" ? null : ensureRuntimeValue(a);
-      const mb = typeof b === "number" ? null : ensureRuntimeValue(b);
-      if (
-        (ma && isRuntimeClassInstance(ma)) ||
-        (mb && isRuntimeClassInstance(mb))
-      ) {
-        const methodName = Runtime.binopMethodMap[op];
-        if (methodName) {
-          return this.dispatch(methodName, 1, [a, b]);
-        }
-      }
+    if (
+      (typeof a !== "number" || typeof b !== "number") &&
+      (dispatchClassOf(a) !== null || dispatchClassOf(b) !== null)
+    ) {
+      const methodName = BINARY_OPERATOR_METHODS[op];
+      if (methodName) return this.dispatch(methodName, 1, [a, b]);
     }
     return _binop(op, a, b);
   }

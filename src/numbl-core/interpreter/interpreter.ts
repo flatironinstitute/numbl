@@ -45,6 +45,8 @@ import { callResolved, interpretTarget } from "./calls.js";
 import { callerScope } from "./callerScope.js";
 import { callBody } from "./callConvention.js";
 import { MEXCEPTION_CLASS } from "../runtime/mexception.js";
+import { getClassMethod } from "../runtime/builtinRegistry.js";
+import { invokeClassMethod } from "../runtime/runtimeDispatch.js";
 import { HANDLE_CLASS_METHODS } from "../workspace/classTable.js";
 import { constantPropertyValue } from "./oop.js";
 import { META_CLASS_ALIASES } from "./metaClass.js";
@@ -233,8 +235,13 @@ export class Interpreter {
     this.rt.resolveNamedCall = (name, args, targetClassName) => {
       if (targetClassName) {
         // A method of a built-in class (MException, or a class without a
-        // classdef such as graph) is a builtin taking the object first.
-        if (!this.classDefinesMethod(targetClassName, name)) return null;
+        // classdef such as graph) is a registered method of the class, or
+        // else a builtin taking the object first.
+        if (!this.classDefinesMethod(targetClassName, name)) {
+          if (!getClassMethod(targetClassName, name)) return null;
+          return (nargout, ...a) =>
+            invokeClassMethod(this.rt, targetClassName, name, nargout, a);
+        }
         const target = resolveFunction(
           name,
           args.map(resolutionArgType),

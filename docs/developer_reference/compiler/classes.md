@@ -18,7 +18,7 @@ An access value (`MemberAccess`) is `public`, `protected`, `private`, `immutable
 
 ## Access enforcement
 
-The class of the running code is the running `CallFrame`'s class (see [interpreter.md](interpreter.md)). Methods, the local functions of a classdef file, and anonymous functions created in them run with their class, as in MATLAB. The runtime reads it through the `rt.codeSite` hook and the table through `rt.classTable`, both installed by the interpreter. Objects without a classdef (`MException`, `datetime`, `graph` and other built-in objects) have no `ClassInfo`, so these checks do not apply to them; MException's read-only properties are enforced by its own runtime code.
+The class of the running code is the running `CallFrame`'s class (see [interpreter.md](interpreter.md)). Methods, the local functions of a classdef file, and anonymous functions created in them run with their class, as in MATLAB. The runtime reads it through the `rt.codeSite` hook and the table through `rt.classTable`, both installed by the interpreter. Objects without a classdef (`MException`, `datetime`, `graph` and other built-in objects) have no `ClassInfo`, so these checks do not apply to them; MException's read-only properties are enforced by its own runtime code. Such a class can still overload operators and functions by registering methods from TypeScript (see [function-resolution.md](function-resolution.md#registering-methods-of-a-typescript-implemented-class)).
 
 The checks are in `runtime/classAccess.ts`, which returns MATLAB's error (identifier and message) or null:
 
