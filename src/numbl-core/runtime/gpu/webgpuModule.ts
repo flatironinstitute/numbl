@@ -1416,7 +1416,11 @@ fn at(s: u32, k: u32) -> u32 {
       discard(totals);
     },
 
-    /** out (m x n) = a (m x k) * b (k x n), column-major, tiled. */
+    /** out (m x n) = a (m x k) * b (k x n), column-major. A workgroup
+     *  computes a tile of `bm` x `bn` outputs, each thread `tm` x `tn` of
+     *  them (rows l.x + (bm/tm)*r, columns l.y + (bn/tn)*c), from slices of
+     *  16 along k in workgroup memory. Large products use 64 x 64 tiles; a
+     *  product with fewer than 48 of them uses 32 x 32, to fill the GPU. */
     async matmul(
       device: GPUDevice,
       args: {
@@ -1430,50 +1434,78 @@ fn at(s: u32, k: u32) -> u32 {
     ) {
       const out = create(device, args.out, args.m * args.n);
       if (args.m * args.n === 0) return;
+      if (args.k === 0) {
+        // An empty inner dimension gives zeros.
+        encoder(device).clearBuffer(out);
+        return;
+      }
+      const large = Math.ceil(args.m / 64) * Math.ceil(args.n / 64) >= 48;
+      const [bm, bn, tm, tn] = large ? [64, 64, 4, 4] : [32, 32, 2, 2];
+      const bk = 16;
+      const wx = bm / tm;
+      const wy = bn / tn;
       const code = `
 struct P { m: u32, k: u32, n: u32, pad: u32 }
 @group(0) @binding(0) var<uniform> p: P;
 @group(0) @binding(1) var<storage, read_write> C: array<f32>;
 @group(0) @binding(2) var<storage, read> A: array<f32>;
 @group(0) @binding(3) var<storage, read> B: array<f32>;
-var<workgroup> As: array<f32, 256>;
-var<workgroup> Bs: array<f32, 256>;
-@compute @workgroup_size(16, 16) fn main(
+var<workgroup> As: array<f32, ${bk * bm}>;
+var<workgroup> Bs: array<f32, ${bk * bn}>;
+@compute @workgroup_size(${wx}, ${wy}) fn main(
   @builtin(local_invocation_id) l: vec3u,
+  @builtin(local_invocation_index) t: u32,
   @builtin(workgroup_id) w: vec3u
 ) {
-  let row = w.x * 16u + l.x;
-  let col = w.y * 16u + l.y;
-  var acc: f32 = 0.0;
-  let tiles = (p.k + 15u) / 16u;
-  for (var t = 0u; t < tiles; t = t + 1u) {
-    let ak = t * 16u + l.y;
-    var av: f32 = 0.0;
-    if (row < p.m && ak < p.k) { av = A[row + ak * p.m]; }
-    As[l.y * 16u + l.x] = av;
-    let bk = t * 16u + l.x;
-    var bv: f32 = 0.0;
-    if (bk < p.k && col < p.n) { bv = B[bk + col * p.k]; }
-    Bs[l.y * 16u + l.x] = bv;
+  let row0 = w.x * ${bm}u;
+  let col0 = w.y * ${bn}u;
+  var acc: array<array<f32, ${tn}>, ${tm}>;
+  for (var k0 = 0u; k0 < p.k; k0 = k0 + ${bk}u) {
+    // As[kk][ii] = A(row0 + ii, k0 + kk); Bs[kk][jj] = B(k0 + kk, col0 + jj),
+    // 0 outside the matrices.
+    for (var e = t; e < ${bk * bm}u; e = e + ${wx * wy}u) {
+      let i = row0 + e % ${bm}u;
+      let q = k0 + e / ${bm}u;
+      var v: f32 = 0.0;
+      if (i < p.m && q < p.k) { v = A[i + q * p.m]; }
+      As[e] = v;
+    }
+    for (var e = t; e < ${bk * bn}u; e = e + ${wx * wy}u) {
+      let kk = e % ${bk}u;
+      let jj = e / ${bk}u;
+      let q = k0 + kk;
+      let j = col0 + jj;
+      var v: f32 = 0.0;
+      if (q < p.k && j < p.n) { v = B[q + j * p.k]; }
+      Bs[kk * ${bn}u + jj] = v;
+    }
     workgroupBarrier();
-    for (var q = 0u; q < 16u; q = q + 1u) {
-      acc = acc + As[q * 16u + l.x] * Bs[l.y * 16u + q];
+    for (var kk = 0u; kk < ${bk}u; kk = kk + 1u) {
+      var a: array<f32, ${tm}>;
+      var b: array<f32, ${tn}>;
+      for (var r = 0u; r < ${tm}u; r = r + 1u) { a[r] = As[kk * ${bm}u + l.x + ${wx}u * r]; }
+      for (var c = 0u; c < ${tn}u; c = c + 1u) { b[c] = Bs[kk * ${bn}u + l.y + ${wy}u * c]; }
+      for (var r = 0u; r < ${tm}u; r = r + 1u) {
+        for (var c = 0u; c < ${tn}u; c = c + 1u) { acc[r][c] = acc[r][c] + a[r] * b[c]; }
+      }
     }
     workgroupBarrier();
   }
-  if (row < p.m && col < p.n) { C[row + col * p.m] = acc; }
+  for (var r = 0u; r < ${tm}u; r = r + 1u) {
+    let i = row0 + l.x + ${wx}u * r;
+    if (i >= p.m) { continue; }
+    for (var c = 0u; c < ${tn}u; c = c + 1u) {
+      let j = col0 + l.y + ${wy}u * c;
+      if (j < p.n) { C[i + j * p.m] = acc[r][c]; }
+    }
+  }
 }`;
-      if (args.k === 0) {
-        // An empty inner dimension gives zeros.
-        encoder(device).clearBuffer(out);
-        return;
-      }
       run(
         device,
         code,
         uniforms([args.m, args.k, args.n, 0]),
         [out, buffer(args.a), buffer(args.b)],
-        [Math.ceil(args.m / 16), Math.ceil(args.n / 16)]
+        [Math.ceil(args.m / bm), Math.ceil(args.n / bn)]
       );
     },
 
