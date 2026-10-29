@@ -34,19 +34,25 @@ function cancelAfter(sab: SharedArrayBuffer, ms: number): Worker {
 
 interface CancelRun {
   error: unknown;
+  /** From the cancel signal (or the end of compiling, if later) to the stop. */
   ms: number;
   output: string;
   compiled: string[];
   bails: string[];
 }
 
+const CANCEL_AFTER_MS = 300;
+
 function runCancelled(code: string, opt: OptLevel): CancelRun {
   const sab = new SharedArrayBuffer(4);
-  const worker = cancelAfter(sab, 300);
+  const worker = cancelAfter(sab, CANCEL_AFTER_MS);
   const out: string[] = [];
   const compiled: string[] = [];
   const bails: string[] = [];
   const t0 = performance.now();
+  // Compiling (cc at --opt 2, with a cold cache in CI) can outlast the
+  // cancel delay, so time the stop from whichever comes later.
+  let tCompiled = t0;
   let error: unknown = null;
   try {
     executeCode(
@@ -55,7 +61,10 @@ function runCancelled(code: string, opt: OptLevel): CancelRun {
         optimization: opt,
         cancelSAB: sab,
         onOutput: t => out.push(t),
-        onJitCompile: (d, _c, lang) => compiled.push(`${lang}:${d}`),
+        onJitCompile: (d, _c, lang) => {
+          compiled.push(`${lang}:${d}`);
+          tCompiled = performance.now();
+        },
         onJitBail: m => bails.push(m),
       },
       [],
@@ -66,7 +75,7 @@ function runCancelled(code: string, opt: OptLevel): CancelRun {
   } catch (e) {
     error = e;
   }
-  const ms = performance.now() - t0;
+  const ms = performance.now() - Math.max(t0 + CANCEL_AFTER_MS, tCompiled);
   void worker.terminate();
   return { error, ms, output: out.join(""), compiled, bails };
 }
