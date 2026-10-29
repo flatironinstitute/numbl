@@ -546,8 +546,16 @@ function sortTensor(
   }
   const dimIdx = dim - 1;
 
-  // Fast path: 1D/vector real, ascending, no index output
-  if (!im && !descend && nargout <= 1 && re.length === shape[dimIdx]) {
+  // Fast path: 1D/vector real, ascending, no index output. A typed-array
+  // sort puts -0 before 0, but MATLAB's sort is stable and treats them as
+  // equal, so a vector holding -0 takes the general path.
+  if (
+    !im &&
+    !descend &&
+    nargout <= 1 &&
+    re.length === shape[dimIdx] &&
+    !re.some(x => Object.is(x, -0))
+  ) {
     const sorted = allocFloat64Array(re);
     sorted.sort();
     return RTV.tensor(sorted, [...shape], undefined, v.cls);

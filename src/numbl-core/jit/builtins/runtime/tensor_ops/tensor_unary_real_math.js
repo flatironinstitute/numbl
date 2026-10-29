@@ -208,7 +208,7 @@ export function jit_tensor_sign(a) {
   const x = a.data;
   const o = r.data;
   if (!ew_host_unary("sign", x, o)) {
-    for (let i = 0; i < o.length; i++) o[i] = Math.sign(x[i]);
+    for (let i = 0; i < o.length; i++) o[i] = Math.sign(x[i]) + 0;
   }
   return r;
 }

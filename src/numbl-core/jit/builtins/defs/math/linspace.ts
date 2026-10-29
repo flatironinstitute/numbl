@@ -87,7 +87,7 @@ export const linspace: Builtin = {
     const nRaw = argTypes.length === 3 ? exactDouble(argTypes[2]) : DEFAULT_N;
 
     if (nRaw !== undefined) {
-      const n = Math.round(nRaw);
+      const n = Math.floor(nRaw);
       if (n <= 0) {
         return [tensorDouble([1, 0])];
       }
@@ -130,11 +130,11 @@ export const linspace: Builtin = {
 
     if (argTypes.length === 3) {
       const nV = exactDouble(argTypes[2] as NumericType);
-      if (nV !== undefined && Math.round(nV) === 1) {
+      if (nV !== undefined && Math.floor(nV) === 1) {
         return `((${aC}), (${bC}))`;
       }
     }
-    return `jit_tensor_linspace((double)(${aC}), (double)(${bC}), (long)lround(${nC}))`;
+    return `jit_tensor_linspace((double)(${aC}), (double)(${bC}), (long)floor(${nC}))`;
   },
   emitJs({ argsJs, argTypes, useRuntime }) {
     useRuntime("jit_tensor_linspace");
@@ -143,10 +143,10 @@ export const linspace: Builtin = {
     const nJs = argTypes.length === 3 ? argsJs[2] : String(DEFAULT_N);
     if (argTypes.length === 3) {
       const nV = exactDouble(argTypes[2] as NumericType);
-      if (nV !== undefined && Math.round(nV) === 1) {
+      if (nV !== undefined && Math.floor(nV) === 1) {
         return `((${aJs}), (${bJs}))`;
       }
     }
-    return `jit_tensor_linspace(${aJs}, ${bJs}, Math.round(${nJs}))`;
+    return `jit_tensor_linspace(${aJs}, ${bJs}, Math.floor(${nJs}))`;
   },
 };

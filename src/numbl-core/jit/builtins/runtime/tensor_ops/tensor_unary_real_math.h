@@ -22,10 +22,11 @@ static double jit_round_half_away(double x) {
   return round(x);
 }
 
-/* signum(x) ∈ {-1, 0, 1, NaN}. Matches JS `Math.sign`:
+/* signum(x) ∈ {-1, 0, 1, NaN}, as MATLAB's sign:
  *   - NaN → NaN (any comparison with NaN is false, so a naive
  *     positive/negative test would silently return 0).
- *   - -0 → 0 (handled by the equality-to-zero fall-through). */
+ *   - -0 → 0 (handled by the equality-to-zero fall-through; JS
+ *     `Math.sign(-0)` is -0, so the JS side adds 0). */
 static double jit_signum(double x) {
   if (isnan(x)) return x;
   if (x > 0) return 1.0;

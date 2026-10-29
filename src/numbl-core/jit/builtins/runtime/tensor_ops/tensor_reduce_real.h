@@ -182,8 +182,8 @@ static void jit__squeeze_trailing(int *ndim, long *dims) {
       jit_raise_bad_dim();                                                                \
     }                                                                         \
     if (dim > a.ndim) {                                                       \
-      /* Numbl's `logicalAlongDim` with `dim > ndims` does an elementwise   \
-       * cast to logical: each element becomes 1.0 if nonzero else 0.0. */   \
+      /* `dim > ndims`: each element is its own fiber (so NaN is         \
+       * ignored, as in a reduction). */                                     \
       long total = 1;                                                         \
       for (int i = 0; i < a.ndim; i++) total *= a.dims[i];                    \
       long out_dims[JIT_MAX_NDIM];                                            \
@@ -191,7 +191,10 @@ static void jit__squeeze_trailing(int *ndim, long *dims) {
       for (int i = 0; i < a.ndim; i++) out_dims[i] = a.dims[i];               \
       jit_tensor_t out = jit_tensor_alloc_nd(out_ndim, out_dims);             \
       for (long i = 0; i < total; i++) {                                      \
-        out.real[i] = (a.real[i] != 0.0) ? 1.0 : 0.0;                         \
+        double x = a.real[i];                                                 \
+        double acc = (double)(EMPTY_RESULT);                                  \
+        do { SHORT_BODY; } while (0);                                         \
+        out.real[i] = acc;                                                    \
       }                                                                       \
       return out;                                                             \
     }                                                                         \

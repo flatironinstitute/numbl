@@ -425,9 +425,10 @@ function anyAllBuiltin(mode: "any" | "all"): void {
     nargin: [1, 2],
     apply: args => {
       const v = dense(dataArg(args[0], mode));
-      if (typeof v === "number") return RTV.logical(v !== 0);
+      if (typeof v === "number")
+        return RTV.logical(scanLogical([v], undefined, mode));
       if (isRuntimeComplexNumber(v))
-        return RTV.logical(v.re !== 0 || v.im !== 0);
+        return RTV.logical(scanLogical([v.re], [v.im], mode));
       if (!isRuntimeTensor(v))
         throw new RuntimeError(`${mode}: invalid arguments`);
       if (args.length === 1) {

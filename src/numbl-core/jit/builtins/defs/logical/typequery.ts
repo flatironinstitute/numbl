@@ -114,7 +114,15 @@ export const ismatrix: Builtin = {
  *  the check reads the tensor's runtime `ndim` / `dims`. */
 function rowColPredicate(name: string, axis: 0 | 1): Builtin {
   const otherDescribed = (t: Type): boolean | "runtime" => {
-    if (!isNumeric(t)) return false; // char/string/struct → not a row/col vector here
+    // A string and a struct reach the JIT only as 1x1 values; a char is a
+    // row, of a length known only when it is exact.
+    if (isString(t) || t.kind === "Struct") return true;
+    if (isChar(t)) {
+      if (axis === 0) return true;
+      if (t.exact !== undefined) return t.exact.length === 1;
+      throw new UnsupportedConstruct(`'${name}' of a char of unknown length`);
+    }
+    if (!isNumeric(t)) return false;
     const dims = t.dims;
     if (dims.length !== 2) return false;
     if (isDimOne(dims[axis])) return true;

@@ -72,6 +72,11 @@ export const notBuiltin: Builtin = {
         `'~' / 'not' arg must be a real double or logical (got ${a.elem})`
       );
     }
+    if (a.isComplex) {
+      throw new UnsupportedConstruct(
+        `'~' / 'not' of a complex value raises; left to the interpreter`
+      );
+    }
     // Scalar input → scalar logical, sign nonneg.
     if (isScalar(a)) {
       if (a.isComplex) {
