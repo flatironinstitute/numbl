@@ -1436,6 +1436,208 @@ fn at(s: u32, k: u32) -> u32 {
       discard(totals);
     },
 
+    /** Sort each sequence along the middle dimension of `src` viewed as
+     *  [inner, len, outer]: the sequences are copied into work buffers of
+     *  (value, position) pairs padded to a power of 2, sorted there by a
+     *  bitonic network (a pass per stage), and copied out with `outIdx`
+     *  the 1-based positions. Ties keep their order (positions compare),
+     *  and NaN sorts last, or first with `descend`, as in MATLAB. */
+    async sort(
+      device: GPUDevice,
+      args: {
+        out: number;
+        outIdx: number;
+        src: number;
+        inner: number;
+        len: number;
+        outer: number;
+        descend: boolean;
+      }
+    ) {
+      const { inner, len, outer } = args;
+      const nseq = inner * outer;
+      const out = create(device, args.out, nseq * len);
+      const outIdx = args.outIdx
+        ? create(device, args.outIdx, nseq * len)
+        : null;
+      if (nseq * len === 0) return;
+      let pw = 1;
+      while (pw < len) pw *= 2;
+      const keys = device.createBuffer({ size: nseq * pw * 4, usage: usage() });
+      const pos = device.createBuffer({ size: nseq * pw * 4, usage: usage() });
+      const head = `
+struct P { inner: u32, len: u32, pw: u32, nseq: u32, w: u32, k: u32, j: u32, desc: u32 }
+@group(0) @binding(0) var<uniform> p: P;
+fn at(s: u32, j: u32) -> u32 {
+  return (s % p.inner) + j * p.inner + (s / p.inner) * p.inner * p.len;
+}`;
+      const u = (threads: number, k = 0, j = 0) =>
+        uniforms([
+          inner,
+          len,
+          pw,
+          nseq,
+          grid(threads).width,
+          k,
+          j,
+          args.descend ? 1 : 0,
+        ]);
+      // Padding (position 0xffffffff) sorts after everything.
+      const pack = `${head}
+@group(0) @binding(1) var<storage, read_write> keys: array<f32>;
+@group(0) @binding(2) var<storage, read_write> pos: array<u32>;
+@group(0) @binding(3) var<storage, read> src: array<f32>;
+@compute @workgroup_size(256) fn main(@builtin(global_invocation_id) g: vec3u) {
+  let t = g.x + g.y * p.w;
+  if (t >= p.nseq * p.pw) { return; }
+  let s = t / p.pw;
+  let j = t % p.pw;
+  if (j < p.len) {
+    keys[t] = src[at(s, j)];
+    pos[t] = j;
+  } else {
+    keys[t] = 0.0;
+    pos[t] = 0xffffffffu;
+  }
+}`;
+      run(
+        device,
+        pack,
+        u(nseq * pw),
+        [keys, pos, buffer(args.src)],
+        grid(nseq * pw).groups
+      );
+      // One bitonic stage: compare element i with i ^ j; blocks of size k
+      // alternate direction.
+      const stage = `${head}
+@group(0) @binding(1) var<storage, read_write> keys: array<f32>;
+@group(0) @binding(2) var<storage, read_write> pos: array<u32>;
+// Whether element x sorts before element y.
+fn before(x: u32, y: u32) -> bool {
+  let ix = pos[x];
+  let iy = pos[y];
+  if (ix == 0xffffffffu) { return false; }
+  if (iy == 0xffffffffu) { return true; }
+  let kx = keys[x];
+  let ky = keys[y];
+  let nx = isnan_(kx);
+  let ny = isnan_(ky);
+  if (nx != ny) { return select(ny, nx, p.desc != 0u); }
+  if (!nx && kx != ky) { return select((kx < ky), (kx > ky), p.desc != 0u); }
+  return ix < iy;
+}
+@compute @workgroup_size(256) fn main(@builtin(global_invocation_id) g: vec3u) {
+  let t = g.x + g.y * p.w;
+  if (t >= p.nseq * p.pw) { return; }
+  let i = t % p.pw;
+  let l = i ^ p.j;
+  if (l <= i) { return; }
+  let a = t;
+  let b = t - i + l;
+  let up = (i & p.k) == 0u;
+  if (select(before(a, b), before(b, a), up)) {
+    let ka = keys[a];
+    keys[a] = keys[b];
+    keys[b] = ka;
+    let pa = pos[a];
+    pos[a] = pos[b];
+    pos[b] = pa;
+  }
+}`;
+      // Stages comparing within blocks of `bs` elements (a block lies in
+      // one sequence) run in workgroup memory, all of a block's stages for
+      // k <= bs in one dispatch, and for larger k those with j < bs.
+      // (Two elements per thread, within WebGPU's default 256 threads.)
+      const bs = Math.min(pw, 512);
+      const local = `${head}
+@group(0) @binding(1) var<storage, read_write> keys: array<f32>;
+@group(0) @binding(2) var<storage, read_write> pos: array<u32>;
+var<workgroup> sk: array<f32, ${bs}>;
+var<workgroup> sp: array<u32, ${bs}>;
+fn before(x: u32, y: u32) -> bool {
+  let ix = sp[x];
+  let iy = sp[y];
+  if (ix == 0xffffffffu) { return false; }
+  if (iy == 0xffffffffu) { return true; }
+  let kx = sk[x];
+  let ky = sk[y];
+  let nx = isnan_(kx);
+  let ny = isnan_(ky);
+  if (nx != ny) { return select(ny, nx, p.desc != 0u); }
+  if (!nx && kx != ky) { return select((kx < ky), (kx > ky), p.desc != 0u); }
+  return ix < iy;
+}
+@compute @workgroup_size(${bs / 2}) fn main(
+  @builtin(local_invocation_index) t: u32,
+  @builtin(workgroup_id) w: vec3u
+) {
+  let block = w.x + w.y * p.w;
+  if (block * ${bs}u >= p.nseq * p.pw) { return; }
+  let base = block * ${bs}u;
+  sk[t] = keys[base + t];
+  sp[t] = pos[base + t];
+  sk[t + ${bs / 2}u] = keys[base + t + ${bs / 2}u];
+  sp[t + ${bs / 2}u] = pos[base + t + ${bs / 2}u];
+  workgroupBarrier();
+  // k runs over [p.k, p.j] (powers of 2); j from min(k, bs) / 2 down to 1.
+  for (var k = p.k; k <= p.j; k = k * 2u) {
+    for (var j = min(k, ${bs}u) / 2u; j > 0u; j = j / 2u) {
+      let i = 2u * j * (t / j) + (t % j);
+      let up = (((base + i) % p.pw) & k) == 0u;
+      if (select(before(i, i + j), before(i + j, i), up)) {
+        let ka = sk[i];
+        sk[i] = sk[i + j];
+        sk[i + j] = ka;
+        let pa = sp[i];
+        sp[i] = sp[i + j];
+        sp[i + j] = pa;
+      }
+      workgroupBarrier();
+    }
+  }
+  keys[base + t] = sk[t];
+  pos[base + t] = sp[t];
+  keys[base + t + ${bs / 2}u] = sk[t + ${bs / 2}u];
+  pos[base + t + ${bs / 2}u] = sp[t + ${bs / 2}u];
+}`;
+      const nblocks = (nseq * pw) / bs;
+      const bx = Math.min(nblocks, 65535);
+      const blocks: [number, number] = [bx, Math.ceil(nblocks / bx)];
+      // For the local kernel, `k` and `j` hold the first and last k.
+      const lu = (k0: number, k1: number) =>
+        uniforms([inner, len, pw, nseq, bx, k0, k1, args.descend ? 1 : 0]);
+      if (pw >= 2) run(device, local, lu(2, bs), [keys, pos], blocks);
+      for (let k = 2 * bs; k <= pw; k *= 2) {
+        for (let j = k >> 1; j >= bs; j >>= 1)
+          run(
+            device,
+            stage,
+            u(nseq * pw, k, j),
+            [keys, pos],
+            grid(nseq * pw).groups
+          );
+        run(device, local, lu(k, k), [keys, pos], blocks);
+      }
+      const unpack = `${head}
+@group(0) @binding(1) var<storage, read_write> dst: array<f32>;
+@group(0) @binding(2) var<storage, read> keys: array<f32>;
+${outIdx ? "@group(0) @binding(3) var<storage, read> pos: array<u32>;" : ""}
+${outIdx ? "@group(0) @binding(4) var<storage, read_write> dstIdx: array<f32>;" : ""}
+@compute @workgroup_size(256) fn main(@builtin(global_invocation_id) g: vec3u) {
+  let t = g.x + g.y * p.w;
+  if (t >= p.nseq * p.len) { return; }
+  let s = t / p.len;
+  let j = t % p.len;
+  dst[at(s, j)] = keys[s * p.pw + j];
+  ${outIdx ? "dstIdx[at(s, j)] = f32(pos[s * p.pw + j] + 1u);" : ""}
+}`;
+      const bufs = [out, keys];
+      if (outIdx) bufs.push(pos, outIdx);
+      run(device, unpack, u(nseq * len), bufs, grid(nseq * len).groups);
+      discard(keys);
+      discard(pos);
+    },
+
     /** Element `index` of buffer `id`, after the work that computes it. */
     async readAt(device: GPUDevice, args: { id: number; index: number }) {
       await settle(device);

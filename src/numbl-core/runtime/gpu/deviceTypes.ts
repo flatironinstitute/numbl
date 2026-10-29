@@ -187,6 +187,18 @@ export interface GpuKernels {
     len: number,
     outer: number
   ): unknown;
+  /** `sort` over the middle dimension of `src` viewed as [inner, len,
+   *  outer]: stable, NaN last (first with `descend`), and with
+   *  `withIndex` the 1-based position of each value in its sequence (as
+   *  f32: positions below 2^24). */
+  sort?(
+    src: unknown,
+    inner: number,
+    len: number,
+    outer: number,
+    descend: boolean,
+    withIndex: boolean
+  ): { value: unknown; index: unknown | null };
   /** Element `index` of `buffer`, waiting for the work that computes it. */
   readAt?(buffer: unknown, index: number): number;
   /** Stream compaction over a 0/1 `mask` of `n` elements, whose inclusive

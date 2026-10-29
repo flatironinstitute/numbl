@@ -281,6 +281,40 @@ same(find(GA > 100), find(A > 100), 0);
 same(nnz(GM), nnz(M), 0);
 same(nnz(gpuArray(N)), nnz(N), 0);
 
+% sort: stable, NaN last (first descending), along any dimension
+R = round(A * 2);
+R(3, 4) = NaN;
+R(10, 4) = NaN;
+GR = gpuArray(R);
+same(sort(GR), sort(R), 0);
+same(sort(GR, 2), sort(R, 2), 0);
+same(sort(GR, 'descend'), sort(R, 'descend'), 0);
+same(sort(GR, 2, 'descend'), sort(R, 2, 'descend'), 0);
+[gs, gi] = sort(GR);
+[hs, hi] = sort(R);
+same(gs, hs, 0);
+same(gi, hi, 0);
+[gs, gi] = sort(GR, 2, 'descend');
+[hs, hi] = sort(R, 2, 'descend');
+same(gi, hi, 0);
+same(sort(GT, 3), sort(T, 3), 0);
+[gs, gi] = sort(GA(5, :));
+[hs, hi] = sort(A(5, :));
+same(gs, hs, 0);
+same(gi, hi, 0);
+same(sort(GM), sort(M), 0);
+same(median(GA), median(A), 1e-6);
+same(median(GA, 2), median(A, 2), 1e-6);
+same(median(GA, 'all'), median(A, 'all'), 1e-6);
+same(median(GR), median(R), 1e-6);
+same(median(GT, 3), median(T, 3), 1e-6);
+same(median(GA(:, 1:52), 2), median(A(:, 1:52), 2), 1e-6);
+v = single(randn(100003, 1));
+[gs, gi] = sort(gpuArray(v), 'descend');
+[hs, hi] = sort(v, 'descend');
+same(gs, hs, 0);
+same(gi, hi, 0);
+
 disp('SUCCESS')
 
 function same(g, h, tol)
