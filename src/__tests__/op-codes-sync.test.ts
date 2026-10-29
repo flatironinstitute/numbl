@@ -11,8 +11,7 @@
 import { describe, it, expect } from "vitest";
 import { createRequire } from "node:module";
 import {
-  OpRealBin,
-  OpComplexBin,
+  OpBin,
   OpUnary,
   OpCmp,
   OpReduce,
@@ -30,8 +29,8 @@ function loadAddon(): unknown | null {
 
 function expectedDump(): string {
   return (
-    `real_binary:ADD=${OpRealBin.ADD},SUB=${OpRealBin.SUB},MUL=${OpRealBin.MUL},DIV=${OpRealBin.DIV};` +
-    `complex_binary:ADD=${OpComplexBin.ADD},SUB=${OpComplexBin.SUB},MUL=${OpComplexBin.MUL},DIV=${OpComplexBin.DIV};` +
+    `real_binary:ADD=${OpBin.ADD},SUB=${OpBin.SUB},MUL=${OpBin.MUL},DIV=${OpBin.DIV};` +
+    `complex_binary:ADD=${OpBin.ADD},SUB=${OpBin.SUB},MUL=${OpBin.MUL},DIV=${OpBin.DIV};` +
     `unary:EXP=${OpUnary.EXP},LOG=${OpUnary.LOG},LOG2=${OpUnary.LOG2},LOG10=${OpUnary.LOG10},SQRT=${OpUnary.SQRT},ABS=${OpUnary.ABS},` +
     `FLOOR=${OpUnary.FLOOR},CEIL=${OpUnary.CEIL},ROUND=${OpUnary.ROUND},TRUNC=${OpUnary.TRUNC},` +
     `SIN=${OpUnary.SIN},COS=${OpUnary.COS},TAN=${OpUnary.TAN},ASIN=${OpUnary.ASIN},ACOS=${OpUnary.ACOS},ATAN=${OpUnary.ATAN},` +

@@ -19,6 +19,7 @@ import { builtin } from "./builtin.js";
 import { builtinError, mustBeRealError, numericArg } from "./args.js";
 import { realDenseArg, realFloatArg } from "./math-args.js";
 import { applyBinaryElemwise } from "./types.js";
+import { OpBin } from "../../ops/index.js";
 
 // ── atan2 ────────────────────────────────────────────────────────────────
 
@@ -31,8 +32,7 @@ builtin({
         realFloatArg(args[0], mustBeRealError),
         realFloatArg(args[1], mustBeRealError),
       ],
-      Math.atan2,
-      "atan2"
+      OpBin.ATAN2
     ),
 });
 
@@ -46,9 +46,8 @@ function minMaxBuiltin(mode: "min" | "max"): void {
     mode === "min"
       ? (a: number, b: number) => a < b
       : (a: number, b: number) => a > b;
-  const mathFn = mode === "min" ? Math.min : Math.max;
   const impl = (args: RuntimeValue[], nargout: number) =>
-    minMaxImpl(mode, args, nargout, initVal, cmpFn, mathFn);
+    minMaxImpl(mode, args, nargout, initVal, cmpFn);
 
   // Logical values stay logical (min(true, false) is logical); char
   // becomes its character codes.
@@ -129,14 +128,7 @@ minMaxBuiltin("max");
 
 // ── mod / rem ────────────────────────────────────────────────────────────
 
-function modFn(a: number, b: number): number {
-  if (b === 0) return a;
-  let r = a % b;
-  if (r !== 0 && r < 0 !== b < 0) r += b;
-  return r;
-}
-
-function realBinary(name: string, fn: (a: number, b: number) => number): void {
+function realBinary(name: string, op: number): void {
   builtin({
     name,
     nargin: 2,
@@ -146,14 +138,13 @@ function realBinary(name: string, fn: (a: number, b: number) => number): void {
           realDenseArg(args[0], mustBeRealError),
           realDenseArg(args[1], mustBeRealError),
         ],
-        fn,
-        name
+        op
       ),
   });
 }
 
-realBinary("mod", modFn);
-realBinary("rem", (a, b) => a % b);
+realBinary("mod", OpBin.MOD);
+realBinary("rem", OpBin.REM);
 
 // ── power ────────────────────────────────────────────────────────────────
 // power(a, b) is the functional form of a.^b, including complex results

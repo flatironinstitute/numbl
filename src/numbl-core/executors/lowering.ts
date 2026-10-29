@@ -21,6 +21,11 @@ import type { FunctionDef } from "../interpreter/types.js";
 import type { Interpreter } from "../interpreter/interpreter.js";
 import type { Type } from "../jit/index.js";
 import {
+  paramPositions,
+  recordWidening,
+  type WideningHistory,
+} from "./inputTypes.js";
+import {
   classifyTopLevel,
   classifyCall,
   classifyLoop,
@@ -69,27 +74,34 @@ export interface CallLoweredStmt {
   readonly args: readonly unknown[];
 }
 
-/** Per-owner type-widening state: the most recent input type signature
- *  seen for (owner, slot), where owner is the head Stmt (top-level, loop)
- *  or the FunctionDef (call). Classification widens against it so a unit
- *  invoked with shifting input types converges to a single specialization
+/** Per-owner type-widening state: the input types seen for (owner, slot)
+ *  (`WideningHistory`), where owner is the head Stmt (top-level, loop) or
+ *  the FunctionDef (call). Classification widens against it so a unit
+ *  invoked with shifting input types converges to a few specializations
  *  rather than thrashing the compile cache. The slot lets one owner host
  *  several trackers (one per nargout for calls). WeakMap-scoped so entries
  *  are reclaimed when the AST is dropped. */
 export class WideningState {
-  private readonly last = new WeakMap<object, Map<string, Type[]>>();
+  private readonly last = new WeakMap<object, Map<string, WideningHistory>>();
 
-  get(owner: object, slot: string): Type[] | undefined {
+  get(owner: object, slot: string): WideningHistory | undefined {
     return this.last.get(owner)?.get(slot);
   }
 
-  set(owner: object, slot: string, types: readonly Type[]): void {
+  set(
+    owner: object,
+    slot: string,
+    names: readonly string[],
+    types: readonly Type[]
+  ): void {
     let perOwner = this.last.get(owner);
     if (!perOwner) {
       perOwner = new Map();
       this.last.set(owner, perOwner);
     }
-    perOwner.set(slot, [...types]);
+    const prev = perOwner.get(slot);
+    const next = recordWidening(prev, names, types);
+    if (next !== prev) perOwner.set(slot, next);
   }
 }
 
@@ -106,7 +118,7 @@ export function tryLowerLoop(
   const prev = widening.get(head, "");
   const classification = classifyLoop(interp, head, siblings, i, prev);
   if (!classification) return null;
-  widening.set(head, "", classification.inputTypes);
+  widening.set(head, "", classification.inputs, classification.inputTypes);
   return { kind: "loop", classification };
 }
 
@@ -122,7 +134,7 @@ export function tryLowerTopLevel(
   const prev = widening.get(head, "");
   const classification = classifyTopLevel(interp, siblings, prev);
   if (!classification) return null;
-  widening.set(head, "", classification.inputTypes);
+  widening.set(head, "", classification.inputs, classification.inputTypes);
   return { kind: "top-level", classification };
 }
 
@@ -163,7 +175,7 @@ export function tryLowerStmt(
     stmtDeclined(cand);
     return null;
   }
-  widening.set(head, "", classification.inputTypes);
+  widening.set(head, "", classification.inputs, classification.inputTypes);
   return { kind: "stmt", classification, candidate: cand };
 }
 
@@ -179,6 +191,11 @@ export function tryLowerCall(
   const prev = widening.get(fn, slot);
   const classification = classifyCall(fn, args, nargout, prev);
   if (!classification) return null;
-  widening.set(fn, slot, classification.argTypes);
+  widening.set(
+    fn,
+    slot,
+    paramPositions(classification.argTypes.length),
+    classification.argTypes
+  );
   return { kind: "call", classification, args };
 }

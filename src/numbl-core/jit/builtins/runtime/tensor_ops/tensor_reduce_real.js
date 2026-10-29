@@ -15,16 +15,30 @@ function squeeze_trailing(dims) {
   return dims;
 }
 
+// Inputs this long reduce through the host's kernel when installed (the
+// interpreter's own, native when the addon is loaded): it accumulates in
+// the same sequential order, so the bits match, and a C loop is several
+// times faster than this JS one.
+const HOST_REDUCE_MIN = 256;
+
+function host_reduce(x) {
+  return (
+    x.length >= HOST_REDUCE_MIN && typeof $elemwise === "object" && $elemwise
+  );
+}
+
 // Accumulator-based reducers (`sum`, `prod`, `mean`). The loops add or
 // multiply inline (sequentially, like the C kernel) rather than through
 // an accumulator callback, which went megamorphic in V8.
 function sum_all_seq(x) {
+  if (host_reduce(x)) return $elemwise.reduce("sum", x);
   let acc = 0;
   for (let i = 0; i < x.length; i++) acc += x[i];
   return acc;
 }
 
 function prod_all_seq(x) {
+  if (host_reduce(x)) return $elemwise.reduce("prod", x);
   let acc = 1;
   for (let i = 0; i < x.length; i++) acc *= x[i];
   return acc;
@@ -86,11 +100,7 @@ function accum_dim(t, dim, isProd, isMean) {
 function minmax_all(t, op /* "min" | "max" */) {
   const x = t.data;
   if (x.length === 0) return op === "min" ? Infinity : -Infinity;
-  // Large inputs use the host's kernel (same as the interpreter) when
-  // installed; see `tensor_elemwise_real.js`.
-  if (x.length >= 1024 && typeof $elemwise === "object" && $elemwise) {
-    return $elemwise.minmax(op, x);
-  }
+  if (host_reduce(x)) return $elemwise.reduce(op, x);
   // Seed with the first non-NaN element, then a plain compare loop per op
   // (a NaN never wins a comparison, so it is skipped).
   let i = 0;

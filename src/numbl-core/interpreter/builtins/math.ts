@@ -44,7 +44,7 @@ import {
 } from "../../helpers/erf.js";
 import { lanczosGamma } from "../../helpers/bessel.js";
 import { allocFloat64Array } from "../../runtime/alloc.js";
-import { OpUnary } from "../../ops/index.js";
+import { OpBin, OpUnary } from "../../ops/index.js";
 
 type Complex = { re: number; im: number };
 type ComplexFn = (re: number, im: number) => Complex;
@@ -71,9 +71,10 @@ function registerUnary(
   name: string,
   realFn: (x: number) => number,
   complexFn: ComplexFn,
-  mfile = false
+  mfile = false,
+  op?: number
 ): void {
-  floatUnary(name, { realFn, complexFn }, { mfile });
+  floatUnary(name, { realFn, complexFn, op }, { mfile });
 }
 
 /** A real-only floating-point unary builtin (erf, gamma, ...): complex
@@ -108,8 +109,7 @@ function realFloatBinary(
     apply: args =>
       applyBinaryElemwise(
         [realFloatArg(args[0], err), realFloatArg(args[1], err)],
-        fn,
-        name
+        fn
       ),
   });
 }
@@ -337,9 +337,9 @@ function toDegComplex(fn: ComplexFn): ComplexFn {
 
 // ── Trig ────────────────────────────────────────────────────────────────
 
-registerUnary("sin", Math.sin, cSin);
-registerUnary("cos", Math.cos, cCos);
-registerUnary("tan", Math.tan, cTan);
+registerUnary("sin", Math.sin, cSin, false, OpUnary.SIN);
+registerUnary("cos", Math.cos, cCos, false, OpUnary.COS);
+registerUnary("tan", Math.tan, cTan, false, OpUnary.TAN);
 
 // asin/acos: maybe-complex — out-of-domain real inputs (|x| > 1) produce
 // complex results.
@@ -347,31 +347,31 @@ floatUnary("asin", {
   realFn: Math.asin,
   complexFn: cAsin,
   maybeComplex: true,
-  nativeOpCode: OpUnary.ASIN,
+  op: OpUnary.ASIN,
 });
 floatUnary("acos", {
   realFn: Math.acos,
   complexFn: cAcos,
   maybeComplex: true,
-  nativeOpCode: OpUnary.ACOS,
+  op: OpUnary.ACOS,
 });
-registerUnary("atan", Math.atan, cAtan);
+registerUnary("atan", Math.atan, cAtan, false, OpUnary.ATAN);
 
 // ── Hyperbolic ──────────────────────────────────────────────────────────
 
-registerUnary("sinh", Math.sinh, cSinh);
-registerUnary("cosh", Math.cosh, cCosh);
-registerUnary("tanh", Math.tanh, cTanh);
+registerUnary("sinh", Math.sinh, cSinh, false, OpUnary.SINH);
+registerUnary("cosh", Math.cosh, cCosh, false, OpUnary.COSH);
+registerUnary("tanh", Math.tanh, cTanh, false, OpUnary.TANH);
 
 // ── Exp / Log ───────────────────────────────────────────────────────────
 
-registerUnary("exp", Math.exp, complexExp);
+registerUnary("exp", Math.exp, complexExp, false, OpUnary.EXP);
 
 floatUnary("log", {
   realFn: Math.log,
   complexFn: complexLog,
   maybeComplex: true,
-  nativeOpCode: OpUnary.LOG,
+  op: OpUnary.LOG,
 });
 
 const complexLog2 = (re: number, im: number) => ({
@@ -391,7 +391,7 @@ const log2Elemwise = unaryElemwise(
     realFn: Math.log2,
     complexFn: complexLog2,
     maybeComplex: true,
-    nativeOpCode: OpUnary.LOG2,
+    op: OpUnary.LOG2,
   },
   "log2"
 );
@@ -437,7 +437,7 @@ floatUnary("log10", {
   realFn: Math.log10,
   complexFn: complexLog10,
   maybeComplex: true,
-  nativeOpCode: OpUnary.LOG10,
+  op: OpUnary.LOG10,
 });
 
 // ── Abs ─────────────────────────────────────────────────────────────────
@@ -445,7 +445,7 @@ floatUnary("log10", {
 builtin({
   name: "abs",
   nargin: 1,
-  apply: unaryRealResult(Math.abs, Math.hypot, "abs"),
+  apply: unaryRealResult(Math.abs, Math.hypot, "abs", OpUnary.ABS),
 });
 
 // ── Sqrt ────────────────────────────────────────────────────────────────
@@ -469,7 +469,7 @@ floatUnary("sqrt", {
   realFn: x => (x >= 0 ? Math.sqrt(x) : NaN),
   complexFn: complexSqrt,
   maybeComplex: true,
-  nativeOpCode: OpUnary.SQRT,
+  op: OpUnary.SQRT,
 });
 
 // ── Realsqrt ────────────────────────────────────────────────────────────
@@ -519,6 +519,7 @@ builtin({
   apply: unaryElemwise(
     {
       realFn: x => Math.sign(x) + 0, // sign(-0) is 0
+      op: OpUnary.SIGN,
       complexFn: (re, im) => {
         // Use hypot so magnitude stays finite when re*re or im*im overflow.
         const mag = Math.hypot(re, im);
@@ -532,20 +533,24 @@ builtin({
 
 // ── Rounding ────────────────────────────────────────────────────────────
 
-function registerRounding(name: string, fn: (x: number) => number): void {
+function registerRounding(
+  name: string,
+  fn: (x: number) => number,
+  op: number
+): void {
   builtin({
     name,
     nargin: 1,
     apply: unaryElemwise(
-      { realFn: fn, complexFn: (re, im) => ({ re: fn(re), im: fn(im) }) },
+      { realFn: fn, complexFn: (re, im) => ({ re: fn(re), im: fn(im) }), op },
       name
     ),
   });
 }
 
-registerRounding("floor", Math.floor);
-registerRounding("ceil", Math.ceil);
-registerRounding("fix", Math.trunc);
+registerRounding("floor", Math.floor, OpUnary.FLOOR);
+registerRounding("ceil", Math.ceil, OpUnary.CEIL);
+registerRounding("fix", Math.trunc, OpUnary.TRUNC);
 
 // MATLAB round: half away from zero (not JS half-toward-+inf)
 function matlabRound(x: number): number {
@@ -674,7 +679,7 @@ floatUnary("log1p", {
 
 // hypot(a, b) = sqrt(abs(a).^2 + abs(b).^2), so complex input is reduced
 // to its magnitude first.
-const absOf = unaryRealResult(Math.abs, Math.hypot, "hypot");
+const absOf = unaryRealResult(Math.abs, Math.hypot, "hypot", OpUnary.ABS);
 
 builtin({
   name: "hypot",
@@ -682,8 +687,7 @@ builtin({
   apply: args =>
     applyBinaryElemwise(
       [absOf([floatArg(args[0])]), absOf([floatArg(args[1])])],
-      Math.hypot,
-      "hypot"
+      OpBin.HYPOT
     ),
 });
 
@@ -849,8 +853,7 @@ builtin({
       );
     return applyBinaryElemwise(
       [realFloatArg(args[0], err), realFloatArg(args[1], err)],
-      (f, e) => f * Math.pow(2, e),
-      "pow2"
+      (f, e) => f * Math.pow(2, e)
     );
   },
 });
@@ -900,8 +903,7 @@ builtin({
           if (Math.pow(rounded, n) === x) return rounded;
         }
         return result;
-      },
-      "nthroot"
+      }
     );
   },
 });
@@ -1009,8 +1011,7 @@ builtin({
         }
         if (gxy === 0) return Infinity;
         return (gx / gxy) * gy;
-      },
-      "beta"
+      }
     );
   },
 });

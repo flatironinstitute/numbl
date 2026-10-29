@@ -16,6 +16,7 @@ import { RuntimeError } from "../runtime/error.js";
 import { RTV } from "../runtime/constructors.js";
 import { tensorSize2D } from "../runtime/utils.js";
 import { allocFloat64Array } from "../runtime/alloc.js";
+import { sizeMismatchError } from "../ops/broadcast.js";
 
 // ── Helpers ─────────────────────────────────────────────────────────────
 
@@ -84,10 +85,7 @@ function sparseAdd(
   a: RuntimeSparseMatrix,
   b: RuntimeSparseMatrix
 ): RuntimeSparseMatrix {
-  if (a.m !== b.m || a.n !== b.n)
-    throw new RuntimeError(
-      `Matrix dimensions must agree: [${a.m},${a.n}] vs [${b.m},${b.n}]`
-    );
+  if (a.m !== b.m || a.n !== b.n) throw sizeMismatchError();
   const hasImag = isComplexSparse(a) || isComplexSparse(b);
   const irList: number[] = [];
   const prList: number[] = [];
@@ -153,10 +151,7 @@ function sparseSub(
   a: RuntimeSparseMatrix,
   b: RuntimeSparseMatrix
 ): RuntimeSparseMatrix {
-  if (a.m !== b.m || a.n !== b.n)
-    throw new RuntimeError(
-      `Matrix dimensions must agree: [${a.m},${a.n}] vs [${b.m},${b.n}]`
-    );
+  if (a.m !== b.m || a.n !== b.n) throw sizeMismatchError();
   const hasImag = isComplexSparse(a) || isComplexSparse(b);
   const irList: number[] = [];
   const prList: number[] = [];
@@ -432,10 +427,7 @@ function sparseElemMul(
   a: RuntimeSparseMatrix,
   b: RuntimeSparseMatrix
 ): RuntimeSparseMatrix {
-  if (a.m !== b.m || a.n !== b.n)
-    throw new RuntimeError(
-      `Matrix dimensions must agree: [${a.m},${a.n}] vs [${b.m},${b.n}]`
-    );
+  if (a.m !== b.m || a.n !== b.n) throw sizeMismatchError();
   const hasImag = isComplexSparse(a) || isComplexSparse(b);
   const irList: number[] = [];
   const prList: number[] = [];
@@ -491,9 +483,7 @@ function sparseElemMulDense(
   // Allow MATLAB implicit expansion of the dense operand: a scalar (1×1),
   // a column (m×1), or a row (1×n) broadcasts against the sparse matrix.
   if (!(dRows === S.m || dRows === 1) || !(dCols === S.n || dCols === 1))
-    throw new RuntimeError(
-      `Matrix dimensions must agree: [${S.m},${S.n}] vs [${dRows},${dCols}]`
-    );
+    throw sizeMismatchError();
   const denseIdx = (row: number, col: number) =>
     (dCols === 1 ? 0 : col) * dRows + (dRows === 1 ? 0 : row);
   const hasImag = isComplexSparse(S) || D.imag !== undefined;
@@ -533,135 +523,21 @@ function sparseElemMulDense(
 
 // ── Dispatch helpers for arithmetic.ts ──────────────────────────────────
 
-export function mAddSparse(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
-  if (isRuntimeSparseMatrix(a) && isRuntimeSparseMatrix(b)) {
-    return sparseAdd(a, b);
-  }
-  // sparse + scalar (real or complex)
-  if (isRuntimeSparseMatrix(a)) {
-    const cs = complexScalarVal(b);
-    if (cs) {
-      const dense = sparseToDense(a);
-      const data = allocFloat64Array(dense.data.length);
-      for (let i = 0; i < data.length; i++) data[i] = dense.data[i] + cs.re;
-      const imag =
-        cs.im !== 0 || dense.imag
-          ? (() => {
-              const r = allocFloat64Array(data.length);
-              for (let i = 0; i < r.length; i++)
-                r[i] = (dense.imag ? dense.imag[i] : 0) + cs.im;
-              return r;
-            })()
-          : undefined;
-      return RTV.tensor(data, dense.shape, imag);
-    }
-  }
-  if (isRuntimeSparseMatrix(b)) {
-    const cs = complexScalarVal(a);
-    if (cs) {
-      const dense = sparseToDense(b);
-      const data = allocFloat64Array(dense.data.length);
-      for (let i = 0; i < data.length; i++) data[i] = cs.re + dense.data[i];
-      const imag =
-        cs.im !== 0 || dense.imag
-          ? (() => {
-              const r = allocFloat64Array(data.length);
-              for (let i = 0; i < r.length; i++)
-                r[i] = cs.im + (dense.imag ? dense.imag[i] : 0);
-              return r;
-            })()
-          : undefined;
-      return RTV.tensor(data, dense.shape, imag);
-    }
-  }
-  // sparse + dense tensor → dense
-  if (isRuntimeSparseMatrix(a) && isRuntimeTensor(b)) {
-    const dense = sparseToDense(a);
-    const data = allocFloat64Array(dense.data.length);
-    for (let i = 0; i < data.length; i++) data[i] = dense.data[i] + b.data[i];
-    const imag = mergeImag(dense.imag, b.imag, data.length, (x, y) => x + y);
-    return RTV.tensor(data, dense.shape, imag);
-  }
-  if (isRuntimeTensor(a) && isRuntimeSparseMatrix(b)) {
-    const dense = sparseToDense(b);
-    const data = allocFloat64Array(dense.data.length);
-    for (let i = 0; i < data.length; i++) data[i] = a.data[i] + dense.data[i];
-    const imag = mergeImag(a.imag, dense.imag, data.length, (x, y) => x + y);
-    return RTV.tensor(data, a.shape, imag);
-  }
-  throw new RuntimeError("mAddSparse: unexpected operand types");
+/** Sparse + sparse (a sparse result). Other operand combinations give a
+ *  full result and go through the element-wise kernels (helpers/arithmetic). */
+export function mAddSparse(
+  a: RuntimeSparseMatrix,
+  b: RuntimeSparseMatrix
+): RuntimeSparseMatrix {
+  return sparseAdd(a, b);
 }
 
-export function mSubSparse(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
-  if (isRuntimeSparseMatrix(a) && isRuntimeSparseMatrix(b)) {
-    return sparseSub(a, b);
-  }
-  if (isRuntimeSparseMatrix(a)) {
-    const cs = complexScalarVal(b);
-    if (cs) {
-      const dense = sparseToDense(a);
-      const data = allocFloat64Array(dense.data.length);
-      for (let i = 0; i < data.length; i++) data[i] = dense.data[i] - cs.re;
-      const imag =
-        cs.im !== 0 || dense.imag
-          ? (() => {
-              const r = allocFloat64Array(data.length);
-              for (let i = 0; i < r.length; i++)
-                r[i] = (dense.imag ? dense.imag[i] : 0) - cs.im;
-              return r;
-            })()
-          : undefined;
-      return RTV.tensor(data, dense.shape, imag);
-    }
-  }
-  if (isRuntimeSparseMatrix(b)) {
-    const cs = complexScalarVal(a);
-    if (cs) {
-      const dense = sparseToDense(b);
-      const data = allocFloat64Array(dense.data.length);
-      for (let i = 0; i < data.length; i++) data[i] = cs.re - dense.data[i];
-      const imag =
-        cs.im !== 0 || dense.imag
-          ? (() => {
-              const r = allocFloat64Array(data.length);
-              for (let i = 0; i < r.length; i++)
-                r[i] = cs.im - (dense.imag ? dense.imag[i] : 0);
-              return r;
-            })()
-          : undefined;
-      return RTV.tensor(data, dense.shape, imag);
-    }
-  }
-  if (isRuntimeSparseMatrix(a) && isRuntimeTensor(b)) {
-    const dense = sparseToDense(a);
-    const data = allocFloat64Array(dense.data.length);
-    for (let i = 0; i < data.length; i++) data[i] = dense.data[i] - b.data[i];
-    const imag = mergeImag(dense.imag, b.imag, data.length, (x, y) => x - y);
-    return RTV.tensor(data, dense.shape, imag);
-  }
-  if (isRuntimeTensor(a) && isRuntimeSparseMatrix(b)) {
-    const dense = sparseToDense(b);
-    const data = allocFloat64Array(dense.data.length);
-    for (let i = 0; i < data.length; i++) data[i] = a.data[i] - dense.data[i];
-    const imag = mergeImag(a.imag, dense.imag, data.length, (x, y) => x - y);
-    return RTV.tensor(data, a.shape, imag);
-  }
-  throw new RuntimeError("mSubSparse: unexpected operand types");
-}
-
-/** Merge two optional imag arrays with the given op. Returns undefined if both are absent. */
-function mergeImag(
-  a: Float64Array | undefined,
-  b: Float64Array | undefined,
-  len: number,
-  op: (x: number, y: number) => number
-): Float64Array | undefined {
-  if (!a && !b) return undefined;
-  const result = allocFloat64Array(len);
-  for (let i = 0; i < len; i++) {
-    result[i] = op(a ? a[i] : 0, b ? b[i] : 0);
-  }
-  return result;
+/** Sparse - sparse (a sparse result). */
+export function mSubSparse(
+  a: RuntimeSparseMatrix,
+  b: RuntimeSparseMatrix
+): RuntimeSparseMatrix {
+  return sparseSub(a, b);
 }
 
 export function mMulSparse(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
@@ -789,63 +665,21 @@ export function mElemMulSparse(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
   throw new RuntimeError("mElemMulSparse: unexpected operand types");
 }
 
-export function mElemDivSparse(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
-  // Sparse ./ real scalar → sparse
-  if (isRuntimeSparseMatrix(a)) {
-    const s = scalarVal(b);
-    if (!isNaN(s)) return sparseScale(a, 1 / s);
-    // Sparse ./ complex scalar
-    const cs = complexScalarVal(b);
-    if (cs) {
-      const denom = cs.re * cs.re + cs.im * cs.im;
-      return sparseScaleComplex(a, cs.re / denom, -cs.im / denom);
-    }
+/** Sparse ./ scalar (a sparse result), or null for operands whose result
+ *  is full (those go through the element-wise kernels). */
+export function mElemDivSparse(
+  a: RuntimeValue,
+  b: RuntimeValue
+): RuntimeSparseMatrix | null {
+  if (!isRuntimeSparseMatrix(a)) return null;
+  const s = scalarVal(b);
+  if (!isNaN(s)) return sparseScale(a, 1 / s);
+  const cs = complexScalarVal(b);
+  if (cs) {
+    const denom = cs.re * cs.re + cs.im * cs.im;
+    return sparseScaleComplex(a, cs.re / denom, -cs.im / denom);
   }
-  // scalar ./ sparse → densify sparse, broadcast scalar
-  if (isRuntimeSparseMatrix(b)) {
-    const cs = complexScalarVal(a);
-    if (cs) {
-      const bDense = sparseToDense(b);
-      const len = bDense.data.length;
-      const hasImag = cs.im !== 0 || bDense.imag !== undefined;
-      const data = allocFloat64Array(len);
-      const imag = hasImag ? allocFloat64Array(len) : undefined;
-      for (let i = 0; i < len; i++) {
-        const bRe = bDense.data[i];
-        const bIm = bDense.imag ? bDense.imag[i] : 0;
-        if (!hasImag) {
-          data[i] = cs.re / bRe;
-        } else {
-          const denom = bRe * bRe + bIm * bIm;
-          data[i] = (cs.re * bRe + cs.im * bIm) / denom;
-          if (imag) imag[i] = (cs.im * bRe - cs.re * bIm) / denom;
-        }
-      }
-      return RTV.tensor(data, bDense.shape, imag);
-    }
-  }
-  // All other combinations → convert to dense, return dense
-  const aDense = isRuntimeSparseMatrix(a) ? sparseToDense(a) : a;
-  const bDense = isRuntimeSparseMatrix(b) ? sparseToDense(b) : b;
-  if (!isRuntimeTensor(aDense) || !isRuntimeTensor(bDense))
-    throw new RuntimeError("mElemDivSparse: unexpected operand types");
-  const hasImag = aDense.imag !== undefined || bDense.imag !== undefined;
-  const data = allocFloat64Array(aDense.data.length);
-  const imag = hasImag ? allocFloat64Array(aDense.data.length) : undefined;
-  for (let i = 0; i < data.length; i++) {
-    const bRe = bDense.data[i];
-    const bIm = bDense.imag ? bDense.imag[i] : 0;
-    if (!hasImag) {
-      data[i] = aDense.data[i] / bRe;
-    } else {
-      const aRe = aDense.data[i];
-      const aIm = aDense.imag ? aDense.imag[i] : 0;
-      const denom = bRe * bRe + bIm * bIm;
-      data[i] = (aRe * bRe + aIm * bIm) / denom;
-      if (imag) imag[i] = (aIm * bRe - aRe * bIm) / denom;
-    }
-  }
-  return RTV.tensor(data, aDense.shape, imag);
+  return null;
 }
 
 /** Convert sparse to dense RuntimeTensor (exported for use in arithmetic dispatch). */
