@@ -121,26 +121,31 @@ export const isRuntimeStringArray = (
 // enforcement comes in phase 3 when mutation methods replace direct
 // field writes.
 
+/** The MATLAB class of a tensor's elements (what `class` reports). Every
+ *  class stores its elements in a Float64Array; the class fixes their
+ *  semantics (a logical tensor holds 0/1 and is real). */
+export type ElementClass = "double" | "logical";
+
 export class RuntimeTensor extends Refcounted {
   readonly kind = "tensor" as const;
   data: Float64Array;
   imag: Float64Array | undefined;
   shape: number[];
-  /** When true, this tensor represents a logical (boolean) array from
-   *  comparisons/logical ops. */
-  _isLogical: boolean | undefined;
+  /** Element class, fixed at construction. A result of another class is
+   *  a new tensor (see `withElementClass` for a fresh, unshared one). */
+  readonly cls: ElementClass;
 
   constructor(
     data: Float64Array,
     shape: number[],
     imag?: Float64Array,
-    _isLogical?: boolean
+    cls: ElementClass = "double"
   ) {
     super();
     this.data = data;
     this.imag = imag;
     this.shape = shape;
-    this._isLogical = _isLogical;
+    this.cls = cls;
   }
 
   shallowClone(): RuntimeTensor {
@@ -148,9 +153,21 @@ export class RuntimeTensor extends Refcounted {
       allocFloat64Array(this.data),
       [...this.shape],
       this.imag !== undefined ? allocFloat64Array(this.imag) : undefined,
-      this._isLogical
+      this.cls
     );
   }
+}
+
+/** Set the element class of a tensor the caller has just built and holds
+ *  alone (a fresh kernel result that no slot references yet). This is the
+ *  one place `cls` is written after construction; anything else builds a
+ *  new tensor. */
+export function withElementClass(
+  t: RuntimeTensor,
+  cls: ElementClass
+): RuntimeTensor {
+  if (t.cls !== cls) (t as { cls: ElementClass }).cls = cls;
+  return t;
 }
 
 export class RuntimeChar extends Refcounted {

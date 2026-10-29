@@ -263,7 +263,7 @@ function isNumericOrLogical(v: RuntimeValue): boolean {
 }
 
 function isLogicalValue(v: RuntimeValue): boolean {
-  return isRuntimeLogical(v) || (isRuntimeTensor(v) && !!v._isLogical);
+  return isRuntimeLogical(v) || (isRuntimeTensor(v) && v.cls === "logical");
 }
 
 function isStringValue(v: RuntimeValue): boolean {

@@ -115,8 +115,7 @@ builtin({
     if (isRuntimeClassInstance(v)) return RTV.logical(valid(v));
     if (isRuntimeClassInstanceArray(v)) {
       const data = new Float64Array(v.elements.map(e => (valid(e) ? 1 : 0)));
-      const t = RTV.tensor(data, [v.shape[0], v.shape[1]]);
-      t._isLogical = true;
+      const t = RTV.logicalTensor(data, [v.shape[0], v.shape[1]]);
       return t;
     }
     if (isRuntimeGraphicsHandle(v)) return RTV.logical(true);

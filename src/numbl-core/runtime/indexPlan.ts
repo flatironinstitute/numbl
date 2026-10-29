@@ -213,7 +213,7 @@ function resolveSub(idx: RuntimeValue, extent: number, where: number): Sub {
   }
   if (idx === COLON_INDEX) return rangeSub(0, extent, true);
   if (isRuntimeTensor(idx)) {
-    return idx._isLogical
+    return idx.cls === "logical"
       ? maskSub(idx.data, idx.shape)
       : numericSub(idx.data, idx.shape, where);
   }

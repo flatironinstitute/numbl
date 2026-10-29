@@ -21,6 +21,7 @@ import {
   isRuntimeSparseMatrix,
   isRuntimeString,
   isRuntimeTensor,
+  withElementClass,
   isRuntimeStringArray,
   stringArrayValue,
 } from "../../runtime/types.js";
@@ -95,7 +96,7 @@ function numData(v: RuntimeValue): NumData | null {
       im: t.imag ?? null,
       shape: [...t.shape],
       isChar: false,
-      isLogical: !!v._isLogical,
+      isLogical: v.cls === "logical",
     };
   }
   if (isRuntimeChar(v)) {
@@ -131,13 +132,15 @@ function cmpAt(
 function makeNumeric(
   re: ArrayLike<number>,
   im: ArrayLike<number> | null,
-  shape: number[]
+  shape: number[],
+  logical = false
 ): RuntimeTensor {
   const keepIm = im !== null && Array.prototype.some.call(im, x => x !== 0);
   return RTV.tensor(
     Float64Array.from(re),
     shape,
-    keepIm ? Float64Array.from(im) : undefined
+    keepIm ? Float64Array.from(im) : undefined,
+    logical ? "logical" : "double"
   );
 }
 
@@ -514,9 +517,9 @@ builtin({
       // complex without leaving the real domain) sorts by value, not
       // magnitude, and returns a real result.
       const out = sortTensor(stripZeroImagTensor(v), dim, descend, nargout);
-      if (v._isLogical) {
+      if (v.cls === "logical") {
         const sorted = Array.isArray(out) ? out[0] : out;
-        (sorted as RuntimeTensor)._isLogical = true;
+        withElementClass(sorted as RuntimeTensor, "logical");
       }
       return out;
     }
@@ -983,8 +986,7 @@ function ismemberStrings(
       tfData[i] = found ? 1 : 0;
       if (locData) locData[i] = found ? bStrings.indexOf(s) + 1 : 0;
     }
-    const t = RTV.tensor(tfData, [...v.shape]);
-    t._isLogical = true;
+    const t = RTV.logicalTensor(tfData, [...v.shape]);
     if (nargout > 1) {
       return [t, RTV.tensor(locData!, [...v.shape])];
     }
@@ -1033,8 +1035,7 @@ function ismemberNumeric(
     const lia = RTV.logical(tfData[0] === 1);
     return nargout > 1 ? [lia, RTV.num(locData![0])] : lia;
   }
-  const t = RTV.tensor(tfData, [...shape]);
-  t._isLogical = true;
+  const t = RTV.logicalTensor(tfData, [...shape]);
   if (nargout > 1) return [t, RTV.tensor(locData!, [...shape])];
   return t;
 }
@@ -1182,8 +1183,7 @@ builtin({
       const l = RTV.logical(lia[0] === 1);
       return nargout <= 1 ? l : [l, RTV.num(locb[0])];
     }
-    const tf = RTV.tensor(lia, shape);
-    tf._isLogical = true;
+    const tf = RTV.logicalTensor(lia, shape);
     if (nargout <= 1) return tf;
     if (allIndices) {
       const cells = all.map(h =>
@@ -1242,10 +1242,10 @@ builtin({
     const out = RTV.tensor(
       allocFloat64Array(nzVals),
       [n, 1],
-      d.im && n > 0 ? allocFloat64Array(nzImag) : undefined
+      d.im && n > 0 ? allocFloat64Array(nzImag) : undefined,
+      d.isLogical ? "logical" : "double"
     );
     if (d.isChar) return numericTensorToChar(out);
-    if (d.isLogical) out._isLogical = true;
     return out;
   },
 });
@@ -1343,9 +1343,13 @@ builtin({
         if (resultIm) resultIm[i + j * m] = im![rowIdx[i] + j * m];
       }
     }
-    let result: RuntimeValue = makeNumeric(resultRe, resultIm, [m, n]);
+    let result: RuntimeValue = makeNumeric(
+      resultRe,
+      resultIm,
+      [m, n],
+      d.isLogical
+    );
     if (d.isChar) result = numericTensorToChar(result as RuntimeTensor);
-    else if (d.isLogical) (result as RuntimeTensor)._isLogical = true;
 
     if (nargout > 1) {
       const idxData = allocFloat64Array(m);
@@ -1455,9 +1459,9 @@ function uniqueValues(
   const out = byRows
     ? uniqueByRows(v, nargout, stable)
     : uniqueElements(v, nargout, stable);
-  if (v._isLogical) {
+  if (v.cls === "logical") {
     const C = Array.isArray(out) ? out[0] : out;
-    (C as RuntimeTensor)._isLogical = true;
+    withElementClass(C as RuntimeTensor, "logical");
   }
   return out;
 }
@@ -1908,8 +1912,7 @@ builtin({
           colRe[g] = re[j * rows + firsts[g]] + 0; // -0 -> 0
           if (colIm) colIm[g] = im![j * rows + firsts[g]] + 0;
         }
-        const t = makeNumeric(colRe, colIm, [ng, 1]);
-        if (d.isLogical) t._isLogical = true;
+        const t = makeNumeric(colRe, colIm, [ng, 1], d.isLogical);
         return t;
       };
       groups =

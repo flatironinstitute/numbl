@@ -122,8 +122,12 @@ function packResults(results: RuntimeValue[], shape: number[]): RuntimeValue {
     for (let i = 0; i < results.length; i++) {
       data[i] = toNumber(results[i]);
     }
-    const result = RTV.tensor(data, [...shape]);
-    if (allLogical) result._isLogical = true;
+    const result = RTV.tensor(
+      data,
+      [...shape],
+      undefined,
+      allLogical ? "logical" : "double"
+    );
     return result;
   }
   return RTV.cell(results, [...shape]);
@@ -601,8 +605,12 @@ function arrayfunCellfunImpl(
         if (!isRuntimeLogical(rv)) allLogical = false;
       }
     }
-    const result = RTV.tensor(resultData, [...arrArg.shape]);
-    if (allLogical && arrArg.data.length > 0) result._isLogical = true;
+    const result = RTV.tensor(
+      resultData,
+      [...arrArg.shape],
+      undefined,
+      allLogical && arrArg.data.length > 0 ? "logical" : "double"
+    );
     return result;
   }
   if (
@@ -692,8 +700,7 @@ export function cellfunImpl(
         for (let i = 0; i < cellArg.data.length; i++) {
           data[i] = valueClass(cellArg.data[i]) === className ? 1 : 0;
         }
-        const result = RTV.tensor(data, [...cellArg.shape]);
-        result._isLogical = true;
+        const result = RTV.logicalTensor(data, [...cellArg.shape]);
         return result;
       }
       // Convert string function name to function handle and delegate

@@ -3164,8 +3164,7 @@ builtin({
     }
     while (outShape.length > 2 && outShape[outShape.length - 1] === 1)
       outShape.pop();
-    const out = RTV.tensor(outData, outShape, outIm);
-    if (X._isLogical) out._isLogical = true;
+    const out = RTV.tensor(outData, outShape, outIm, X.cls);
     return out;
   },
 });

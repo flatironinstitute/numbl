@@ -80,8 +80,12 @@ function flipAlongDim(v: RuntimeTensor, dimIdx: number): RuntimeTensor {
     }
   }
 
-  const out = RTV.tensor(result, [...shape], resultImag) as RuntimeTensor;
-  if (v._isLogical) out._isLogical = true;
+  const out = RTV.tensor(
+    result,
+    [...shape],
+    resultImag,
+    v.cls
+  ) as RuntimeTensor;
   return out;
 }
 
@@ -166,9 +170,9 @@ function isScalarValue(v: RuntimeValue): boolean {
 
 /** A scalar as a 1×1 tensor; a logical scalar stays logical. */
 function scalarTensor(v: RuntimeValue, name: string): RuntimeTensor {
-  const t = coerceToTensor(v, name);
-  if (isRuntimeLogical(v)) t._isLogical = true;
-  return t;
+  if (isRuntimeLogical(v))
+    return RTV.logicalTensor(allocFloat64Array([v ? 1 : 0]), [1, 1]);
+  return coerceToTensor(v, name);
 }
 
 /** Flip a char array along dimIdx (0-based) via its character codes. */
@@ -452,7 +456,7 @@ structAwareBuiltin({
       const imagCopy = imag ? allocFloat64Array(imag) : undefined;
       const s = [...shape];
       while (s.length > 2 && s[s.length - 1] === 1) s.pop();
-      return new RuntimeTensor(dataCopy, s, imagCopy, v._isLogical);
+      return new RuntimeTensor(dataCopy, s, imagCopy, v.cls);
     }
     return RTV.tensor(
       allocFloat64Array(data),
@@ -626,8 +630,7 @@ builtin({
         data[colMajorIndex(r, c, m2)] = v.data[i];
         if (imag) imag[colMajorIndex(r, c, m2)] = v.imag![i];
       }
-      const out = RTV.tensor(data, [m2, m2], imag);
-      if (v._isLogical) out._isLogical = true;
+      const out = RTV.tensor(data, [m2, m2], imag, v.cls);
       return out;
     }
     const diagLen =
@@ -642,8 +645,7 @@ builtin({
       data[i] = v.data[colMajorIndex(r, c, rows)];
       if (imag) imag[i] = v.imag![colMajorIndex(r, c, rows)];
     }
-    const out = RTV.tensor(data, [diagLen, 1], imag);
-    if (v._isLogical) out._isLogical = true;
+    const out = RTV.tensor(data, [diagLen, 1], imag, v.cls);
     return out;
   },
 });
@@ -676,7 +678,7 @@ builtin({
     if (arrays.some(a => isRuntimeCell(a)))
       return cellCatAlongDim(arrays, dimIdx);
     const allLogical = arrays.every(
-      a => isRuntimeLogical(a) || (isRuntimeTensor(a) && a._isLogical)
+      a => isRuntimeLogical(a) || (isRuntimeTensor(a) && a.cls === "logical")
     );
     let tensors = arrays.map(a => {
       if (isScalarValue(a)) a = coerceToTensor(a, "cat");
@@ -741,8 +743,12 @@ builtin({
         dstOff += blockSize;
       }
     }
-    const out = RTV.tensor(result, resultShape, resultImag);
-    if (allLogical) out._isLogical = true;
+    const out = RTV.tensor(
+      result,
+      resultShape,
+      resultImag,
+      allLogical ? "logical" : "double"
+    );
     return out;
   },
 });
@@ -833,9 +839,9 @@ structAwareBuiltin({
       const result = RTV.tensor(
         allocFloat64Array(v.data),
         [...v.shape],
-        v.imag ? allocFloat64Array(v.imag) : undefined
+        v.imag ? allocFloat64Array(v.imag) : undefined,
+        v.cls
       );
-      if (v._isLogical) result._isLogical = true;
       return result;
     }
     const [rows, cols] = tensorSize2D(v);
@@ -860,8 +866,7 @@ structAwareBuiltin({
       r = c;
       c = tmp;
     }
-    const result = RTV.tensor(data, [r, c], imag);
-    if (v._isLogical) result._isLogical = true;
+    const result = RTV.tensor(data, [r, c], imag, v.cls);
     return result;
   },
 });
@@ -960,8 +965,7 @@ function repmatValue(v: RuntimeValue, repArgs: RuntimeValue[]): RuntimeValue {
     const total = reps.reduce((a, b) => a * b, 1);
     const data = allocFloat64Array(total).fill(v ? 1 : 0);
     const shape = reps.length >= 2 ? reps : [reps[0], reps[0]];
-    const t = RTV.tensor(data, shape);
-    t._isLogical = true;
+    const t = RTV.logicalTensor(data, shape);
     return t;
   }
   if (isRuntimeComplexNumber(v)) {
@@ -1087,8 +1091,7 @@ function repmatValue(v: RuntimeValue, repArgs: RuntimeValue[]): RuntimeValue {
     curShape[d] *= rep;
   }
 
-  const out = RTV.tensor(curData, resultShape, curImag);
-  if (v._isLogical) out._isLogical = true;
+  const out = RTV.tensor(curData, resultShape, curImag, v.cls);
   return out;
 }
 
@@ -1229,9 +1232,9 @@ builtin({
         const out = RTV.tensor(
           result,
           isCol ? [total, 1] : [1, total],
-          resultImag
+          resultImag,
+          isRuntimeTensor(v) && v.cls === "logical" ? "logical" : "double"
         );
-        if (isRuntimeTensor(v) && v._isLogical) out._isLogical = true;
         return out;
       }
       const n = Math.round(toNumber(args[1]));
@@ -1255,9 +1258,9 @@ builtin({
       const out = RTV.tensor(
         result,
         isCol ? [len * n, 1] : [1, len * n],
-        resultImag
+        resultImag,
+        v.cls
       );
-      if (v._isLogical) out._isLogical = true;
       return out;
     }
     const rRep = Math.round(toNumber(args[1]));
@@ -1291,8 +1294,7 @@ builtin({
         }
       }
     }
-    const out = RTV.tensor(result, [newRows, newCols], resultImag);
-    if (v._isLogical) out._isLogical = true;
+    const out = RTV.tensor(result, [newRows, newCols], resultImag, v.cls);
     return out;
   },
 });
@@ -1320,17 +1322,18 @@ structAwareBuiltin({
       const dataCopy = allocFloat64Array(v.data);
       const imagCopy = v.imag ? allocFloat64Array(v.imag) : undefined;
       if (effectiveShape.length <= 2) {
-        return RTV.tensor(dataCopy, effectiveShape, imagCopy);
+        return RTV.tensor(dataCopy, effectiveShape, imagCopy, v.cls);
       }
       const newShape = effectiveShape.filter(d => d !== 1);
       if (newShape.length === 0) {
         if (v.imag && v.imag[0] !== 0) return RTV.complex(v.data[0], v.imag[0]);
+        if (v.cls === "logical") return RTV.logical(v.data[0] !== 0);
         return RTV.num(v.data[0]);
       }
       if (newShape.length === 1) {
-        return RTV.tensor(dataCopy, [newShape[0], 1], imagCopy);
+        return RTV.tensor(dataCopy, [newShape[0], 1], imagCopy, v.cls);
       }
-      return RTV.tensor(dataCopy, newShape, imagCopy);
+      return RTV.tensor(dataCopy, newShape, imagCopy, v.cls);
     }
     // Cell arrays may carry N-D shapes; squeeze the singleton dims.
     // Element references are shared (RuntimeCell increfs them).
@@ -1462,8 +1465,7 @@ structAwareBuiltin({
       result[i] = t.data[src[i]];
       if (resultImag) resultImag[i] = t.imag![src[i]];
     }
-    const out = RTV.tensor(result, [...t.shape], resultImag);
-    if (t._isLogical) out._isLogical = true;
+    const out = RTV.tensor(result, [...t.shape], resultImag, t.cls);
     return isRuntimeChar(v) ? numericTensorToChar(out) : out;
   },
 });
@@ -1516,8 +1518,7 @@ structAwareBuiltin({
         subs[d] = 0;
       }
     }
-    const out = RTV.tensor(result, newShape, resultImag);
-    if (v._isLogical) out._isLogical = true;
+    const out = RTV.tensor(result, newShape, resultImag, v.cls);
     return out;
   },
 });
@@ -1571,8 +1572,7 @@ structAwareBuiltin({
         subs[d] = 0;
       }
     }
-    const out = RTV.tensor(result, newShape, resultImag);
-    if (v._isLogical) out._isLogical = true;
+    const out = RTV.tensor(result, newShape, resultImag, v.cls);
     return out;
   },
 });
@@ -1591,7 +1591,7 @@ function gridVec(v: RuntimeValue, name: string): GridVec {
   if (isScalarValue(v)) v = scalarTensor(v, name);
   if (!isRuntimeTensor(v))
     throw new RuntimeError(`${name}: arguments must be numeric vectors`);
-  return { re: v.data, im: v.imag, logical: !!v._isLogical };
+  return { re: v.data, im: v.imag, logical: v.cls === "logical" };
 }
 
 /** The ndgrid outputs for `vecs` (one per output dimension). */
@@ -1613,8 +1613,12 @@ function ndgridOutputs(vecs: GridVec[]): RuntimeTensor[] {
       data[i] = re[j];
       if (imag) imag[i] = im![j];
     }
-    const out = RTV.tensor(data, [...shape], imag);
-    if (logical) out._isLogical = true;
+    const out = RTV.tensor(
+      data,
+      [...shape],
+      imag,
+      logical ? "logical" : "double"
+    );
     outputs.push(out);
   }
   return outputs;

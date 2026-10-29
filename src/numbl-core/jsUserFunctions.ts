@@ -129,7 +129,7 @@ function legacyArgType(v: RuntimeValue): LegacyArgType {
       kind: "tensor",
       isComplex: v.imag !== undefined,
       shape: v.shape.length >= 2 ? v.shape.slice() : [1, ...v.shape],
-      ...(v._isLogical ? { isLogical: true } : {}),
+      ...(v.cls === "logical" ? { isLogical: true } : {}),
     };
   if (isRuntimeStruct(v)) return { kind: "struct", fields: {} };
   if (isRuntimeClassInstance(v) || isRuntimeClassInstanceArray(v))

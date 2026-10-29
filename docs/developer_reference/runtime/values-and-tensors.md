@@ -39,7 +39,7 @@ Type-guard predicates follow the pattern `isRuntimeTensor(v)`, `isRuntimeChar(v)
 
 ## `RTV` constructors
 
-The `RTV` namespace exposes construction helpers for runtime values: `RTV.num`, `RTV.tensor(data, shape)`, `RTV.complex(re, im)`, `RTV.logical`, `RTV.char`, and so on. Prefer them to building objects by hand: they keep shape, precision, and flag invariants consistent.
+The `RTV` namespace exposes construction helpers for runtime values: `RTV.num`, `RTV.tensor(data, shape, imag?, cls?)`, `RTV.logicalTensor(data, shape)`, `RTV.complex(re, im)`, `RTV.logical` (a scalar), `RTV.char`, and so on. Prefer them to building objects by hand: they keep shape, precision, and class invariants consistent. `RTV.tensor` takes its buffers without copying and throws an internal error unless `data` and `imag` are `Float64Array`s, so other storage is never silently widened to double; `RTV.tensorFromArray` copies from plain number arrays.
 
 Extract a scalar with `toNumber(v)`.
 
@@ -50,11 +50,28 @@ A `RuntimeTensor` holds:
 - `data`: a typed array for the real part.
 - `imag`: an optional typed array for the imaginary part. Absent means the tensor is real.
 - `shape`: integer dimensions, column-major (Fortran) order.
-- Flags: e.g., `_isLogical` for boolean arrays from comparisons.
+- `cls`: the element class (`ElementClass`, today `"double"` or `"logical"`), set at construction and `readonly`. See [Element classes](#element-classes).
 
 **Column-major layout.** Element `(i, j)` of an `[m, n]` matrix is at flat index `j * m + i`. All tensor code assumes this; any new operation must preserve it.
 
 **Copy-on-write.** Assigning a tensor variable or passing it as an argument shares the same wrapper. An indexed store copies a container only when its refcount shows another holder, and each buffer has a single wrapper owner (`reshape` and `squeeze` copy). See [refcount.md](refcount.md).
+
+## Element classes
+
+A tensor's MATLAB class lives in its `cls` field (`ElementClass` in `runtime/types.ts`). Every class currently stores its elements in a `Float64Array`; the class fixes their meaning (a logical tensor holds 0/1 and has no imaginary part). Scalars are not tensors: a logical scalar is a JS `boolean`, a double scalar a `number`. Char arrays are a separate kind (`RuntimeChar`), not an element class.
+
+The class is chosen when the tensor is built (`RTV.tensor(..., cls)`, `RTV.logicalTensor`, `new RuntimeTensor(..., cls)`), and `shallowClone` keeps it, so copy-on-write stores keep it too. Operations that preserve their input's class (indexing, indexed assignment and deletion, reshape, permute, transpose, repmat, squeeze, sort, ...) pass `v.cls` to the constructor of their result. A result of another class is a new tensor; the one exception is `withElementClass`, which sets the class of a fresh result that nothing else holds yet.
+
+Adding an element class (e.g. `single` or an integer class) touches:
+
+1. `ElementClass` and the constructors; a class with narrower storage also changes the type of `data` and the `Float64Array` check in `RTV.tensor`.
+2. `class`, `isa`, `islogical`, `isnumeric`, `isfloat`, `isinteger`: `KINDS.tensor.className` and the category table (`CATEGORIES`) in `runtime/kinds.ts`.
+3. Display (`runtime/display.ts`).
+4. Arithmetic result-class rules: element-wise and matrix ops in `helpers/arithmetic.ts` and `runtime/runtimeOperators.ts` (today every arithmetic result is double and every comparison or logical op is logical), and reductions whose result class follows the input (`min`/`max`, `cummax`/`cummin`) or is fixed (`any`/`all` give logical).
+5. Concatenation rules: `catAlongDim` in `runtime/tensor-construction.ts` and `cat` in `builtins/array-manipulation.ts` (today: logical only when every operand is logical, empties included).
+6. Indexed assignment of a value of another class into a tensor (`storeIntoTensor` in `runtime/indexing.ts`), and the conversion builtins (`double`, `logical`, ... in `builtins/type-constructors.ts`, `runtime/convert.ts`).
+7. The JIT: the `NumericElem` lattice in `jit/lowering/types.ts`, input typing (`typeOfValue` in `executors/inputTypes.ts`), and both value adapters (`executors/jit/valueAdapter.ts`, `valueAdapterC.ts`), which carry the class across the boundary in each direction.
+8. Serialization and text conversion: `jsondecode` (`runtime/jsonDecode.ts`), `jsonencode`, `mat2str`, `num2str`, `typecast`, and the argument types seen by JS user functions (`jsUserFunctions.ts`).
 
 ## Tensor ops
 

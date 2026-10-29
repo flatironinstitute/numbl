@@ -200,7 +200,7 @@ export function dictLookup(
     const data = results.map(r =>
       isRuntimeNumber(r) ? r : isRuntimeLogical(r) ? (r ? 1 : 0) : 0
     );
-    return RTV.tensor(data, [results.length, 1]);
+    return RTV.tensorFromArray(data, [results.length, 1]);
   }
   if (d.valueType === "string") {
     return RTV.cell(results, [results.length, 1]);

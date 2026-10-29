@@ -119,22 +119,19 @@ export function elementWiseLogicalOp(
   if (aData.length === bData.length) {
     const result = allocFloat64Array(aData.length);
     for (let i = 0; i < aData.length; i++) result[i] = op(aData[i], bData[i]);
-    const t = RTV.tensor(result, aIsT ? aShape : bShape);
-    t._isLogical = true;
+    const t = RTV.logicalTensor(result, aIsT ? aShape : bShape);
     return t;
   }
   if (aData.length === 1) {
     const result = allocFloat64Array(bData.length);
     for (let i = 0; i < bData.length; i++) result[i] = op(aData[0], bData[i]);
-    const t = RTV.tensor(result, bShape);
-    t._isLogical = true;
+    const t = RTV.logicalTensor(result, bShape);
     return t;
   }
   if (bData.length === 1) {
     const result = allocFloat64Array(aData.length);
     for (let i = 0; i < aData.length; i++) result[i] = op(aData[i], bData[0]);
-    const t = RTV.tensor(result, aShape);
-    t._isLogical = true;
+    const t = RTV.logicalTensor(result, aShape);
     return t;
   }
   throw new RuntimeError("Matrix dimensions must agree for logical operation");
