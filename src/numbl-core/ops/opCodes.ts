@@ -6,21 +6,28 @@
  * values against numbl_dump_op_codes() at CI time.
  */
 
-/** Real binary element-wise ops. */
-export const OpRealBin = {
+/**
+ * Binary element-wise ops, one numbering for real and complex operands.
+ * Codes below `NATIVE_BIN_OP_COUNT` have native kernels (real and complex,
+ * `NUMBL_REAL_BIN_*` / `NUMBL_COMPLEX_BIN_*` in numbl_ops.h); the rest run
+ * only in the TypeScript kernel layer (`ops/elementwise.ts`).
+ */
+export const OpBin = {
   ADD: 0,
   SUB: 1,
   MUL: 2,
   DIV: 3,
+  POW: 4,
+  MIN: 5,
+  MAX: 6,
+  MOD: 7,
+  REM: 8,
+  ATAN2: 9,
+  HYPOT: 10,
 } as const;
 
-/** Complex binary element-wise ops. */
-export const OpComplexBin = {
-  ADD: 0,
-  SUB: 1,
-  MUL: 2,
-  DIV: 3,
-} as const;
+/** Binary ops with a native (and TS bridge) kernel: ADD, SUB, MUL, DIV. */
+export const NATIVE_BIN_OP_COUNT = 4;
 
 /** Flat reduction ops. */
 export const OpReduce = {
@@ -33,7 +40,10 @@ export const OpReduce = {
   MEAN: 6,
 } as const;
 
-/** Comparison ops (logical output). */
+/**
+ * Logical-result binary ops. EQ..GE have native kernels (real and complex);
+ * AND, OR and XOR run only in the TypeScript kernel layer.
+ */
 export const OpCmp = {
   EQ: 0,
   NE: 1,
@@ -41,7 +51,13 @@ export const OpCmp = {
   LE: 3,
   GT: 4,
   GE: 5,
+  AND: 6,
+  OR: 7,
+  XOR: 8,
 } as const;
+
+/** Logical-result ops with a native kernel: EQ..GE. */
+export const NATIVE_CMP_OP_COUNT = 6;
 
 /** Bessel function ops (real input). H-variants are in numbl_bessel_h (complex output). */
 export const OpBessel = {

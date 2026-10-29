@@ -41,7 +41,7 @@ import { RTV } from "../../runtime/constructors.js";
 import { rngRandom } from "../../helpers/prng.js";
 import { jitToNumbl } from "./valueAdapter.js";
 import { tensorOps } from "../../ops/dispatch.js";
-import { OpReduce, OpRealBin, OpUnary } from "../../ops/opCodes.js";
+import { OpReduce, OpBin, OpUnary } from "../../ops/opCodes.js";
 import { getLapackBridge } from "../../native/lapack-bridge.js";
 import { matmulIsInline } from "../../native/inline-matmul.js";
 
@@ -63,10 +63,10 @@ export interface JitElemwiseHost {
 }
 
 const BINARY_OPS: Record<string, number> = {
-  plus: OpRealBin.ADD,
-  minus: OpRealBin.SUB,
-  times: OpRealBin.MUL,
-  rdivide: OpRealBin.DIV,
+  plus: OpBin.ADD,
+  minus: OpBin.SUB,
+  times: OpBin.MUL,
+  rdivide: OpBin.DIV,
 };
 
 const UNARY_OPS: Record<string, number> = {

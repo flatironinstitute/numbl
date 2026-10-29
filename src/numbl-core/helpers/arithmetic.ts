@@ -1,5 +1,10 @@
 /**
  * Arithmetic, comparison, and related internal helpers.
+ *
+ * The element-wise operators classify their operands (strings, sparse
+ * matrices, char, logical, complex scalars) and then make one call into the
+ * element-wise kernel layer (`ops/elementwise.ts`), which owns broadcasting,
+ * the real and complex formulas and the native dispatch.
  */
 
 import {
@@ -31,8 +36,19 @@ import { RuntimeError, invalidDataTypeError } from "../runtime/error.js";
 import { RTV } from "../runtime/constructors.js";
 import { tensorSize2D, colMajorIndex } from "../runtime/utils.js";
 import { toNumber } from "../runtime/convert.js";
+import { charToNumericTensor } from "../runtime/indexing.js";
 import { getLapackBridge } from "../native/lapack-bridge.js";
-import { tensorOps, OpCmp } from "../ops/index.js";
+import {
+  OpBin,
+  OpCmp,
+  elementwiseBinary,
+  elementwiseCompare,
+  binaryScalar,
+  compareScalar,
+  mapBinary,
+  type Operand,
+  type ElemResult,
+} from "../ops/index.js";
 import { linsolveLapack, linsolveComplexLapack } from "./linsolve.js";
 import { getIBuiltin } from "../runtime/builtinRegistry.js";
 import { coerceToTensor } from "./shape-utils.js";
@@ -53,7 +69,106 @@ import type { RuntimeSparseMatrix } from "../runtime/types.js";
 import { emitWarning } from "./warn.js";
 import { allocFloat64Array } from "../runtime/alloc.js";
 
-// ── Complex helpers ──────────────────────────────────────────────────────
+// ── Operand classification ──────────────────────────────────────────────
+
+const SCALAR_SHAPE: readonly number[] = [1, 1];
+
+/** Whether `v` is a scalar value (not an array): a number, logical,
+ *  complex number or single char. Element-wise results on two scalars are
+ *  scalars; any array operand (including a 1×1 tensor) gives a tensor. */
+function isScalarValue(v: RuntimeValue): boolean {
+  return (
+    typeof v === "number" ||
+    typeof v === "boolean" ||
+    isRuntimeComplexNumber(v) ||
+    (isRuntimeChar(v) && v.value.length === 1 && isCharScalarShape(v))
+  );
+}
+
+function isCharScalarShape(v: { shape?: number[] }): boolean {
+  return v.shape === undefined || (v.shape[0] === 1 && v.shape[1] === 1);
+}
+
+/** Real part of a scalar value (see `isScalarValue`). */
+function scalarRe(v: RuntimeValue): number {
+  if (typeof v === "number") return v;
+  if (typeof v === "boolean") return v ? 1 : 0;
+  if (isRuntimeComplexNumber(v)) return v.re;
+  return (v as { value: string }).value.charCodeAt(0);
+}
+
+/** A value as a kernel operand: a tensor as it is, a scalar as a number
+ *  (complex as a 1-element array), char as its character codes, sparse
+ *  densified. Raises the invalid-data-type error for other values. */
+function operandOf(v: RuntimeValue): Operand {
+  if (typeof v === "number") return v;
+  if (typeof v === "boolean") return v ? 1 : 0;
+  if (isRuntimeTensor(v)) return v;
+  if (isRuntimeComplexNumber(v))
+    return {
+      data: Float64Array.of(v.re),
+      imag: Float64Array.of(v.im),
+      shape: SCALAR_SHAPE,
+    };
+  if (isRuntimeChar(v))
+    return isScalarValue(v) ? scalarRe(v) : charToNumericTensor(v);
+  if (isRuntimeSparseMatrix(v)) return sparseToDense(v);
+  throw invalidDataTypeError();
+}
+
+function tensorOf(r: ElemResult): RuntimeValue {
+  return RTV.tensor(r.data, r.shape, r.imag);
+}
+
+/** Element-wise `a op b` for an `OpBin` code on dense operands. */
+function elemwise(op: number, a: RuntimeValue, b: RuntimeValue): RuntimeValue {
+  if (isScalarValue(a) && isScalarValue(b)) {
+    const ac = isRuntimeComplexNumber(a);
+    const bc = isRuntimeComplexNumber(b);
+    const r = binaryScalar(
+      op,
+      scalarRe(a),
+      ac ? a.im : 0,
+      ac,
+      scalarRe(b),
+      bc ? b.im : 0,
+      bc
+    );
+    return r.im === 0 ? r.re : RTV.complex(r.re, r.im);
+  }
+  return tensorOf(elementwiseBinary(op, operandOf(a), operandOf(b)));
+}
+
+/** Element-wise `a op b` for an `OpCmp` code; the result is logical. */
+function elemCompare(
+  op: number,
+  a: RuntimeValue,
+  b: RuntimeValue
+): RuntimeValue {
+  if (isScalarValue(a) && isScalarValue(b)) {
+    return RTV.logical(
+      compareScalar(
+        op,
+        scalarRe(a),
+        isRuntimeComplexNumber(a) ? a.im : 0,
+        scalarRe(b),
+        isRuntimeComplexNumber(b) ? b.im : 0
+      )
+    );
+  }
+  const r = elementwiseCompare(op, operandOf(a), operandOf(b));
+  return RTV.logicalTensor(r.data, r.shape);
+}
+
+/** Element-wise logical `a & b`, `a | b` or `xor(a, b)` (an `OpCmp` code:
+ *  AND, OR, XOR) on numeric, logical or char operands. */
+export function mLogical(
+  op: number,
+  a: RuntimeValue,
+  b: RuntimeValue
+): RuntimeValue {
+  return elemCompare(op, a, b);
+}
 
 /** The error for an operand the complex arithmetic path cannot use. */
 function complexOperandError(v: RuntimeValue): RuntimeError {
@@ -84,578 +199,16 @@ function isComplexOrMixed(a: RuntimeValue, b: RuntimeValue): boolean {
   );
 }
 
-function complexResult(re: number, im: number): RuntimeValue {
-  return im === 0 ? RTV.num(re) : RTV.complex(re, im);
-}
-
-/** Extract complex representation from RuntimeValue (works for scalars and tensors) */
-function toComplexParts(v: RuntimeValue):
-  | {
-      scalar: true;
-      re: number;
-      im: number;
-    }
-  | {
-      scalar: false;
-      re: Float64Array;
-      im: Float64Array;
-      shape: number[];
-    } {
-  if (isRuntimeComplexNumber(v)) {
-    return { scalar: true, re: v.re, im: v.im };
-  }
-  if (isRuntimeNumber(v)) {
-    return { scalar: true, re: v, im: 0 };
-  }
-  if (isRuntimeLogical(v)) {
-    return { scalar: true, re: v ? 1 : 0, im: 0 };
-  }
-  if (isRuntimeTensor(v)) {
-    if (v.data.length === 1) {
-      return { scalar: true, re: v.data[0], im: v.imag ? v.imag[0] : 0 };
-    }
-    const im = v.imag || allocFloat64Array(v.data.length); // allocate zeros if needed
-    return { scalar: false, re: v.data, im, shape: v.shape };
-  }
-  if (isRuntimeSparseMatrix(v)) return toComplexParts(densify(v));
-  throw complexOperandError(v);
-}
-
-/** Complex comparison operation supporting scalars and tensors.
- *  opCode routes tensor paths through tensorOps; the closure is used for
- *  scalar-scalar comparisons and the generic broadcasting fallback. */
-function complexComparisonOp(
-  a: RuntimeValue,
-  b: RuntimeValue,
-  op: (aRe: number, aIm: number, bRe: number, bIm: number) => boolean,
-  opCode: number
-): RuntimeValue {
-  const ac = toComplexParts(a);
-  const bc = toComplexParts(b);
-
-  // scalar op scalar
-  if (ac.scalar && bc.scalar) {
-    return RTV.logical(op(ac.re, ac.im, bc.re, bc.im));
-  }
-
-  // scalar op tensor
-  if (ac.scalar && !bc.scalar) {
-    const len = bc.re.length;
-    const result = allocFloat64Array(len);
-    tensorOps.complexScalarComparison(
-      opCode,
-      len,
-      ac.re,
-      ac.im,
-      bc.re,
-      bc.im,
-      true,
-      result
-    );
-    const t = RTV.logicalTensor(result, bc.shape);
-    return t;
-  }
-
-  // tensor op scalar
-  if (!ac.scalar && bc.scalar) {
-    const len = ac.re.length;
-    const result = allocFloat64Array(len);
-    tensorOps.complexScalarComparison(
-      opCode,
-      len,
-      bc.re,
-      bc.im,
-      ac.re,
-      ac.im,
-      false,
-      result
-    );
-    const t = RTV.logicalTensor(result, ac.shape);
-    return t;
-  }
-
-  // tensor op tensor
-  const at = ac as {
-    scalar: false;
-    re: Float64Array;
-    im: Float64Array;
-    shape: number[];
-  };
-  const bt = bc as {
-    scalar: false;
-    re: Float64Array;
-    im: Float64Array;
-    shape: number[];
-  };
-
-  // Check if shapes are identical (fast path)
-  if (
-    at.re.length === bt.re.length &&
-    at.shape.length === bt.shape.length &&
-    at.shape.every((d, i) => d === bt.shape[i])
-  ) {
-    const len = at.re.length;
-    const result = allocFloat64Array(len);
-    tensorOps.complexComparison(
-      opCode,
-      len,
-      at.re,
-      at.im,
-      bt.re,
-      bt.im,
-      result
-    );
-    const t = RTV.logicalTensor(result, at.shape);
-    return t;
-  }
-
-  // Try broadcasting (broadcastComparisonComplex already returns a logical tensor)
-  const broadcastShape = getBroadcastShape(at.shape, bt.shape);
-  if (broadcastShape !== null) {
-    return broadcastComparisonComplex(at, bt, broadcastShape, op);
-  }
-
-  // Incompatible shapes
-  throw new RuntimeError(
-    `Matrix dimensions must agree for comparison: [${at.shape.join(",")}] vs [${bt.shape.join(",")}]`
-  );
-}
-
-/** Complex binary operation supporting scalars and tensors */
-function signedInf(x: number): number {
-  return x > 0 ? Infinity : x < 0 ? -Infinity : 0;
-}
-
-function complexDivide(
-  aRe: number,
-  aIm: number,
-  bRe: number,
-  bIm: number
-): { re: number; im: number } {
-  // Smith's algorithm: avoids spurious overflow/underflow in bRe*bRe + bIm*bIm.
-  if (bRe === 0 && bIm === 0) {
-    if (aRe === 0 && aIm === 0) return { re: NaN, im: 0 };
-    return { re: signedInf(aRe), im: signedInf(aIm) };
-  }
-  if (Math.abs(bRe) >= Math.abs(bIm)) {
-    const r = bIm / bRe;
-    const d = bRe + bIm * r;
-    return { re: (aRe + aIm * r) / d, im: (aIm - aRe * r) / d };
-  }
-  const r = bRe / bIm;
-  const d = bIm + bRe * r;
-  return { re: (aRe * r + aIm) / d, im: (aIm * r - aRe) / d };
-}
-
-function complexBinaryOp(
-  a: RuntimeValue,
-  b: RuntimeValue,
-  op: (
-    aRe: number,
-    aIm: number,
-    bRe: number,
-    bIm: number
-  ) => { re: number; im: number },
-  nativeOpCode?: number
-): RuntimeValue {
-  // Fast path: complex scalar × tensor (or tensor × complex scalar).
-  // We detect the scalar side without going through toComplexParts, so we
-  // avoid the zero-im allocation for real tensors on the tensor side.
-  if (nativeOpCode !== undefined) {
-    const aScalarParts = scalarComplexParts(a);
-    const bScalarParts = scalarComplexParts(b);
-    if (aScalarParts && isRuntimeTensor(b) && b.data.length > 1) {
-      return complexScalarTensorElemwise(
-        aScalarParts.re,
-        aScalarParts.im,
-        b.data,
-        b.imag,
-        b.shape,
-        nativeOpCode,
-        /*scalarOnLeft=*/ true
-      );
-    } else if (bScalarParts && isRuntimeTensor(a) && a.data.length > 1) {
-      return complexScalarTensorElemwise(
-        bScalarParts.re,
-        bScalarParts.im,
-        a.data,
-        a.imag,
-        a.shape,
-        nativeOpCode,
-        /*scalarOnLeft=*/ false
-      );
-    }
-  }
-
-  const ac = toComplexParts(a);
-  const bc = toComplexParts(b);
-
-  // scalar op scalar
-  if (ac.scalar && bc.scalar) {
-    const result = op(ac.re, ac.im, bc.re, bc.im);
-    return complexResult(result.re, result.im);
-  }
-
-  // scalar op tensor
-  if (ac.scalar && !bc.scalar) {
-    const len = bc.re.length;
-    const resultRe = allocFloat64Array(len);
-    const resultIm = allocFloat64Array(len);
-    for (let i = 0; i < len; i++) {
-      const r = op(ac.re, ac.im, bc.re[i], bc.im[i]);
-      resultRe[i] = r.re;
-      resultIm[i] = r.im;
-    }
-    // Check if result is purely real
-    const isReal = resultIm.every(x => x === 0);
-    return RTV.tensor(resultRe, bc.shape, isReal ? undefined : resultIm);
-  }
-
-  // tensor op scalar
-  if (!ac.scalar && bc.scalar) {
-    const len = ac.re.length;
-    const resultRe = allocFloat64Array(len);
-    const resultIm = allocFloat64Array(len);
-    for (let i = 0; i < len; i++) {
-      const r = op(ac.re[i], ac.im[i], bc.re, bc.im);
-      resultRe[i] = r.re;
-      resultIm[i] = r.im;
-    }
-    // Check if result is purely real
-    const isReal = resultIm.every(x => x === 0);
-    return RTV.tensor(resultRe, ac.shape, isReal ? undefined : resultIm);
-  }
-
-  // tensor op tensor
-  const at = ac as {
-    scalar: false;
-    re: Float64Array;
-    im: Float64Array;
-    shape: number[];
-  };
-  const bt = bc as {
-    scalar: false;
-    re: Float64Array;
-    im: Float64Array;
-    shape: number[];
-  };
-
-  // Check if shapes are identical (fast path)
-  if (
-    at.re.length === bt.re.length &&
-    at.shape.length === bt.shape.length &&
-    at.shape.every((d, i) => d === bt.shape[i])
-  ) {
-    const len = at.re.length;
-    const resultRe = allocFloat64Array(len);
-    const resultIm = allocFloat64Array(len);
-    for (let i = 0; i < len; i++) {
-      const r = op(at.re[i], at.im[i], bt.re[i], bt.im[i]);
-      resultRe[i] = r.re;
-      resultIm[i] = r.im;
-    }
-    // Check if result is purely real
-    const isReal = resultIm.every(x => x === 0);
-    return RTV.tensor(resultRe, at.shape, isReal ? undefined : resultIm);
-  }
-
-  // Try broadcasting
-  const broadcastShape = getBroadcastShape(at.shape, bt.shape);
-  if (broadcastShape !== null) {
-    return broadcastBinaryComplex(at, bt, broadcastShape, op);
-  }
-
-  // Incompatible shapes
-  throw new RuntimeError(
-    `Matrix dimensions must agree: [${at.shape.join(",")}] vs [${bt.shape.join(",")}]`
-  );
-}
-
-// ── Tensor element-wise fast path ────────────────────────────────────────
-
-/** Element-wise op codes matching native addon convention. */
-const ELEMWISE_ADD = 0;
-const ELEMWISE_SUB = 1;
-const ELEMWISE_MUL = 2;
-const ELEMWISE_DIV = 3;
-
-/**
- * Check whether two RuntimeValues are same-shape tensors.
- * Returns [tensorA, tensorB] on match, null otherwise.
- */
-function matchSameShapeTensors(
-  a: RuntimeValue,
-  b: RuntimeValue
-): [RuntimeTensor, RuntimeTensor] | null {
-  if (
-    typeof a !== "object" ||
-    a === null ||
-    (a as RuntimeTensor).kind !== "tensor" ||
-    typeof b !== "object" ||
-    b === null ||
-    (b as RuntimeTensor).kind !== "tensor"
-  )
-    return null;
-  const at = a as RuntimeTensor;
-  const bt = b as RuntimeTensor;
-  if (
-    at.data.length !== bt.data.length ||
-    at.shape.length !== bt.shape.length ||
-    at.shape.some((d, i) => d !== bt.shape[i])
-  )
-    return null;
-  return [at, bt];
-}
-
-/**
- * Element-wise op on two same-shape real tensors via the tensor-ops layer
- * (native if available, TS fallback otherwise).
- */
-function tensorElemwiseReal(
-  at: RuntimeTensor,
-  bt: RuntimeTensor,
-  opCode: number
-): RuntimeValue {
-  const n = at.data.length;
-  const out = allocFloat64Array(n);
-  tensorOps.realBinaryElemwise(opCode, n, at.data, bt.data, out);
-  return RTV.tensorRaw(out, at.shape);
-}
-
-/**
- * Scalar-tensor element-wise op via the tensor-ops layer.
- * Returns null when the tensor is complex.
- */
-function tryNativeElemwiseScalar(
-  scalar: number,
-  tensor: RuntimeTensor,
-  opCode: number,
-  scalarOnLeft: boolean
-): RuntimeValue | null {
-  if (tensor.imag) return null;
-  const n = tensor.data.length;
-  const out = allocFloat64Array(n);
-  tensorOps.realScalarBinaryElemwise(
-    opCode,
-    n,
-    scalar,
-    tensor.data,
-    scalarOnLeft,
-    out
-  );
-  return RTV.tensorRaw(out, tensor.shape);
-}
-
-/**
- * Return complex scalar (re, im) parts if v is a scalar-like value, else null.
- * Treats size-1 tensors as scalars.  Unlike toComplexParts, never allocates.
- */
-function scalarComplexParts(
-  v: RuntimeValue
-): { re: number; im: number } | null {
-  if (isRuntimeNumber(v)) return { re: v as number, im: 0 };
-  if (isRuntimeComplexNumber(v)) return { re: v.re, im: v.im };
-  if (isRuntimeLogical(v)) return { re: v ? 1 : 0, im: 0 };
-  if (isRuntimeTensor(v) && v.data.length === 1) {
-    return { re: v.data[0], im: v.imag ? v.imag[0] : 0 };
-  }
-  return null;
-}
-
-/**
- * Complex-scalar * (real or complex) tensor element-wise op via the
- * tensor-ops layer.
- */
-function complexScalarTensorElemwise(
-  scalarRe: number,
-  scalarIm: number,
-  arrRe: Float64Array,
-  arrIm: Float64Array | undefined,
-  shape: number[],
-  opCode: number,
-  scalarOnLeft: boolean
-): RuntimeValue {
-  const n = arrRe.length;
-  const outRe = allocFloat64Array(n);
-  const outIm = allocFloat64Array(n);
-  tensorOps.complexScalarBinaryElemwise(
-    opCode,
-    n,
-    scalarRe,
-    scalarIm,
-    arrRe,
-    arrIm ?? null,
-    scalarOnLeft,
-    outRe,
-    outIm
-  );
-  // Drop outIm if result is purely real (matches old bridge.elemwiseComplexScalar semantics).
-  let isReal = true;
-  for (let i = 0; i < n; i++) {
-    if (outIm[i] !== 0) {
-      isReal = false;
-      break;
-    }
-  }
-  return isReal ? RTV.tensorRaw(outRe, shape) : RTV.tensor(outRe, shape, outIm);
-}
-
-/**
- * Element-wise op on two same-shape tensors where at least one is complex,
- * via the tensor-ops layer (native if available, TS fallback otherwise).
- */
-function tensorElemwiseComplex(
-  at: RuntimeTensor,
-  bt: RuntimeTensor,
-  opCode: number
-): RuntimeValue {
-  const n = at.data.length;
-  const outRe = allocFloat64Array(n);
-  const outIm = allocFloat64Array(n);
-  tensorOps.complexBinaryElemwise(
-    opCode,
-    n,
-    at.data,
-    at.imag ?? null,
-    bt.data,
-    bt.imag ?? null,
-    outRe,
-    outIm
-  );
-  // Drop outIm if result is purely real.
-  let isReal = true;
-  for (let i = 0; i < n; i++) {
-    if (outIm[i] !== 0) {
-      isReal = false;
-      break;
-    }
-  }
-  return isReal
-    ? RTV.tensorRaw(outRe, at.shape)
-    : RTV.tensor(outRe, at.shape, outIm);
-}
-
-// ── Mixed real/complex multiply and divide ──────────────────────────────
-// MATLAB treats a complex operand whose imaginary part is all zero as real,
-// and multiplies or divides each part of a complex operand by a real one
-// without promoting it to complex: a part stays exactly 0 where the complex
-// operand's is 0. Promoting would turn NaN or Inf in the
-// real operand into NaN imaginary parts (NaN*0).
-
+/** A dense complex value whose imaginary part is all zero, as real (what
+ *  `.*` and `./` treat it as). */
 function realIfZeroImag(v: RuntimeValue): RuntimeValue {
   if (isRuntimeComplexNumber(v)) return v.im === 0 ? v.re : v;
   if (isRuntimeTensor(v) && v.imag) {
     const im = v.imag;
     for (let i = 0; i < im.length; i++) if (im[i] !== 0) return v;
-    const out = RTV.tensorRaw(v.data, v.shape, v.cls);
-    return out;
+    return RTV.tensorRaw(v.data, v.shape, v.cls);
   }
   return v;
-}
-
-function isComplexOperand(v: RuntimeValue): boolean {
-  return (
-    isRuntimeComplexNumber(v) || (isRuntimeTensor(v) && v.imag !== undefined)
-  );
-}
-
-const MIXED_MUL = 0; // c .* r
-const MIXED_DIV = 1; // c ./ r
-const MIXED_RDIV = 2; // r ./ c
-
-/** Element-wise c.*r, c./r or r./c for complex c and real r (dense,
- *  broadcast). Returns null for operands it does not handle (sparse,
- *  non-numeric, incompatible shapes), leaving those to the general path. */
-function mixedRealComplex(
-  c: RuntimeValue,
-  r: RuntimeValue,
-  mode: number
-): RuntimeValue | null {
-  let cRe: ArrayLike<number>, cIm: ArrayLike<number>, cShape: number[];
-  if (isRuntimeComplexNumber(c)) {
-    cRe = [c.re];
-    cIm = [c.im];
-    cShape = [1, 1];
-  } else if (isRuntimeTensor(c) && c.imag) {
-    cRe = c.data;
-    cIm = c.imag;
-    cShape = c.shape;
-  } else return null;
-  let rd: ArrayLike<number>, rShape: number[];
-  if (isRuntimeNumber(r)) {
-    rd = [r];
-    rShape = [1, 1];
-  } else if (isRuntimeLogical(r)) {
-    rd = [r ? 1 : 0];
-    rShape = [1, 1];
-  } else if (isRuntimeTensor(r) && !r.imag) {
-    rd = r.data;
-    rShape = r.shape;
-  } else return null;
-  const nc = cRe.length,
-    nr = rd.length;
-  let outShape: number[] | null;
-  if (nc === 1) outShape = isRuntimeTensor(r) ? rShape : cShape;
-  else if (nr === 1) outShape = cShape;
-  else if (
-    nc === nr &&
-    cShape.length === rShape.length &&
-    cShape.every((d, i) => d === rShape[i])
-  )
-    outShape = cShape;
-  else outShape = getBroadcastShape(cShape, rShape);
-  if (!outShape) return null;
-  const n = outShape.reduce((acc, d) => acc * d, 1);
-  const outRe = allocFloat64Array(n),
-    outIm = allocFloat64Array(n);
-  const visit = (ci: number, ri: number, oi: number) => {
-    const x = rd[ri];
-    const re = cRe[ci],
-      im = cIm[ci];
-    if (mode === MIXED_MUL) {
-      outRe[oi] = re === 0 ? 0 : re * x;
-      outIm[oi] = im === 0 ? 0 : im * x;
-    } else if (mode === MIXED_DIV) {
-      outRe[oi] = re === 0 ? 0 : re / x;
-      outIm[oi] = im === 0 ? 0 : im / x;
-    } else if (im === 0) {
-      outRe[oi] = x / cRe[ci];
-      outIm[oi] = 0;
-    } else {
-      const q = complexDivide(x, 0, cRe[ci], im);
-      outRe[oi] = q.re;
-      outIm[oi] = q.im;
-    }
-  };
-  if (nc === 1) for (let i = 0; i < n; i++) visit(0, i, i);
-  else if (nr === 1) for (let i = 0; i < n; i++) visit(i, 0, i);
-  else if (nc === n && nr === n) for (let i = 0; i < n; i++) visit(i, i, i);
-  else broadcastIterate(cShape, rShape, outShape, visit);
-  if (!isRuntimeTensor(c) && !isRuntimeTensor(r))
-    return complexResult(outRe[0], outIm[0]);
-  for (let i = 0; i < n; i++)
-    if (outIm[i] !== 0) return RTV.tensor(outRe, outShape, outIm);
-  return RTV.tensor(outRe, outShape);
-}
-
-/** c.*r for exactly one complex operand, else null. */
-function mixedMul(a: RuntimeValue, b: RuntimeValue): RuntimeValue | null {
-  const ac = isComplexOperand(a),
-    bc = isComplexOperand(b);
-  if (ac === bc) return null;
-  return ac
-    ? mixedRealComplex(a, b, MIXED_MUL)
-    : mixedRealComplex(b, a, MIXED_MUL);
-}
-
-/** a./b for exactly one complex operand, else null. */
-function mixedDiv(a: RuntimeValue, b: RuntimeValue): RuntimeValue | null {
-  const ac = isComplexOperand(a),
-    bc = isComplexOperand(b);
-  if (ac === bc) return null;
-  return ac
-    ? mixedRealComplex(a, b, MIXED_DIV)
-    : mixedRealComplex(b, a, MIXED_RDIV);
 }
 
 // ── Arithmetic operators ────────────────────────────────────────────────
@@ -716,103 +269,16 @@ export function mAdd(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
     // Fall through to numeric path, which will raise a more descriptive
     // error (e.g. when trying to add a tensor to a string).
   }
-  // Fast inline path: real tensor + number (bypasses bridge check + binaryOp closure)
-  if (isRuntimeTensor(a) && !a.imag && isRuntimeNumber(b)) {
-    const d = a.data,
-      sv = b as number,
-      n = d.length;
-    const result = allocFloat64Array(n);
-    for (let i = 0; i < n; i++) result[i] = d[i] + sv;
-    return RTV.tensorRaw(result, a.shape);
-  }
-  if (isRuntimeNumber(a) && isRuntimeTensor(b) && !b.imag) {
-    const d = b.data,
-      sv = a as number,
-      n = d.length;
-    const result = allocFloat64Array(n);
-    for (let i = 0; i < n; i++) result[i] = sv + d[i];
-    return RTV.tensorRaw(result, b.shape);
-  }
-  const m = matchSameShapeTensors(a, b);
-  if (m) {
-    const [at, bt] = m;
-    if (!at.imag && !bt.imag) {
-      return tensorElemwiseReal(at, bt, ELEMWISE_ADD);
-    }
-    return tensorElemwiseComplex(at, bt, ELEMWISE_ADD);
-  }
-  if (isRuntimeSparseMatrix(a) || isRuntimeSparseMatrix(b))
+  if (isRuntimeSparseMatrix(a) && isRuntimeSparseMatrix(b))
     return mAddSparse(a, b);
-  if (isComplexOrMixed(a, b)) {
-    return complexBinaryOp(
-      a,
-      b,
-      (aRe, aIm, bRe, bIm) => ({
-        re: aRe + bRe,
-        im: aIm + bIm,
-      }),
-      ELEMWISE_ADD
-    );
-  }
-  // Scalar-tensor native fast path
-  if (isRuntimeNumber(a) && isRuntimeTensor(b)) {
-    const nr = tryNativeElemwiseScalar(a as number, b, ELEMWISE_ADD, true);
-    if (nr) return nr;
-  } else if (isRuntimeTensor(a) && isRuntimeNumber(b)) {
-    const nr = tryNativeElemwiseScalar(b as number, a, ELEMWISE_ADD, false);
-    if (nr) return nr;
-  }
-  return binaryOp(a, b, (x, y) => x + y, BIN_OP_ADD);
+  return elemwise(OpBin.ADD, a, b);
 }
 
 /** Subtract two RuntimeValues */
 export function mSub(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
-  // Fast inline path: real tensor - number or number - real tensor
-  if (isRuntimeTensor(a) && !a.imag && isRuntimeNumber(b)) {
-    const d = a.data,
-      sv = b as number,
-      n = d.length;
-    const result = allocFloat64Array(n);
-    for (let i = 0; i < n; i++) result[i] = d[i] - sv;
-    return RTV.tensorRaw(result, a.shape);
-  }
-  if (isRuntimeNumber(a) && isRuntimeTensor(b) && !b.imag) {
-    const d = b.data,
-      sv = a as number,
-      n = d.length;
-    const result = allocFloat64Array(n);
-    for (let i = 0; i < n; i++) result[i] = sv - d[i];
-    return RTV.tensorRaw(result, b.shape);
-  }
-  const m = matchSameShapeTensors(a, b);
-  if (m) {
-    const [at, bt] = m;
-    if (!at.imag && !bt.imag) {
-      return tensorElemwiseReal(at, bt, ELEMWISE_SUB);
-    }
-    return tensorElemwiseComplex(at, bt, ELEMWISE_SUB);
-  }
-  if (isRuntimeSparseMatrix(a) || isRuntimeSparseMatrix(b))
+  if (isRuntimeSparseMatrix(a) && isRuntimeSparseMatrix(b))
     return mSubSparse(a, b);
-  if (isComplexOrMixed(a, b)) {
-    return complexBinaryOp(
-      a,
-      b,
-      (aRe, aIm, bRe, bIm) => ({
-        re: aRe - bRe,
-        im: aIm - bIm,
-      }),
-      ELEMWISE_SUB
-    );
-  }
-  if (isRuntimeNumber(a) && isRuntimeTensor(b)) {
-    const nr = tryNativeElemwiseScalar(a as number, b, ELEMWISE_SUB, true);
-    if (nr) return nr;
-  } else if (isRuntimeTensor(a) && isRuntimeNumber(b)) {
-    const nr = tryNativeElemwiseScalar(b as number, a, ELEMWISE_SUB, false);
-    if (nr) return nr;
-  }
-  return binaryOp(a, b, (x, y) => x - y, BIN_OP_SUB);
+  return elemwise(OpBin.SUB, a, b);
 }
 
 /** Multiply two RuntimeValues (matrix multiply for 2D tensors, scalar otherwise) */
@@ -826,87 +292,14 @@ export function mMul(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
   if (isRuntimeTensor(a) && isRuntimeTensor(b)) {
     return matMul(a, b);
   }
-  // Scalar times scalar or tensor: element-wise, MATLAB's mixed rules
-  a = realIfZeroImag(a);
-  b = realIfZeroImag(b);
-  const mixed = mixedMul(a, b);
-  if (mixed) return mixed;
-  // Complex scalar multiplication
-  if (isComplexOrMixed(a, b)) {
-    return complexBinaryOp(
-      a,
-      b,
-      (aRe, aIm, bRe, bIm) => ({
-        re: aRe * bRe - aIm * bIm,
-        im: aRe * bIm + aIm * bRe,
-      }),
-      ELEMWISE_MUL
-    );
-  }
-  if (isRuntimeNumber(a) && isRuntimeTensor(b)) {
-    const nr = tryNativeElemwiseScalar(a as number, b, ELEMWISE_MUL, true);
-    if (nr) return nr;
-  } else if (isRuntimeTensor(a) && isRuntimeNumber(b)) {
-    const nr = tryNativeElemwiseScalar(b as number, a, ELEMWISE_MUL, false);
-    if (nr) return nr;
-  }
-  return binaryOp(a, b, (x, y) => x * y, BIN_OP_MUL);
+  return elemwise(OpBin.MUL, a, b);
 }
 
 /** Element-wise multiply */
 export function mElemMul(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
-  if (isComplexOperand(a) || isComplexOperand(b)) {
-    a = realIfZeroImag(a);
-    b = realIfZeroImag(b);
-    const mixed = mixedMul(a, b);
-    if (mixed) return mixed;
-  }
-  // Fast inline path: real tensor .* number or number .* real tensor
-  if (isRuntimeTensor(a) && !a.imag && isRuntimeNumber(b)) {
-    const d = a.data,
-      sv = b as number,
-      n = d.length;
-    const result = allocFloat64Array(n);
-    for (let i = 0; i < n; i++) result[i] = d[i] * sv;
-    return RTV.tensorRaw(result, a.shape);
-  }
-  if (isRuntimeNumber(a) && isRuntimeTensor(b) && !b.imag) {
-    const d = b.data,
-      sv = a as number,
-      n = d.length;
-    const result = allocFloat64Array(n);
-    for (let i = 0; i < n; i++) result[i] = sv * d[i];
-    return RTV.tensorRaw(result, b.shape);
-  }
-  const m = matchSameShapeTensors(a, b);
-  if (m) {
-    const [at, bt] = m;
-    if (!at.imag && !bt.imag) {
-      return tensorElemwiseReal(at, bt, ELEMWISE_MUL);
-    }
-    return tensorElemwiseComplex(at, bt, ELEMWISE_MUL);
-  }
   if (isRuntimeSparseMatrix(a) || isRuntimeSparseMatrix(b))
-    return mElemMulSparse(a, b);
-  if (isComplexOrMixed(a, b)) {
-    return complexBinaryOp(
-      a,
-      b,
-      (aRe, aIm, bRe, bIm) => ({
-        re: aRe * bRe - aIm * bIm,
-        im: aRe * bIm + aIm * bRe,
-      }),
-      ELEMWISE_MUL
-    );
-  }
-  if (isRuntimeNumber(a) && isRuntimeTensor(b)) {
-    const nr = tryNativeElemwiseScalar(a as number, b, ELEMWISE_MUL, true);
-    if (nr) return nr;
-  } else if (isRuntimeTensor(a) && isRuntimeNumber(b)) {
-    const nr = tryNativeElemwiseScalar(b as number, a, ELEMWISE_MUL, false);
-    if (nr) return nr;
-  }
-  return binaryOp(a, b, (x, y) => x * y, BIN_OP_MUL);
+    return mElemMulSparse(realIfZeroImag(a), realIfZeroImag(b));
+  return elemwise(OpBin.MUL, a, b);
 }
 
 /** Divide */
@@ -922,8 +315,10 @@ export function mDiv(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
         isRuntimeLogical(b) ||
         isRuntimeComplexNumber(b) ||
         (isRuntimeTensor(b) && b.data.length === 1))
-    )
-      return mElemDivSparse(a, b);
+    ) {
+      const r = mElemDivSparse(a, b);
+      if (r !== null) return r;
+    }
     // A / S with a sparse divisor: (S' \ A')' keeps the solve sparse.
     if (isRuntimeSparseMatrix(b) && !(b.m === 1 && b.n === 1)) {
       const result = mLeftDiv(mConjugateTranspose(b), mConjugateTranspose(a));
@@ -940,63 +335,17 @@ export function mDiv(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
     const result = mLeftDiv(bt, at);
     return mConjugateTranspose(result);
   }
-  // Scalar or element-wise division (b is not a tensor)
-  a = realIfZeroImag(a);
-  b = realIfZeroImag(b);
-  const mixed = mixedDiv(a, b);
-  if (mixed) return mixed;
-  if (isComplexOrMixed(a, b)) {
-    return complexBinaryOp(a, b, complexDivide, ELEMWISE_DIV);
-  }
-  return binaryOp(a, b, (x, y) => x / y, BIN_OP_DIV);
+  // Scalar divisor: element-wise division
+  return elemwise(OpBin.DIV, a, b);
 }
 
 /** Element-wise divide */
 export function mElemDiv(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
-  if (isComplexOperand(a) || isComplexOperand(b)) {
-    a = realIfZeroImag(a);
-    b = realIfZeroImag(b);
-    const mixed = mixedDiv(a, b);
-    if (mixed) return mixed;
+  if (isRuntimeSparseMatrix(a)) {
+    const r = mElemDivSparse(a, realIfZeroImag(b));
+    if (r !== null) return r;
   }
-  // Fast inline path: real tensor ./ number or number ./ real tensor
-  if (isRuntimeTensor(a) && !a.imag && isRuntimeNumber(b)) {
-    const d = a.data,
-      sv = b as number,
-      n = d.length;
-    const result = allocFloat64Array(n);
-    for (let i = 0; i < n; i++) result[i] = d[i] / sv;
-    return RTV.tensorRaw(result, a.shape);
-  }
-  if (isRuntimeNumber(a) && isRuntimeTensor(b) && !b.imag) {
-    const d = b.data,
-      sv = a as number,
-      n = d.length;
-    const result = allocFloat64Array(n);
-    for (let i = 0; i < n; i++) result[i] = sv / d[i];
-    return RTV.tensorRaw(result, b.shape);
-  }
-  const m = matchSameShapeTensors(a, b);
-  if (m) {
-    const [at, bt] = m;
-    if (!at.imag && !bt.imag) {
-      return tensorElemwiseReal(at, bt, ELEMWISE_DIV);
-    }
-    return tensorElemwiseComplex(at, bt, ELEMWISE_DIV);
-  }
-  if (isRuntimeSparseMatrix(a) || isRuntimeSparseMatrix(b))
-    return mElemDivSparse(a, b);
-  if (isComplexOrMixed(a, b)) {
-    return complexBinaryOp(a, b, complexDivide, ELEMWISE_DIV);
-  }
-  if (isRuntimeNumber(a) && isRuntimeTensor(b)) {
-    const nr = tryNativeElemwiseScalar(a as number, b, ELEMWISE_DIV, true);
-    if (nr) return nr;
-  } else if (isRuntimeTensor(a) && isRuntimeNumber(b)) {
-    const nr = tryNativeElemwiseScalar(b as number, a, ELEMWISE_DIV, false);
-    if (nr) return nr;
-  }
-  return binaryOp(a, b, (x, y) => x / y, BIN_OP_DIV);
+  return elemwise(OpBin.DIV, a, b);
 }
 
 /** Sparse A \ B via the sparse direct solvers. Returns null when the dense
@@ -1097,59 +446,14 @@ export function mElemLeftDiv(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
   return mElemDiv(b, a);
 }
 
-/** cos(pi * x) with exact results at integer and half-integer x. */
-function cospi(x: number): number {
-  if (Number.isInteger(x)) return (x & 1) === 0 ? 1 : -1;
-  if (Number.isInteger(x * 2)) return 0;
-  return Math.cos(Math.PI * x);
-}
-
-/** sin(pi * x) with exact results at integer and half-integer x. */
-function sinpi(x: number): number {
-  if (Number.isInteger(x)) return 0;
-  const twice = x * 2;
-  if (Number.isInteger(twice)) {
-    // x = n + 0.5; sin(pi*(n+0.5)) = (-1)^n. twice-1 = 2n, so (twice-1)/2 = n.
-    return (((twice - 1) / 2) & 1) === 0 ? 1 : -1;
-  }
-  return Math.sin(Math.PI * x);
-}
-
-/** Principal-branch z^w for pure-real base z<0 and pure-real exponent w,
- *  using cospi/sinpi so the phase is exact at integer/half-integer w
- *  (MATLAB: real((-4)^0.5) == 0 exactly). */
-function negRealPow(
-  negBase: number,
-  exponent: number
-): { re: number; im: number } {
-  const mag = Math.pow(-negBase, exponent);
-  return { re: mag * cospi(exponent), im: mag * sinpi(exponent) };
-}
-
 /** Power */
 export function mPow(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
   if (isComplexOrMixed(a, b)) {
+    // Complex operands: scalars only.
     const ac = toComplex(a),
       bc = toComplex(b);
-    if (ac.im === 0 && bc.im === 0 && ac.re < 0) {
-      const r = negRealPow(ac.re, bc.re);
-      return complexResult(r.re, r.im);
-    }
-    // z^w = exp(w * ln(z)), using polar form: ln(z) = ln|z| + i*arg(z)
-    const r = Math.hypot(ac.re, ac.im);
-    if (r === 0) {
-      // 0^w: result is 0 for positive real exponent, 1 for w=0
-      if (bc.re === 0 && bc.im === 0) return complexResult(1, 0);
-      if (bc.re > 0) return complexResult(0, 0);
-      return complexResult(Infinity, 0);
-    }
-    const theta = Math.atan2(ac.im, ac.re);
-    const lnR = Math.log(r);
-    // w * ln(z) = (bre + bi*i) * (lnR + theta*i) = (bre*lnR - bi*theta) + (bre*theta + bi*lnR)*i
-    const newRe = bc.re * lnR - bc.im * theta;
-    const newIm = bc.re * theta + bc.im * lnR;
-    const expR = Math.exp(newRe);
-    return complexResult(expR * Math.cos(newIm), expR * Math.sin(newIm));
+    const r = binaryScalar(OpBin.POW, ac.re, ac.im, true, bc.re, bc.im, true);
+    return r.im === 0 ? r.re : RTV.complex(r.re, r.im);
   }
   // Matrix power if a is a matrix and b is scalar integer
   if (isRuntimeTensor(a) && (isRuntimeNumber(b) || isRuntimeLogical(b))) {
@@ -1182,125 +486,33 @@ export function mPow(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
       return result;
     }
   }
-  // Scalar negative base with non-integer exponent → complex result
-  if (
-    isRuntimeNumber(a) &&
-    a < 0 &&
-    isRuntimeNumber(b) &&
-    !Number.isInteger(b)
-  ) {
-    const r = negRealPow(a as number, b as number);
-    return complexResult(r.re, r.im);
-  }
-  return binaryOp(a, b, (x, y) => Math.pow(x, y));
+  if (isScalarValue(a) && isScalarValue(b)) return elemwise(OpBin.POW, a, b);
+  // Other array operands (a non-square matrix, a non-integer power, a
+  // scalar base with a matrix exponent): MATLAB raises an error or computes
+  // a matrix function; numbl applies Math.pow element-wise.
+  return tensorOf(mapBinary(Math.pow, operandOf(a), operandOf(b)));
 }
 
 /** Element-wise power */
 export function mElemPow(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
-  // Fast path: real tensor .^ scalar integer
-  if (isRuntimeTensor(a) && !a.imag && isRuntimeNumber(b)) {
-    const exp = b as number;
-    if (exp === 2) {
-      const result = allocFloat64Array(a.data.length);
-      for (let i = 0; i < result.length; i++) result[i] = a.data[i] * a.data[i];
-      return RTV.tensor(result, a.shape);
-    }
-    if (Number.isInteger(exp) || exp >= 0) {
-      // No negative bases with fractional exponent concern if exp is integer or base could be negative
-      let hasNeg = false;
-      if (!Number.isInteger(exp)) {
-        for (let i = 0; i < a.data.length; i++) {
-          if (a.data[i] < 0) {
-            hasNeg = true;
-            break;
-          }
-        }
-      }
-      if (!hasNeg) {
-        const result = allocFloat64Array(a.data.length);
-        for (let i = 0; i < result.length; i++)
-          result[i] = Math.pow(a.data[i], exp);
-        return RTV.tensor(result, a.shape);
-      }
-    }
-  }
-  const complexPow = (aRe: number, aIm: number, bRe: number, bIm: number) => {
-    if (aIm === 0 && bIm === 0 && aRe < 0) {
-      return negRealPow(aRe, bRe);
-    }
-    // z^w = exp(w * ln(z)), using polar form: ln(z) = ln|z| + i*arg(z)
-    const r = Math.hypot(aRe, aIm);
-    if (r === 0) {
-      // 0^w: result is 0 for positive real exponent, 1 for w=0
-      if (bRe === 0 && bIm === 0) return { re: 1, im: 0 };
-      if (bRe > 0) return { re: 0, im: 0 };
-      return { re: Infinity, im: 0 };
-    }
-    const theta = Math.atan2(aIm, aRe);
-    const lnR = Math.log(r);
-    const newRe = bRe * lnR - bIm * theta;
-    const newIm = bRe * theta + bIm * lnR;
-    const expR = Math.exp(newRe);
-    return { re: expR * Math.cos(newIm), im: expR * Math.sin(newIm) };
-  };
-  if (isComplexOrMixed(a, b)) {
-    return complexBinaryOp(a, b, complexPow);
-  }
-  // Check if base has negative values — need complex path for non-integer exponents
-  let hasNeg = false;
-  if (isRuntimeNumber(a) && a < 0) hasNeg = true;
-  else if (isRuntimeTensor(a)) {
-    for (let i = 0; i < a.data.length; i++) {
-      if (a.data[i] < 0) {
-        hasNeg = true;
-        break;
-      }
-    }
-  }
-  if (hasNeg) {
-    // For integer exponents, use real Math.pow per-element (always produces real results)
-    let allInt = false;
-    if (isRuntimeNumber(b)) {
-      allInt = Number.isInteger(b as number);
-    } else if (isRuntimeLogical(b)) {
-      allInt = true;
-    } else if (isRuntimeTensor(b)) {
-      allInt = true;
-      for (let i = 0; i < b.data.length; i++) {
-        if (!Number.isInteger(b.data[i])) {
-          allInt = false;
-          break;
-        }
-      }
-    }
-    if (allInt) {
-      return binaryOp(a, b, (x, y) => Math.pow(x, y));
-    }
-    return complexBinaryOp(a, b, complexPow);
-  }
-  return binaryOp(a, b, (x, y) => Math.pow(x, y));
+  return elemwise(OpBin.POW, a, b);
 }
 
 /** Negation */
 export function mNeg(v: RuntimeValue): RuntimeValue {
-  // Fast path: real tensor
-  if (isRuntimeTensor(v)) {
-    if (v.imag !== undefined) {
-      const resultRe = allocFloat64Array(v.data.length);
-      const resultIm = allocFloat64Array(v.imag.length);
-      for (let i = 0; i < v.data.length; i++) {
-        resultRe[i] = -v.data[i];
-        resultIm[i] = -v.imag[i];
-      }
-      return RTV.tensor(resultRe, v.shape, resultIm);
-    }
-    const resultRe = allocFloat64Array(v.data.length);
-    for (let i = 0; i < v.data.length; i++) resultRe[i] = -v.data[i];
-    return RTV.tensor(resultRe, v.shape);
-  }
   if (isRuntimeSparseMatrix(v)) return sparseNeg(v);
   if (isRuntimeComplexNumber(v)) return RTV.complex(-v.re, -v.im);
-  return unaryOp(v, x => -x);
+  const x = operandOf(v);
+  if (typeof x === "number") return -x;
+  const n = x.data.length;
+  const re = allocFloat64Array(n);
+  for (let i = 0; i < n; i++) re[i] = -x.data[i];
+  let im: Float64Array | undefined;
+  if (x.imag) {
+    im = allocFloat64Array(n);
+    for (let i = 0; i < n; i++) im[i] = -x.imag[i];
+  }
+  return RTV.tensor(re, [...x.shape], im);
 }
 
 /** Transpose a 2-D cell array — same index arithmetic as numeric transpose. */
@@ -1504,571 +716,43 @@ function densify(v: RuntimeValue): RuntimeValue {
   return v;
 }
 
-export function mEqual(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
-  if (isRuntimeSparseMatrix(a) || isRuntimeSparseMatrix(b))
-    return mEqual(densify(a), densify(b));
-  const sr = stringComparisonOp(a, b, (x, y) => x === y);
+/** A comparison operator: string operands compare as text, everything else
+ *  numerically (sparse densified). */
+function compareOp(
+  op: number,
+  a: RuntimeValue,
+  b: RuntimeValue,
+  textOp: (x: string, y: string) => boolean
+): RuntimeValue {
+  a = densify(a);
+  b = densify(b);
+  const sr = stringComparisonOp(a, b, textOp);
   if (sr !== null) return sr;
-  if (isComplexOrMixed(a, b)) {
-    return complexComparisonOp(
-      a,
-      b,
-      (aRe, aIm, bRe, bIm) => aRe === bRe && aIm === bIm,
-      OpCmp.EQ
-    );
-  }
-  return comparisonOp(a, b, (x, y) => x === y, OpCmp.EQ);
+  return elemCompare(op, a, b);
+}
+
+export function mEqual(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
+  return compareOp(OpCmp.EQ, a, b, (x, y) => x === y);
 }
 
 export function mNotEqual(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
-  if (isRuntimeSparseMatrix(a) || isRuntimeSparseMatrix(b))
-    return mNotEqual(densify(a), densify(b));
-  const sr = stringComparisonOp(a, b, (x, y) => x !== y);
-  if (sr !== null) return sr;
-  if (isComplexOrMixed(a, b)) {
-    return complexComparisonOp(
-      a,
-      b,
-      (aRe, aIm, bRe, bIm) => aRe !== bRe || aIm !== bIm,
-      OpCmp.NE
-    );
-  }
-  return comparisonOp(a, b, (x, y) => x !== y, OpCmp.NE);
+  return compareOp(OpCmp.NE, a, b, (x, y) => x !== y);
 }
 
 export function mLess(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
-  if (isRuntimeSparseMatrix(a) || isRuntimeSparseMatrix(b))
-    return mLess(densify(a), densify(b));
-  const sr = stringComparisonOp(a, b, (x, y) => x < y);
-  if (sr !== null) return sr;
-  return comparisonOp(a, b, (x, y) => x < y, OpCmp.LT);
+  return compareOp(OpCmp.LT, a, b, (x, y) => x < y);
 }
 
 export function mLessEqual(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
-  if (isRuntimeSparseMatrix(a) || isRuntimeSparseMatrix(b))
-    return mLessEqual(densify(a), densify(b));
-  const sr = stringComparisonOp(a, b, (x, y) => x <= y);
-  if (sr !== null) return sr;
-  return comparisonOp(a, b, (x, y) => x <= y, OpCmp.LE);
+  return compareOp(OpCmp.LE, a, b, (x, y) => x <= y);
 }
 
 export function mGreater(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
-  if (isRuntimeSparseMatrix(a) || isRuntimeSparseMatrix(b))
-    return mGreater(densify(a), densify(b));
-  const sr = stringComparisonOp(a, b, (x, y) => x > y);
-  if (sr !== null) return sr;
-  return comparisonOp(a, b, (x, y) => x > y, OpCmp.GT);
+  return compareOp(OpCmp.GT, a, b, (x, y) => x > y);
 }
 
 export function mGreaterEqual(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
-  if (isRuntimeSparseMatrix(a) || isRuntimeSparseMatrix(b))
-    return mGreaterEqual(densify(a), densify(b));
-  const sr = stringComparisonOp(a, b, (x, y) => x >= y);
-  if (sr !== null) return sr;
-  return comparisonOp(a, b, (x, y) => x >= y, OpCmp.GE);
-}
-
-// ── Internal helpers ────────────────────────────────────────────────────
-
-function asNumeric(
-  v: RuntimeValue
-):
-  | { scalar: true; value: number; isComplex: false }
-  | { scalar: true; re: number; im: number; isComplex: true }
-  | { scalar: false; tensor: RuntimeTensor } {
-  if (isRuntimeNumber(v)) {
-    return { scalar: true, value: v, isComplex: false };
-  }
-  if (isRuntimeLogical(v)) {
-    return { scalar: true, value: v ? 1 : 0, isComplex: false };
-  }
-  if (isRuntimeComplexNumber(v)) {
-    return { scalar: true, re: v.re, im: v.im, isComplex: true };
-  }
-  if (isRuntimeTensor(v)) {
-    if (v.data.length === 1) {
-      if (v.imag !== undefined) {
-        return {
-          scalar: true,
-          re: v.data[0],
-          im: v.imag[0],
-          isComplex: true,
-        };
-      }
-      return { scalar: true, value: v.data[0], isComplex: false };
-    }
-    return { scalar: false, tensor: v };
-  }
-  if (isRuntimeSparseMatrix(v)) {
-    // Densify sparse for generic numeric operations
-    return asNumeric(densify(v));
-  }
-  if (isRuntimeChar(v)) {
-    // Char arithmetic: treat each character as its UTF-16 code point
-    if (v.value.length === 1) {
-      return { scalar: true, value: v.value.charCodeAt(0), isComplex: false };
-    }
-    // Multi-char: row vector of code points
-    const codes = allocFloat64Array(
-      Array.from(v.value).map(c => c.charCodeAt(0))
-    );
-    return {
-      scalar: false,
-      tensor: RTV.tensorRaw(codes, [1, v.value.length]),
-    };
-  }
-  throw invalidDataTypeError();
-}
-
-/**
- * Check if two shapes are compatible for broadcasting and compute the output shape.
- * Broadcasting: dimensions must be equal or one of them must be 1.
- * Returns null if shapes are incompatible, otherwise returns the broadcast shape.
- */
-export function getBroadcastShape(
-  shapeA: number[],
-  shapeB: number[]
-): number[] | null {
-  // Pad shorter shape with leading 1s to match lengths
-  const ndim = Math.max(shapeA.length, shapeB.length, 2);
-  const a = padShape(
-    shapeA.length === 0
-      ? [1, 1]
-      : shapeA.length === 1
-        ? [1, shapeA[0]]
-        : shapeA,
-    ndim
-  );
-  const b = padShape(
-    shapeB.length === 0
-      ? [1, 1]
-      : shapeB.length === 1
-        ? [1, shapeB[0]]
-        : shapeB,
-    ndim
-  );
-
-  const outShape: number[] = [];
-
-  for (let i = 0; i < ndim; i++) {
-    const dimA = a[i];
-    const dimB = b[i];
-
-    if (dimA === dimB) {
-      outShape.push(dimA);
-    } else if (dimA === 1) {
-      outShape.push(dimB);
-    } else if (dimB === 1) {
-      outShape.push(dimA);
-    } else {
-      // Incompatible dimensions
-      return null;
-    }
-  }
-
-  return outShape;
-}
-
-/** Pad a shape array to `ndim` dimensions by appending 1s */
-function padShape(shape: number[], ndim: number): number[] {
-  if (shape.length >= ndim) return shape;
-  const padded = [...shape];
-  while (padded.length < ndim) padded.push(1);
-  return padded;
-}
-
-/**
- * Iterate over all elements of a broadcast result in column-major order,
- * calling `visit(aIdx, bIdx, outIdx)` for each output element.
- */
-export function broadcastIterate(
-  aShape: number[],
-  bShape: number[],
-  outShape: number[],
-  visit: (aIdx: number, bIdx: number, outIdx: number) => void
-): void {
-  const ndim = outShape.length;
-  const totalElems = outShape.reduce((acc, d) => acc * d, 1);
-  const aPadded = padShape(aShape, ndim);
-  const bPadded = padShape(bShape, ndim);
-
-  // Precompute strides — zero for broadcast (size-1) dimensions
-  const aStrides = new Array(ndim);
-  const bStrides = new Array(ndim);
-  let aStr = 1,
-    bStr = 1;
-  for (let d = 0; d < ndim; d++) {
-    aStrides[d] = aPadded[d] === 1 ? 0 : aStr;
-    bStrides[d] = bPadded[d] === 1 ? 0 : bStr;
-    aStr *= aPadded[d];
-    bStr *= bPadded[d];
-  }
-
-  const subs = new Array(ndim).fill(0);
-  let aIdx = 0,
-    bIdx = 0;
-  for (let i = 0; i < totalElems; i++) {
-    visit(aIdx, bIdx, i);
-    for (let d = 0; d < ndim; d++) {
-      subs[d]++;
-      aIdx += aStrides[d];
-      bIdx += bStrides[d];
-      if (subs[d] < outShape[d]) break;
-      aIdx -= subs[d] * aStrides[d];
-      bIdx -= subs[d] * bStrides[d];
-      subs[d] = 0;
-    }
-  }
-}
-
-/** Op codes for inlined arithmetic in the broadcast fast path. */
-const BIN_OP_ADD = 0;
-const BIN_OP_SUB = 1;
-const BIN_OP_MUL = 2;
-const BIN_OP_DIV = 3;
-
-function broadcastBinary(
-  a: RuntimeTensor,
-  b: RuntimeTensor,
-  outShape: number[],
-  op: (x: number, y: number) => number,
-  opCode?: number
-): RuntimeTensor {
-  // 2D fast path: avoid callback indirection by inlining the iteration
-  // directly. The dominant bsxfun pattern in numerical code (small
-  // matrices with one or both operands having a singleton dim) is 2D.
-  if (outShape.length === 2) {
-    const m = outShape[0];
-    const n = outShape[1];
-    const result = allocFloat64Array(m * n);
-    const aShape = a.shape;
-    const bShape = b.shape;
-    const aM = aShape.length >= 1 ? aShape[0] : 1;
-    const aN = aShape.length >= 2 ? aShape[1] : 1;
-    const bM = bShape.length >= 1 ? bShape[0] : 1;
-    const bN = bShape.length >= 2 ? bShape[1] : 1;
-    const aS0 = aM === 1 ? 0 : 1;
-    const aS1 = aN === 1 ? 0 : aM;
-    const bS0 = bM === 1 ? 0 : 1;
-    const bS1 = bN === 1 ? 0 : bM;
-    const aD = a.data;
-    const bD = b.data;
-    let outIdx = 0;
-    // Inlined arithmetic per opCode — avoids the per-element op closure
-    // call that V8 can't reliably inline (op site is polymorphic across
-    // mAdd/mSub/mElemMul/mElemDiv).
-    if (opCode === BIN_OP_ADD) {
-      for (let j = 0; j < n; j++) {
-        const aBase = j * aS1;
-        const bBase = j * bS1;
-        for (let i = 0; i < m; i++) {
-          result[outIdx++] = aD[aBase + i * aS0] + bD[bBase + i * bS0];
-        }
-      }
-    } else if (opCode === BIN_OP_SUB) {
-      for (let j = 0; j < n; j++) {
-        const aBase = j * aS1;
-        const bBase = j * bS1;
-        for (let i = 0; i < m; i++) {
-          result[outIdx++] = aD[aBase + i * aS0] - bD[bBase + i * bS0];
-        }
-      }
-    } else if (opCode === BIN_OP_MUL) {
-      for (let j = 0; j < n; j++) {
-        const aBase = j * aS1;
-        const bBase = j * bS1;
-        for (let i = 0; i < m; i++) {
-          result[outIdx++] = aD[aBase + i * aS0] * bD[bBase + i * bS0];
-        }
-      }
-    } else if (opCode === BIN_OP_DIV) {
-      for (let j = 0; j < n; j++) {
-        const aBase = j * aS1;
-        const bBase = j * bS1;
-        for (let i = 0; i < m; i++) {
-          result[outIdx++] = aD[aBase + i * aS0] / bD[bBase + i * bS0];
-        }
-      }
-    } else {
-      for (let j = 0; j < n; j++) {
-        const aBase = j * aS1;
-        const bBase = j * bS1;
-        for (let i = 0; i < m; i++) {
-          result[outIdx++] = op(aD[aBase + i * aS0], bD[bBase + i * bS0]);
-        }
-      }
-    }
-    return RTV.tensor(result, outShape) as RuntimeTensor;
-  }
-  const result = allocFloat64Array(outShape.reduce((acc, d) => acc * d, 1));
-  broadcastIterate(a.shape, b.shape, outShape, (aIdx, bIdx, i) => {
-    result[i] = op(a.data[aIdx], b.data[bIdx]);
-  });
-  return RTV.tensor(result, outShape) as RuntimeTensor;
-}
-
-function broadcastBinaryComplex(
-  a: { re: Float64Array; im: Float64Array; shape: number[] },
-  b: { re: Float64Array; im: Float64Array; shape: number[] },
-  outShape: number[],
-  op: (
-    aRe: number,
-    aIm: number,
-    bRe: number,
-    bIm: number
-  ) => { re: number; im: number }
-): RuntimeTensor {
-  const totalElems = outShape.reduce((acc, d) => acc * d, 1);
-  const resultRe = allocFloat64Array(totalElems);
-  const resultIm = allocFloat64Array(totalElems);
-  broadcastIterate(a.shape, b.shape, outShape, (aIdx, bIdx, i) => {
-    const r = op(a.re[aIdx], a.im[aIdx], b.re[bIdx], b.im[bIdx]);
-    resultRe[i] = r.re;
-    resultIm[i] = r.im;
-  });
-  const isReal = resultIm.every(x => x === 0);
-  return RTV.tensor(
-    resultRe,
-    outShape,
-    isReal ? undefined : resultIm
-  ) as RuntimeTensor;
-}
-
-function broadcastComparisonComplex(
-  a: { re: Float64Array; im: Float64Array; shape: number[] },
-  b: { re: Float64Array; im: Float64Array; shape: number[] },
-  outShape: number[],
-  op: (aRe: number, aIm: number, bRe: number, bIm: number) => boolean
-): RuntimeTensor {
-  const result = allocFloat64Array(outShape.reduce((acc, d) => acc * d, 1));
-  broadcastIterate(a.shape, b.shape, outShape, (aIdx, bIdx, i) => {
-    result[i] = op(a.re[aIdx], a.im[aIdx], b.re[bIdx], b.im[bIdx]) ? 1 : 0;
-  });
-  const t = RTV.logicalTensor(result, outShape) as RuntimeTensor;
-  return t;
-}
-
-function broadcastComparison(
-  a: RuntimeTensor,
-  b: RuntimeTensor,
-  outShape: number[],
-  op: (x: number, y: number) => boolean
-): RuntimeTensor {
-  const result = allocFloat64Array(outShape.reduce((acc, d) => acc * d, 1));
-  broadcastIterate(a.shape, b.shape, outShape, (aIdx, bIdx, i) => {
-    result[i] = op(a.data[aIdx], b.data[bIdx]) ? 1 : 0;
-  });
-  const t = RTV.logicalTensor(result, outShape) as RuntimeTensor;
-  return t;
-}
-
-function binaryOp(
-  a: RuntimeValue,
-  b: RuntimeValue,
-  op: (x: number, y: number) => number,
-  opCode?: number
-): RuntimeValue {
-  // Fast path: real tensor op real tensor (most common in vectorized code)
-  if (isRuntimeTensor(a) && a.data.length > 1) {
-    if (isRuntimeTensor(b) && b.data.length > 1) {
-      // tensor op tensor — same shape fast path
-      if (
-        a.data.length === b.data.length &&
-        a.shape.length === b.shape.length &&
-        a.shape.every((d, i) => d === b.shape[i])
-      ) {
-        const result = allocFloat64Array(a.data.length);
-        for (let i = 0; i < result.length; i++) {
-          result[i] = op(a.data[i], b.data[i]);
-        }
-        return RTV.tensor(result, a.shape);
-      }
-      // Try broadcasting
-      const broadcastShape = getBroadcastShape(a.shape, b.shape);
-      if (broadcastShape !== null) {
-        return broadcastBinary(a, b, broadcastShape, op, opCode);
-      }
-      throw new RuntimeError(
-        `Matrix dimensions must agree: [${a.shape.join(",")}] vs [${b.shape.join(",")}]`
-      );
-    }
-    if (isRuntimeNumber(b)) {
-      // tensor op scalar
-      const result = allocFloat64Array(a.data.length);
-      const sv = b as number;
-      for (let i = 0; i < result.length; i++) {
-        result[i] = op(a.data[i], sv);
-      }
-      return RTV.tensor(result, a.shape);
-    }
-  }
-  if (isRuntimeTensor(b) && b.data.length > 1 && isRuntimeNumber(a)) {
-    // scalar op tensor
-    const result = allocFloat64Array(b.data.length);
-    const sv = a as number;
-    for (let i = 0; i < result.length; i++) {
-      result[i] = op(sv, b.data[i]);
-    }
-    return RTV.tensor(result, b.shape);
-  }
-
-  // General path via asNumeric
-  const an = asNumeric(a);
-  const bn = asNumeric(b);
-
-  // scalar op scalar
-  if (an.scalar && bn.scalar) {
-    const aVal = an.isComplex ? an.re : an.value;
-    const bVal = bn.isComplex ? bn.re : bn.value;
-    return RTV.num(op(aVal, bVal));
-  }
-
-  // scalar op tensor
-  if (an.scalar && !bn.scalar) {
-    const t = bn.tensor;
-    const result = allocFloat64Array(t.data.length);
-    const scalarVal = an.isComplex ? an.re : an.value;
-    for (let i = 0; i < result.length; i++) {
-      result[i] = op(scalarVal, t.data[i]);
-    }
-    return RTV.tensor(result, t.shape);
-  }
-
-  // tensor op scalar
-  if (!an.scalar && bn.scalar) {
-    const t = an.tensor;
-    const result = allocFloat64Array(t.data.length);
-    const scalarVal = bn.isComplex ? bn.re : bn.value;
-    for (let i = 0; i < result.length; i++) {
-      result[i] = op(t.data[i], scalarVal);
-    }
-    return RTV.tensor(result, t.shape);
-  }
-
-  // tensor op tensor
-  const at = (an as { scalar: false; tensor: RuntimeTensor }).tensor;
-  const bt = (bn as { scalar: false; tensor: RuntimeTensor }).tensor;
-
-  // Check if shapes are identical (fast path)
-  if (
-    at.data.length === bt.data.length &&
-    at.shape.length === bt.shape.length &&
-    at.shape.every((d, i) => d === bt.shape[i])
-  ) {
-    const result = allocFloat64Array(at.data.length);
-    for (let i = 0; i < result.length; i++) {
-      result[i] = op(at.data[i], bt.data[i]);
-    }
-    return RTV.tensor(result, at.shape);
-  }
-
-  // Try broadcasting
-  const broadcastShape = getBroadcastShape(at.shape, bt.shape);
-  if (broadcastShape !== null) {
-    return broadcastBinary(at, bt, broadcastShape, op, opCode);
-  }
-
-  // Incompatible shapes
-  throw new RuntimeError(
-    `Matrix dimensions must agree: [${at.shape.join(",")}] vs [${bt.shape.join(",")}]`
-  );
-}
-
-function unaryOp(v: RuntimeValue, op: (x: number) => number): RuntimeValue {
-  // Fast path: real tensor
-  if (isRuntimeTensor(v) && v.data.length > 1) {
-    const result = allocFloat64Array(v.data.length);
-    for (let i = 0; i < result.length; i++) {
-      result[i] = op(v.data[i]);
-    }
-    return RTV.tensor(result, v.shape);
-  }
-  const n = asNumeric(v);
-  if (n.scalar) {
-    const val = n.isComplex ? n.re : n.value;
-    return RTV.num(op(val));
-  }
-  const result = allocFloat64Array(n.tensor.data.length);
-  for (let i = 0; i < result.length; i++) {
-    result[i] = op(n.tensor.data[i]);
-  }
-  return RTV.tensor(result, n.tensor.shape);
-}
-
-function comparisonOp(
-  a: RuntimeValue,
-  b: RuntimeValue,
-  op: (x: number, y: number) => boolean,
-  opCode: number
-): RuntimeValue {
-  const an = asNumeric(a);
-  const bn = asNumeric(b);
-
-  if (an.scalar && bn.scalar) {
-    const aVal = an.isComplex ? an.re : an.value;
-    const bVal = bn.isComplex ? bn.re : bn.value;
-    return RTV.logical(op(aVal, bVal));
-  }
-
-  // For tensor comparisons, return a logical tensor (0/1 values in Float64Array).
-  if (an.scalar && !bn.scalar) {
-    const scalarVal = an.isComplex ? an.re : an.value;
-    const len = bn.tensor.data.length;
-    const result = allocFloat64Array(len);
-    tensorOps.realScalarComparison(
-      opCode,
-      len,
-      scalarVal,
-      bn.tensor.data,
-      true,
-      result
-    );
-    const t = RTV.logicalTensor(result, bn.tensor.shape);
-    return t;
-  }
-
-  if (!an.scalar && bn.scalar) {
-    const scalarVal = bn.isComplex ? bn.re : bn.value;
-    const len = an.tensor.data.length;
-    const result = allocFloat64Array(len);
-    tensorOps.realScalarComparison(
-      opCode,
-      len,
-      scalarVal,
-      an.tensor.data,
-      false,
-      result
-    );
-    const t = RTV.logicalTensor(result, an.tensor.shape);
-    return t;
-  }
-
-  const at = (an as { scalar: false; tensor: RuntimeTensor }).tensor;
-  const bt = (bn as { scalar: false; tensor: RuntimeTensor }).tensor;
-
-  // Check if shapes are identical (fast path).
-  if (
-    at.data.length === bt.data.length &&
-    at.shape.length === bt.shape.length &&
-    at.shape.every((d, i) => d === bt.shape[i])
-  ) {
-    const len = at.data.length;
-    const result = allocFloat64Array(len);
-    tensorOps.realComparison(opCode, len, at.data, bt.data, result);
-    const t = RTV.logicalTensor(result, at.shape);
-    return t;
-  }
-
-  // Try broadcasting.
-  const broadcastShape = getBroadcastShape(at.shape, bt.shape);
-  if (broadcastShape !== null) {
-    return broadcastComparison(at, bt, broadcastShape, op);
-  }
-
-  // Incompatible shapes.
-  throw new RuntimeError(
-    `Matrix dimensions must agree for comparison: [${at.shape.join(",")}] vs [${bt.shape.join(",")}]`
-  );
+  return compareOp(OpCmp.GE, a, b, (x, y) => x >= y);
 }
 
 /** Unwrap a 1×1 tensor to a plain scalar (number or complex). */

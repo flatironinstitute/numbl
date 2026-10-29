@@ -7,7 +7,7 @@
  * outIm is always required (caller allocates even if result might be real).
  */
 
-import { OpComplexBin } from "./opCodes.js";
+import { OpBin } from "./opCodes.js";
 
 function cdivzRe(r: number, i: number): number {
   if (r === 0 && i === 0) return NaN;
@@ -29,19 +29,19 @@ export function tsComplexBinaryElemwise(
   outIm: Float64Array
 ): void {
   switch (op) {
-    case OpComplexBin.ADD:
+    case OpBin.ADD:
       for (let i = 0; i < n; i++) {
         outRe[i] = aRe[i] + bRe[i];
         outIm[i] = (aIm ? aIm[i] : 0) + (bIm ? bIm[i] : 0);
       }
       return;
-    case OpComplexBin.SUB:
+    case OpBin.SUB:
       for (let i = 0; i < n; i++) {
         outRe[i] = aRe[i] - bRe[i];
         outIm[i] = (aIm ? aIm[i] : 0) - (bIm ? bIm[i] : 0);
       }
       return;
-    case OpComplexBin.MUL:
+    case OpBin.MUL:
       for (let i = 0; i < n; i++) {
         const ar = aRe[i],
           ai = aIm ? aIm[i] : 0;
@@ -51,7 +51,7 @@ export function tsComplexBinaryElemwise(
         outIm[i] = ar * bi + ai * br;
       }
       return;
-    case OpComplexBin.DIV:
+    case OpBin.DIV:
       for (let i = 0; i < n; i++) {
         const ar = aRe[i],
           ai = aIm ? aIm[i] : 0;
@@ -84,13 +84,13 @@ export function tsComplexScalarBinaryElemwise(
   outIm: Float64Array
 ): void {
   switch (op) {
-    case OpComplexBin.ADD:
+    case OpBin.ADD:
       for (let i = 0; i < n; i++) {
         outRe[i] = sRe + arrRe[i];
         outIm[i] = sIm + (arrIm ? arrIm[i] : 0);
       }
       return;
-    case OpComplexBin.SUB:
+    case OpBin.SUB:
       if (scalarOnLeft) {
         for (let i = 0; i < n; i++) {
           outRe[i] = sRe - arrRe[i];
@@ -103,7 +103,7 @@ export function tsComplexScalarBinaryElemwise(
         }
       }
       return;
-    case OpComplexBin.MUL:
+    case OpBin.MUL:
       for (let i = 0; i < n; i++) {
         const ar = arrRe[i];
         const ai = arrIm ? arrIm[i] : 0;
@@ -111,7 +111,7 @@ export function tsComplexScalarBinaryElemwise(
         outIm[i] = sRe * ai + sIm * ar;
       }
       return;
-    case OpComplexBin.DIV:
+    case OpBin.DIV:
       if (scalarOnLeft) {
         for (let i = 0; i < n; i++) {
           const ar = arrRe[i];

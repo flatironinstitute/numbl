@@ -11,15 +11,17 @@ import {
   isRuntimeSparseMatrix,
   isRuntimeTensor,
 } from "../../runtime/types.js";
-import { tensorOps, OpUnary } from "../../ops/index.js";
+import {
+  tensorOps,
+  elementwiseBinary,
+  elementwiseUnary,
+  mapBinary,
+  realElem,
+} from "../../ops/index.js";
 import { RTV } from "../../runtime/constructors.js";
 import { numericArg } from "./args.js";
 import { sparseToDense } from "../../helpers/sparse-arithmetic.js";
 import { allocFloat64Array } from "../../runtime/alloc.js";
-import {
-  getBroadcastShape,
-  broadcastIterate,
-} from "../../helpers/arithmetic.js";
 
 // ── Shared helpers ──────────────────────────────────────────────────────
 
@@ -39,39 +41,18 @@ export function makeTensor(
 
 // ── Apply helpers ───────────────────────────────────────────────────────
 
-/** Apply a unary element-wise function with complex support */
-/** Map Math.* functions to tensor-ops unary op codes. */
-const nativeUnaryOpCode = new Map<(x: number) => number, number>([
-  [Math.exp, OpUnary.EXP],
-  [Math.log, OpUnary.LOG],
-  [Math.log2, OpUnary.LOG2],
-  [Math.log10, OpUnary.LOG10],
-  [Math.sqrt, OpUnary.SQRT],
-  [Math.abs, OpUnary.ABS],
-  [Math.floor, OpUnary.FLOOR],
-  [Math.ceil, OpUnary.CEIL],
-  [Math.round, OpUnary.ROUND],
-  [Math.trunc, OpUnary.TRUNC],
-  [Math.sin, OpUnary.SIN],
-  [Math.cos, OpUnary.COS],
-  [Math.tan, OpUnary.TAN],
-  [Math.asin, OpUnary.ASIN],
-  [Math.acos, OpUnary.ACOS],
-  [Math.atan, OpUnary.ATAN],
-  [Math.sinh, OpUnary.SINH],
-  [Math.cosh, OpUnary.COSH],
-  [Math.tanh, OpUnary.TANH],
-  [Math.sign, OpUnary.SIGN],
-]);
-
+/** Apply a unary element-wise function with complex support. `op` is the
+ *  `OpUnary` kernel computing `realFn` (and, on complex input, `complexFn`)
+ *  over a tensor, when there is one. */
 export function applyUnaryElemwise(
   v: RuntimeValue,
   realFn: (x: number) => number,
   complexFn: (re: number, im: number) => { re: number; im: number },
-  name: string
+  name: string,
+  op?: number
 ): RuntimeValue {
   if (isRuntimeSparseMatrix(v))
-    return applyUnaryElemwise(sparseToDense(v), realFn, complexFn, name);
+    return applyUnaryElemwise(sparseToDense(v), realFn, complexFn, name, op);
   if (typeof v === "boolean") return realFn(v ? 1 : 0);
   if (typeof v === "number") return realFn(v);
 
@@ -81,27 +62,15 @@ export function applyUnaryElemwise(
   }
 
   if (isRuntimeTensor(v)) {
+    if (op !== undefined) {
+      const r = elementwiseUnary(op, v);
+      return makeTensor(r.data, r.imag, r.shape);
+    }
     const n = v.data.length;
     if (!v.imag) {
-      // Tensor-ops fast path (native if available, TS fallback otherwise).
-      const opCode = nativeUnaryOpCode.get(realFn);
-      if (opCode !== undefined) {
-        const out = allocFloat64Array(n);
-        tensorOps.realUnaryElemwise(opCode, n, v.data, out);
-        return RTV.tensorRaw(out, v.shape.slice());
-      }
       const out = allocFloat64Array(n);
       for (let i = 0; i < n; i++) out[i] = realFn(v.data[i]);
       return makeTensor(out, undefined, v.shape.slice());
-    }
-    // Complex tensor path.
-    const opCode = nativeUnaryOpCode.get(realFn);
-    // tensorOps.complexUnaryElemwise supports all ops except ABS.
-    if (opCode !== undefined && opCode !== OpUnary.ABS) {
-      const outRe = allocFloat64Array(n);
-      const outIm = allocFloat64Array(n);
-      tensorOps.complexUnaryElemwise(opCode, n, v.data, v.imag, outRe, outIm);
-      return makeTensor(outRe, outIm, v.shape.slice());
     }
     const outR = allocFloat64Array(n);
     const outI = allocFloat64Array(n);
@@ -127,7 +96,7 @@ function applyUnaryElemwiseMaybeComplex(
   realFn: (x: number) => number,
   complexFn: (re: number, im: number) => { re: number; im: number },
   name: string,
-  nativeOpCode?: number
+  op?: number
 ): RuntimeValue {
   if (isRuntimeSparseMatrix(v))
     return applyUnaryElemwiseMaybeComplex(
@@ -135,7 +104,7 @@ function applyUnaryElemwiseMaybeComplex(
       realFn,
       complexFn,
       name,
-      nativeOpCode
+      op
     );
   if (typeof v === "boolean") v = (v ? 1 : 0) as unknown as RuntimeValue;
   if (typeof v === "number") {
@@ -155,9 +124,9 @@ function applyUnaryElemwiseMaybeComplex(
     if (!v.imag) {
       // Tensor-ops fast path: compute the whole buffer via the ops layer,
       // then scan for NaN (indicates out-of-domain, patch with complex fallback).
-      if (nativeOpCode !== undefined) {
+      if (op !== undefined) {
         const nativeOut = allocFloat64Array(n);
-        tensorOps.realUnaryElemwise(nativeOpCode, n, v.data, nativeOut);
+        tensorOps.realUnaryElemwise(op, n, v.data, nativeOut);
         let firstNaN = -1;
         for (let i = 0; i < n; i++) {
           if (Number.isNaN(nativeOut[i]) && !Number.isNaN(v.data[i])) {
@@ -219,10 +188,11 @@ function applyUnaryRealResult(
   v: RuntimeValue,
   realFn: (x: number) => number,
   complexFn: (re: number, im: number) => number,
-  name: string
+  name: string,
+  op?: number
 ): RuntimeValue {
   if (isRuntimeSparseMatrix(v))
-    return applyUnaryRealResult(sparseToDense(v), realFn, complexFn, name);
+    return applyUnaryRealResult(sparseToDense(v), realFn, complexFn, name, op);
   if (typeof v === "boolean") return realFn(v ? 1 : 0);
   if (typeof v === "number") return realFn(v);
 
@@ -231,14 +201,11 @@ function applyUnaryRealResult(
   }
 
   if (isRuntimeTensor(v)) {
-    const n = v.data.length;
-    // Fast path for abs (realFn = Math.abs).
-    if (realFn === Math.abs) {
-      const out = allocFloat64Array(n);
-      if (!v.imag) tensorOps.realUnaryElemwise(OpUnary.ABS, n, v.data, out);
-      else tensorOps.complexAbs(n, v.data, v.imag, out);
-      return RTV.tensorRaw(out, v.shape.slice());
+    if (op !== undefined) {
+      const r = elementwiseUnary(op, v);
+      return makeTensor(r.data, undefined, r.shape);
     }
+    const n = v.data.length;
     const out = allocFloat64Array(n);
     if (!v.imag) {
       for (let i = 0; i < n; i++) out[i] = realFn(v.data[i]);
@@ -251,48 +218,29 @@ function applyUnaryRealResult(
   throw new Error(`${name}: unsupported argument type`);
 }
 
-/** Apply a binary element-wise function supporting scalars, tensors, and broadcast. */
+/** Apply a real binary element-wise op to two real operands (numbers,
+ *  logicals or real tensors, as the builtin's argument checks leave them),
+ *  with implicit expansion. `op` is an `OpBin` kernel op, or a per-element
+ *  function for ops without one. Two scalars give a scalar, otherwise the
+ *  result is a double tensor. */
 export function applyBinaryElemwise(
   args: RuntimeValue[],
-  fn: (a: number, b: number) => number,
-  name: string
+  op: number | ((a: number, b: number) => number)
 ): RuntimeValue {
-  const a0 = typeof args[0] === "boolean" ? (args[0] ? 1 : 0) : args[0];
-  const a1 = typeof args[1] === "boolean" ? (args[1] ? 1 : 0) : args[1];
-  const aIsNum = typeof a0 === "number";
-  const bIsNum = typeof a1 === "number";
-  const aIsTensor = isRuntimeTensor(a0);
-  const bIsTensor = isRuntimeTensor(a1);
-  if (aIsNum && bIsNum) return fn(a0 as number, a1 as number);
-  if (aIsTensor && bIsNum) {
-    const t = a0 as RuntimeTensor;
-    const s = a1 as number;
-    const out = allocFloat64Array(t.data.length);
-    for (let i = 0; i < t.data.length; i++) out[i] = fn(t.data[i], s);
-    return makeTensor(out, undefined, t.shape);
-  }
-  if (aIsNum && bIsTensor) {
-    const s = a0 as number;
-    const t = a1 as RuntimeTensor;
-    const out = allocFloat64Array(t.data.length);
-    for (let i = 0; i < t.data.length; i++) out[i] = fn(s, t.data[i]);
-    return makeTensor(out, undefined, t.shape);
-  }
-  if (aIsTensor && bIsTensor) {
-    const tA = a0 as RuntimeTensor;
-    const tB = a1 as RuntimeTensor;
-    const outShape = getBroadcastShape(tA.shape, tB.shape);
-    if (outShape === null) {
-      throw new Error(`${name}: Matrix dimensions must agree`);
-    }
-    const n = outShape.reduce((acc, d) => acc * d, 1);
-    const out = allocFloat64Array(n);
-    broadcastIterate(tA.shape, tB.shape, outShape, (ai, bi, oi) => {
-      out[oi] = fn(tA.data[ai], tB.data[bi]);
-    });
-    return makeTensor(out, undefined, outShape);
-  }
-  throw new Error(`${name}: unsupported argument types`);
+  const a = realOperand(args[0]);
+  const b = realOperand(args[1]);
+  if (typeof a === "number" && typeof b === "number")
+    return typeof op === "number" ? realElem(op, a, b) : op(a, b);
+  const r =
+    typeof op === "number" ? elementwiseBinary(op, a, b) : mapBinary(op, a, b);
+  return makeTensor(r.data, undefined, r.shape);
+}
+
+function realOperand(v: RuntimeValue): number | RuntimeTensor {
+  if (typeof v === "number") return v;
+  if (typeof v === "boolean") return v ? 1 : 0;
+  if (isRuntimeTensor(v) && !v.imag) return v;
+  throw new Error("applyBinaryElemwise: unsupported argument type");
 }
 
 export interface UnaryElemwiseFns {
@@ -300,10 +248,11 @@ export interface UnaryElemwiseFns {
   complexFn: (re: number, im: number) => { re: number; im: number };
   /** Use applyUnaryElemwiseMaybeComplex instead of applyUnaryElemwise */
   maybeComplex?: boolean;
-  /** OpUnary code for the tensor-ops dispatch. Used by the maybeComplex path
-   * so that e.g. sqrt/log can run in native C on the common all-in-domain
-   * case, then fall back for NaN entries only. */
-  nativeOpCode?: number;
+  /** The `OpUnary` kernel computing `realFn` over a tensor. Real tensors
+   *  go through it (with `maybeComplex`, entries out of the real domain are
+   *  then patched with complexFn); without `maybeComplex`, complex tensors
+   *  go through its complex form too. */
+  op?: number;
 }
 
 // ── Apply-only element-wise helpers (for builtin()) ─────────────────────
@@ -329,10 +278,16 @@ export function unaryElemwise(
         spec.realFn,
         spec.complexFn,
         name,
-        spec.nativeOpCode
+        spec.op
       );
   return args =>
-    applyUnaryElemwise(numericArg(args[0]), spec.realFn, spec.complexFn, name);
+    applyUnaryElemwise(
+      numericArg(args[0]),
+      spec.realFn,
+      spec.complexFn,
+      name,
+      spec.op
+    );
 }
 
 /** Unary element-wise function whose result is always real (abs, real,
@@ -340,10 +295,11 @@ export function unaryElemwise(
 export function unaryRealResult(
   realFn: (x: number) => number,
   complexFn: (re: number, im: number) => number,
-  name: string
+  name: string,
+  op?: number
 ): UnaryApply {
   return args =>
-    applyUnaryRealResult(numericArg(args[0]), realFn, complexFn, name);
+    applyUnaryRealResult(numericArg(args[0]), realFn, complexFn, name, op);
 }
 
 /** Element-wise numeric predicate (isnan, isinf, isfinite): a logical
