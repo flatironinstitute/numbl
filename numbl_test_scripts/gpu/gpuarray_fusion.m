@@ -14,7 +14,8 @@ chk(G, H, 1e-5);
 % one statement with many terms
 Y = sin(GA) .* cos(GB) + abs(GA - GB) ./ (1 + GA .* GA) - exp(-GB .* GB) + (GA > 0) .* 2 + max(GA, GB) - min(GA, 0.5);
 Yh = sin(A) .* cos(B) + abs(A - B) ./ (1 + A .* A) - exp(-B .* B) + (A > 0) .* 2 + max(A, B) - min(A, 0.5);
-chk(Y, Yh, 1e-5);
+% (WGSL allows an absolute 2^-11 for sin and cos)
+chk(Y, Yh, 1e-3);
 % same buffer many times
 Z = GA + GA .* GA - GA ./ (GA + 2); Zh = A + A .* A - A ./ (A + 2); chk(Z, Zh, 1e-5);
 % lazy consumed by reductions, indexing, gather, comparisons in if
