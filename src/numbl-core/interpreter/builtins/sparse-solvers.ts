@@ -51,7 +51,7 @@ import {
 } from "../../helpers/sparse-direct.js";
 import { emitWarning } from "../../helpers/warn.js";
 import { getLapackBridge } from "../../native/lapack-bridge.js";
-import { builtin } from "./builtin.js";
+import { builtin, classMethod } from "./builtin.js";
 import { builtinError, realScalarArg } from "./args.js";
 import { errorFn, floatMatrixArg } from "./linalg-args.js";
 
@@ -678,23 +678,19 @@ function rhsData(v: RuntimeValue): {
 }
 
 /**
- * Hook for the mldivide / mrdivide operator builtins: `dA \ B` and `B / dA`
- * with a decomposition object. Returns undefined when neither operand is a
- * decomposition so the ordinary operator runs.
+ * The mldivide / mrdivide methods of decomposition: `dA \ B` and `B / dA`.
+ * One operand is a decomposition object.
  */
-export function tryDecompositionDivide(
+function decompositionDivide(
   name: "mldivide" | "mrdivide",
   a: RuntimeValue,
   b: RuntimeValue
-): RuntimeValue | undefined {
+): RuntimeValue {
   if (name === "mldivide") {
-    if (!isDecomposition(a)) {
-      if (isDecomposition(b))
-        throw new RuntimeError(
-          "decomposition: a decomposition object can only be the left operand of \\"
-        );
-      return undefined;
-    }
+    if (!isDecomposition(a))
+      throw new RuntimeError(
+        "decomposition: a decomposition object can only be the left operand of \\"
+      );
     const n = toNumber(permSize(a));
     const rhs = rhsData(b);
     if (rhs.m !== n)
@@ -704,13 +700,10 @@ export function tryDecompositionDivide(
     const x = decompositionSolve(a, rhs.data, n, rhs.n, false);
     return RTV.tensor(x, [n, rhs.n]);
   }
-  if (!isDecomposition(b)) {
-    if (isDecomposition(a))
-      throw new RuntimeError(
-        "decomposition: a decomposition object can only be the right operand of /"
-      );
-    return undefined;
-  }
+  if (!isDecomposition(b))
+    throw new RuntimeError(
+      "decomposition: a decomposition object can only be the right operand of /"
+    );
   // B / A = (A' \ B')'.
   const n = toNumber(permSize(b));
   const rhs = rhsData(a);
@@ -728,6 +721,13 @@ export function tryDecompositionDivide(
     for (let k = 0; k < n; k++) x[c + k * nrhs] = xt[c * n + k];
   return RTV.tensor(x, [nrhs, n]);
 }
+
+for (const name of ["mldivide", "mrdivide"] as const)
+  classMethod(DEC_CLASS, {
+    name,
+    nargin: 2,
+    apply: args => decompositionDivide(name, args[0], args[1]),
+  });
 
 function permSize(d: RuntimeClassInstance): RuntimeValue {
   const ms = d.fields.get("MatrixSize");

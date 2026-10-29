@@ -461,6 +461,11 @@ export class Workspace {
           `JS user functions (.numbl.js) are not yet supported by the JIT`,
           span
         );
+      case "builtinMethod":
+        throw new UnsupportedConstruct(
+          `methods of TypeScript-implemented classes are not supported by the JIT`,
+          span
+        );
       default: {
         const _exhaustive: never = target;
         void _exhaustive;

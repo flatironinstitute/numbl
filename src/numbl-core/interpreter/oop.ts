@@ -21,6 +21,7 @@ import { ensureRuntimeValue } from "../runtime/runtimeHelpers.js";
 import { RuntimeError, CancellationError } from "../runtime/error.js";
 import { toNumber } from "../runtime/convert.js";
 import { allocFloat64Array } from "../runtime/alloc.js";
+import { classMethodNames } from "../runtime/builtinRegistry.js";
 import {
   functionBodyFor,
   constructorBodyFor,
@@ -651,8 +652,11 @@ export function classPublicMethods(
   if (className === "handle") return new Set(HANDLE_CLASS_METHODS);
   const out = classes.publicMethodNames(className);
   if (!out) {
-    const builtinMethods = BUILTIN_CLASS_METHODS.get(className);
-    return builtinMethods && new Set(builtinMethods);
+    const builtinMethods = [
+      ...(BUILTIN_CLASS_METHODS.get(className) ?? []),
+      ...classMethodNames(className),
+    ];
+    return builtinMethods.length > 0 ? new Set(builtinMethods) : undefined;
   }
   if (classes.ancestors(className).includes(MEXCEPTION_CLASS))
     for (const m of BUILTIN_CLASS_METHODS.get(MEXCEPTION_CLASS) ?? [])

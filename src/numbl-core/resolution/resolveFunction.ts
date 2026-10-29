@@ -13,11 +13,8 @@ import type { FunctionIndex } from "../workspace/functionIndex.js";
 import { callerPrivateScope } from "../workspace/searchPaths.js";
 import type { CallSite } from "../runtime/runtimeHelpers.js";
 import type { ItemType } from "../itemTypes.js";
-import {
-  type RuntimeValue,
-  isRuntimeClassInstance,
-  isRuntimeClassInstanceArray,
-} from "../runtime/types.js";
+import { dispatchClassOf } from "../runtime/kinds.js";
+import { getClassMethod } from "../runtime/builtinRegistry.js";
 
 // ── Resolution target types ──────────────────────────────────────────
 // Describes WHAT function to compile, determined by the call site context.
@@ -58,6 +55,13 @@ export type ResolvedTarget =
   | {
       kind: "builtin";
       name: string;
+    }
+  | {
+      /** A method of a TypeScript-implemented class, registered with
+       *  `registerClassMethod`. */
+      kind: "builtinMethod";
+      className: string;
+      methodName: string;
     };
 
 // ── Resolution memoization ───────────────────────────────────────────
@@ -123,18 +127,10 @@ const UNKNOWN_ARG: ItemType = { kind: "Unknown" };
 /** The argument type that resolution needs: only an object's class affects
  *  which function a name resolves to. */
 export function resolutionArgType(v: unknown): ItemType {
-  if (
-    typeof v === "object" &&
-    v !== null &&
-    (isRuntimeClassInstance(v as RuntimeValue) ||
-      isRuntimeClassInstanceArray(v as RuntimeValue))
-  ) {
-    return {
-      kind: "ClassInstance",
-      className: (v as { className: string }).className,
-    };
-  }
-  return UNKNOWN_ARG;
+  const className = dispatchClassOf(v);
+  return className === null
+    ? UNKNOWN_ARG
+    : { kind: "ClassInstance", className };
 }
 
 /**
@@ -351,9 +347,12 @@ function resolveFunctionImpl(
     }
   }
 
-  // 3. Class method (if any arg is a class instance)
-  //    Collect all candidate classes that have the method, then pick the
-  //    most dominant one using InferiorClasses relationships.
+  // 3. Class method (if any arg is an object)
+  //    Collect all candidate classdef classes that have the method, then
+  //    pick the most dominant one using InferiorClasses relationships.
+  //    Only when no classdef argument has the method does a class
+  //    implemented in TypeScript get it (the first such argument whose
+  //    class registered the method): a classdef object dominates.
   {
     const candidates: string[] = [];
     for (const argType of argTypes) {
@@ -399,6 +398,17 @@ function resolveFunctionImpl(
         methodName: name,
         stripInstance: false,
       };
+    }
+    for (const argType of argTypes) {
+      if (
+        argType?.kind === "ClassInstance" &&
+        getClassMethod(argType.className, name)
+      )
+        return {
+          kind: "builtinMethod",
+          className: argType.className,
+          methodName: name,
+        };
     }
   }
 

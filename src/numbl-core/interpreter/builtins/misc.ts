@@ -20,9 +20,12 @@ import { isEmptyValue } from "../../runtime/kinds.js";
 
 import { toString } from "../../runtime/convert.js";
 import { builtin } from "./builtin.js";
+import { BinaryOperation } from "../../parser/types.js";
+import {
+  BINARY_OPERATOR_METHODS,
+  uplus as uplusOp,
+} from "../../runtime/runtimeOperators.js";
 import { builtinError, realScalarArg } from "./args.js";
-import { tryDatetimeDurationBinop } from "./datetime.js";
-import { tryDecompositionDivide } from "./sparse-solvers.js";
 import {
   mAdd,
   mSub,
@@ -346,22 +349,29 @@ for (const [name, fillVal] of [
 
 // ── Operator-name builtins ──────────────────────────────────────────────
 
-const opMap: [string, (a: RuntimeValue, b: RuntimeValue) => RuntimeValue][] = [
-  ["plus", mAdd],
-  ["minus", mSub],
-  ["times", mElemMul],
-  ["rdivide", mElemDiv],
-  ["mtimes", mMul],
-  ["mrdivide", mDiv],
-  ["mldivide", mLeftDiv],
-  ["mpower", mPow],
-  ["ldivide", mElemLeftDiv],
-  ["eq", mEqual],
-  ["ne", mNotEqual],
-  ["lt", mLess],
-  ["le", mLessEqual],
-  ["gt", mGreater],
-  ["ge", mGreaterEqual],
+// The functional forms of the binary operators (named by
+// BINARY_OPERATOR_METHODS); `power`, `and` and `or` are defined elsewhere.
+// An operand with a dispatch class reaches these only when its class does
+// not define the method.
+const opMap: [
+  BinaryOperation,
+  (a: RuntimeValue, b: RuntimeValue) => RuntimeValue,
+][] = [
+  [BinaryOperation.Add, mAdd],
+  [BinaryOperation.Sub, mSub],
+  [BinaryOperation.ElemMul, mElemMul],
+  [BinaryOperation.ElemDiv, mElemDiv],
+  [BinaryOperation.Mul, mMul],
+  [BinaryOperation.Div, mDiv],
+  [BinaryOperation.LeftDiv, mLeftDiv],
+  [BinaryOperation.Pow, mPow],
+  [BinaryOperation.ElemLeftDiv, mElemLeftDiv],
+  [BinaryOperation.Equal, mEqual],
+  [BinaryOperation.NotEqual, mNotEqual],
+  [BinaryOperation.Less, mLess],
+  [BinaryOperation.LessEqual, mLessEqual],
+  [BinaryOperation.Greater, mGreater],
+  [BinaryOperation.GreaterEqual, mGreaterEqual],
 ];
 
 /** `a == b` / `a ~= b` on handle objects (or object arrays of equal size,
@@ -403,7 +413,8 @@ function handleEquality(
   return t;
 }
 
-for (const [name, op] of opMap) {
+for (const [binop, op] of opMap) {
+  const name = BINARY_OPERATOR_METHODS[binop]!;
   builtin({
     name,
     nargin: 2,
@@ -414,12 +425,6 @@ for (const [name, op] of opMap) {
         const h = handleEquality(args[0], args[1], name === "eq");
         if (h !== undefined) return h;
       }
-      const dt = tryDatetimeDurationBinop(name, args[0], args[1]);
-      if (dt !== undefined) return dt;
-      if (name === "mldivide" || name === "mrdivide") {
-        const dec = tryDecompositionDivide(name, args[0], args[1]);
-        if (dec !== undefined) return dec;
-      }
       return op(args[0], args[1]);
     },
   });
@@ -427,7 +432,7 @@ for (const [name, op] of opMap) {
 
 builtin({ name: "uminus", nargin: 1, apply: args => mNeg(args[0]) });
 
-builtin({ name: "uplus", nargin: 1, apply: args => args[0] });
+builtin({ name: "uplus", nargin: 1, apply: args => uplusOp(args[0]) });
 
 // ── Dummy/placeholder builtins ──────────────────────────────────────────
 

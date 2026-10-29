@@ -197,10 +197,15 @@ export class CommandParser extends ExpressionParser {
     // Dash followed by letter/underscore → flag (e.g. -file)
     if (ch === "-" && /[A-Za-z_]/.test(next)) return true;
 
-    // Dot followed by / or \ → relative path (e.g. ./ .\)
+    // Dot followed by / or \ → relative path (e.g. ./dir .\dir), unless
+    // whitespace follows: `x ./ 2` is the element-wise operator.
     // Dot followed by . → parent dir or ellipsis (e.g. .. ...)
     // Dot followed by letter → hidden file (e.g. .gitignore)
-    if (ch === "." && /[./\\A-Za-z_]/.test(next)) return true;
+    if (ch === "." && (next === "/" || next === "\\")) {
+      const after = this.input[pos + 2] ?? "";
+      return !/^[ \t\r\n]?$/.test(after);
+    }
+    if (ch === "." && /[.A-Za-z_]/.test(next)) return true;
 
     // Tilde followed by / or \ → home path (e.g. ~/path)
     if (ch === "~" && (next === "/" || next === "\\")) return true;

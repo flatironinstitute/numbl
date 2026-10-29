@@ -59,6 +59,9 @@ export type NameResolution =
       target: Target<"workspaceFunction">;
     }
   | { kind: "jsUserFunction"; name: string; target: Target<"jsUserFunction"> }
+  /** A method of a TypeScript-implemented class, selected by an object
+   *  argument. */
+  | { kind: "builtinMethod"; name: string; target: Target<"builtinMethod"> }
   | {
       kind: "workspaceFunction";
       name: string;
@@ -150,6 +153,8 @@ function classifyTarget(
         : { kind: "workspaceFunction", name, target };
     case "jsUserFunction":
       return { kind: "jsUserFunction", name, target };
+    case "builtinMethod":
+      return { kind: "builtinMethod", name, target };
   }
 }
 
@@ -243,6 +248,7 @@ export function definingFile(
     case "variable":
     case "constant":
     case "builtin":
+    case "builtinMethod":
     case "enumMember":
     case "notFound":
       return undefined;

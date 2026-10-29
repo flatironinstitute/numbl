@@ -23,6 +23,7 @@ import { RuntimeError } from "../../runtime/error.js";
 import { getCurrentRuntime } from "../../runtime/refcount.js";
 import {
   registerIBuiltin,
+  registerClassMethod,
   type BuiltinHelp,
   type IBuiltin,
 } from "../../runtime/builtinRegistry.js";
@@ -162,4 +163,12 @@ export function makeBuiltin(spec: BuiltinSpec): IBuiltin {
 /** Define and register a builtin. */
 export function builtin(spec: BuiltinSpec): void {
   registerIBuiltin(makeBuiltin(spec));
+}
+
+/** Define a method of a TypeScript-implemented class (`spec.name` is the
+ *  method name). It is called like a classdef method: by `obj.name(...)`,
+ *  by `name(...)` with an argument of the class, and by the operator whose
+ *  method name it is. See `registerClassMethod`. */
+export function classMethod(className: string, spec: PlainBuiltinSpec): void {
+  registerClassMethod(className, makeBuiltin(spec));
 }
