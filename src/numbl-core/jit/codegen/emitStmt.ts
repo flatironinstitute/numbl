@@ -167,7 +167,10 @@ export function emitFunction(
   storageClass: string = "static",
   /** Poll the cancel flag on entry (the function calls specs, so it may
    *  recurse; see `raise.h`). */
-  pollOnEntry: boolean = false
+  pollOnEntry: boolean = false,
+  /** Parameters the function borrows from its caller (the host) rather
+   *  than owns: never freed (see `cEntryBorrows`). */
+  borrowed: ReadonlySet<string> = new Set()
 ): string {
   const lines: string[] = [];
   const retType = fnRetType(fn);
@@ -243,10 +246,13 @@ export function emitFunction(
   const ownedParams: { cName: string; ty: Type }[] = [];
   for (let i = 0; i < fn.cParams.length; i++) {
     const pTy = fn.paramTypes[i];
-    if (isOwned(pTy)) {
-      ownedParams.push({ cName: fn.cParams[i], ty: pTy });
-      fnOwnedTypes.set(fn.cParams[i], pTy);
-    }
+    if (!isOwned(pTy)) continue;
+    // A borrowed param is never freed, but its type's helpers (and
+    // typedef) must still ship for the signature.
+    activateOwnedRuntime(pTy, state);
+    if (borrowed.has(fn.cParams[i])) continue;
+    ownedParams.push({ cName: fn.cParams[i], ty: pTy });
+    fnOwnedTypes.set(fn.cParams[i], pTy);
   }
   // Tail closure: sret writes (multi-output) + scope-exit frees +
   // `return [value];`. Called inline at every `ReturnFromFunction`
@@ -299,6 +305,7 @@ export function emitFunction(
     }
     return tail.join("\n");
   };
+  state.borrowedParams = borrowed;
   const bodyText = emitBody(
     fn.body,
     "  ",
@@ -307,6 +314,7 @@ export function emitFunction(
     fnOwnedTypes,
     fnReturnTail
   );
+  state.borrowedParams = undefined;
   if (bodyText.length > 0) lines.push(bodyText);
   lines.push(fnReturnTail("  "));
   lines.push(`}`);
@@ -352,6 +360,7 @@ export function emitBody(
     if (line !== null) out.push(line);
     const freeNames = earlyFreeCandidates(s, futureTouches);
     for (const v of freeNames) {
+      if (state.borrowedParams?.has(v)) continue;
       const ty = ownedTypes.get(v);
       if (ty === undefined) {
         throw new Error(

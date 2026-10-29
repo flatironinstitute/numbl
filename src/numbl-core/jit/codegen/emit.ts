@@ -30,7 +30,8 @@ import {
   type Type,
 } from "../lowering/types.js";
 import { forEachSubExpr, forEachTopLevelExpr } from "../lowering/walk.js";
-import { callsSpec } from "../lowering/callGraph.js";
+import { callsSpec, isRecursive } from "../lowering/callGraph.js";
+import { cEntryBorrows } from "../lowering/paramUse.js";
 import {
   BASE_HEADERS,
   collectRuntimeHeaders,
@@ -66,6 +67,9 @@ export interface EmitResult {
   activatedSnippets: ReadonlyArray<string>;
   /** Files named by statement locations, by index (see `locCode`). */
   locFiles: string[];
+  /** Per entry parameter: the host passes it as a pointer into its own
+   *  buffer, which the entry does not free (`cEntryBorrows`). */
+  borrows: boolean[];
 }
 
 export function emitProgram(prog: IRProgram, opts: EmitOptions): EmitResult {
@@ -118,13 +122,17 @@ export function emitProgram(prog: IRProgram, opts: EmitOptions): EmitResult {
   if (prog.functions.size > 0) userParts.push("");
 
   // Function bodies.
+  const entry = prog.functions.get(opts.exposeSpec)!;
+  const borrows = cEntryBorrows(entry, isRecursive(prog, entry));
   for (const fn of prog.functions.values()) {
+    const borrowed = new Set(
+      fn === entry ? fn.cParams.filter((_, i) => borrows[i]) : []
+    );
     userParts.push(
-      emitFunction(fn, state, storage(fn.cName), callsSpec(prog, fn))
+      emitFunction(fn, state, storage(fn.cName), callsSpec(prog, fn), borrowed)
     );
     userParts.push("");
   }
-  const entry = prog.functions.get(opts.exposeSpec)!;
   const hostEntry = `${entry.cName}__host`;
   userParts.push(emitHostEntry(entry, hostEntry));
   userParts.push("");
@@ -191,6 +199,7 @@ export function emitProgram(prog: IRProgram, opts: EmitOptions): EmitResult {
     hostEntry: names.get(hostEntry)!,
     activatedSnippets: Array.from(state.active),
     locFiles: state.locFiles,
+    borrows,
   };
 }
 

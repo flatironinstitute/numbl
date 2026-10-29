@@ -218,6 +218,12 @@ export interface RuntimeState {
   loopLabels?: (string | null)[];
   /** Counter for strip-mined loop labels. */
   stripLabelCount?: number;
+  /** JS only: per user spec, the parameters its callers pass uncopied
+   *  (`jsCallBorrows`). */
+  callBorrows?: Map<string, boolean[]>;
+  /** C only: the parameters of the function being emitted that it
+   *  borrows from the host and must not free (`cEntryBorrows`). */
+  borrowedParams?: ReadonlySet<string>;
 }
 
 export function newRuntimeState(): RuntimeState {

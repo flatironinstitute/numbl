@@ -9,12 +9,13 @@
  * **Pass-by-value at the boundary.** MATLAB function calls are
  * pass-by-value; a JIT'd function that mutates its argument must
  * not leak the mutation to the caller. The JIT's whole-program
- * codegen handles this by wrapping every call-site argument in
+ * codegen handles this by wrapping call-site arguments in
  * `jit_deep_clone(...)` — but the JIT executor is a *new* call
  * site that the JIT doesn't know about, so we have to clone the
- * tensor data buffer ourselves on the way in. On the way out, we
- * take ownership of the returned buffer directly (the JIT's spec
- * always returns a freshly-owned tensor).
+ * tensor data buffer ourselves on the way in, unless the spec only
+ * reads that parameter (`borrow`). On the way out, we take ownership
+ * of the returned buffer directly (the JS backend copies an output
+ * that is a borrowed buffer).
  *
  * The executor only invokes these adapters on values whose type
  * (`typeOfValue`) the backend accepted. Unsupported value kinds
@@ -61,9 +62,8 @@ import { isMultiElement } from "../../jit/index.js";
  *   3. **real → complex-tensor param.** Likewise for a real tensor: it
  *      gets a zero `imag` lane.
  *
- *  `borrow` passes a tensor's buffers uncloned, for a spec that only
- *  reads its parameters and returns none of them
- *  (`CompileRequest.borrowsInputs`). */
+ *  `borrow` passes a tensor's buffers uncloned, for a parameter the spec
+ *  only reads (`CompileSpecResult.borrows`). */
 export function numblToJit(
   v: RuntimeValue,
   paramType?: Type,

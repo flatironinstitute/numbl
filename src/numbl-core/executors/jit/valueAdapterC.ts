@@ -301,7 +301,10 @@ export interface MarshaledInputs {
 export function marshalInputs(
   ctx: MarshalCtx,
   paramTypes: ReadonlyArray<Type>,
-  values: ReadonlyArray<RuntimeValue | undefined>
+  values: ReadonlyArray<RuntimeValue | undefined>,
+  /** Per parameter: the entry only reads it (`CompileSpecCResult.borrows`),
+   *  so a large enough tensor is passed as a pointer into its own buffer. */
+  borrows: ReadonlyArray<boolean> = []
 ): MarshaledInputs | null {
   const args: unknown[] = [];
   const owned: unknown[] = [];
@@ -313,7 +316,9 @@ export function marshalInputs(
     const ty = paramTypes[i];
     const v = values[i];
     const arg =
-      v === undefined ? undefined : marshalOneInput(ctx, ty, v, owned);
+      v === undefined
+        ? undefined
+        : marshalOneInput(ctx, ty, v, owned, borrows[i] === true);
     if (arg === undefined) {
       release();
       return null;
@@ -327,7 +332,8 @@ function marshalOneInput(
   ctx: MarshalCtx,
   ty: Type,
   v: RuntimeValue,
-  owned: unknown[]
+  owned: unknown[],
+  borrow: boolean
 ): unknown {
   if (ty.kind === "Numeric") {
     const nty = ty as NumericType;
@@ -335,7 +341,7 @@ function marshalOneInput(
       if (!isRuntimeTensor(v)) return undefined;
       // A real-typed param can't carry an imaginary part.
       if (!nty.isComplex && v.imag !== undefined) return undefined;
-      return marshalTensorInput(ctx, v, nty.isComplex, owned);
+      return marshalTensorInput(ctx, v, nty.isComplex, owned, borrow);
     }
     // Complex scalar — the C ABI is `double _Complex`, marshaled via
     // the ABI-identical `{re, im}` koffi struct (see typeAdapterC.ts).
@@ -382,22 +388,36 @@ function copyIn(
   return ptr;
 }
 
+/** Smallest tensor (in elements) passed by pointer. koffi passes a typed
+ *  array's backing store, which for a small array V8 may keep inside its
+ *  heap, where a garbage collection during a host callback could move
+ *  it; arrays this large always live outside the heap. */
+const BORROW_MIN_NUMEL = 1024;
+
 /** Build an `jit_tensor_t` whose `real`/`imag` point to fresh buffers
- *  holding a copy of the numbl tensor's data. A complex-typed param
- *  always gets an `imag` lane (zeros for a real value), since the
- *  emitted code reads it unconditionally. */
+ *  holding a copy of the numbl tensor's data, or, when `borrow`, to the
+ *  tensor's own buffers. A complex-typed param always gets an `imag`
+ *  lane (zeros for a real value), since the emitted code reads it
+ *  unconditionally. */
 function marshalTensorInput(
   ctx: MarshalCtx,
   v: RuntimeTensor,
   isComplex: boolean,
-  owned: unknown[]
+  owned: unknown[],
+  borrow: boolean
 ): unknown {
   const shape = [...v.shape];
   while (shape.length < 2) shape.push(1); // minimum ndim is 2.
   if (shape.length > JIT_MAX_NDIM) return undefined;
   const n = v.data.length;
-  const real = copyIn(ctx, v.data, n, owned);
-  const imag = isComplex ? copyIn(ctx, v.imag, n, owned) : null;
+  const byRef =
+    borrow && n >= BORROW_MIN_NUMEL && (!isComplex || v.imag !== undefined);
+  const real = byRef ? v.data : copyIn(ctx, v.data, n, owned);
+  const imag = !isComplex
+    ? null
+    : byRef
+      ? v.imag
+      : copyIn(ctx, v.imag, n, owned);
   const dims = new Array(JIT_MAX_NDIM).fill(0);
   for (let k = 0; k < shape.length; k++) dims[k] = shape[k];
   return { real, imag, ndim: shape.length, dims };

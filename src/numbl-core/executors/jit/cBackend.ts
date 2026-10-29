@@ -57,6 +57,7 @@ interface CArtifact {
   readonly recursive: boolean;
   readonly streamsOutput: boolean;
   readonly kernels: number;
+  readonly borrows: ReadonlyArray<boolean>;
 }
 
 /** `.so`s with a call in progress (see `invoke`). */
@@ -85,6 +86,7 @@ export const cBackend: JitBackend<CArtifact> = {
       recursive,
       kernels,
       activatedSnippets,
+      borrows,
     } = compileSpecC({
       workspace,
       lowerer,
@@ -113,6 +115,7 @@ export const cBackend: JitBackend<CArtifact> = {
       recursive,
       streamsOutput: outputIsReproducible(activatedSnippets),
       kernels,
+      borrows,
     };
   },
 
@@ -133,7 +136,7 @@ export const cBackend: JitBackend<CArtifact> = {
     if (runningLibs.has(libPath)) return null;
     // Point the compiled cancel polls at this runtime's flag.
     art.cancel.install(interp.rt.cancelFlag);
-    const inputs = marshalInputs(ctx, art.paramTypes, args);
+    const inputs = marshalInputs(ctx, art.paramTypes, args, art.borrows);
     if (inputs === null) return null;
     // Multi-output specs take one `T *_jit_o<i>` out-pointer per
     // output after the params.

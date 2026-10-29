@@ -11,6 +11,7 @@ import {
 import { typeToString } from "../../jit/lowering/types.js";
 import { decodeLoc } from "../../jit/codegen/runtime.js";
 import { CancellationError, RuntimeError } from "../../runtime/error.js";
+import { isRuntimeTensor } from "../../runtime/types.js";
 import { numblToJit, jitToNumbl } from "./valueAdapter.js";
 import { getOrCreateSession } from "./session.js";
 import { buildHostHelpers, type JitHostHelpers } from "./hostHelpers.js";
@@ -29,7 +30,8 @@ interface JsArtifact {
   readonly recursive: boolean;
   readonly streamsOutput: boolean;
   readonly kernels: number;
-  readonly borrowsInputs: boolean;
+  /** Per parameter: passed without copying (`CompileSpecResult.borrows`). */
+  readonly borrows: ReadonlyArray<boolean>;
   readonly where: string;
 }
 
@@ -52,6 +54,7 @@ export const jsBackend: JitBackend<JsArtifact> = {
       recursive,
       kernels,
       activatedSnippets,
+      borrows,
     } = compileSpec({
       workspace,
       lowerer,
@@ -83,7 +86,7 @@ export const jsBackend: JitBackend<JsArtifact> = {
       recursive,
       streamsOutput: outputIsReproducible(activatedSnippets),
       kernels,
-      borrowsInputs: req.borrowsInputs === true,
+      borrows,
       where: req.where,
     };
   },
@@ -95,11 +98,20 @@ export const jsBackend: JitBackend<JsArtifact> = {
   kernels: art => art.kernels,
 
   invoke(art, args) {
-    const jsArgs = args.map((v, i) =>
-      v === undefined
-        ? undefined
-        : numblToJit(v, art.argTypes[i], art.borrowsInputs)
-    );
+    // The buffers passed uncopied: an output that is one of them (a
+    // parameter returned unchanged) is copied on the way out, so the
+    // caller's variable and the result never share a buffer.
+    let borrowed: Float64Array[] | undefined;
+    const jsArgs = args.map((v, i) => {
+      if (v === undefined) return undefined;
+      const borrow = art.borrows[i];
+      if (borrow && isRuntimeTensor(v)) {
+        borrowed ??= [];
+        borrowed.push(v.data);
+        if (v.imag !== undefined) borrowed.push(v.imag);
+      }
+      return numblToJit(v, art.argTypes[i], borrow);
+    });
     let ret: unknown;
     try {
       ret = art.specFn(...jsArgs);
@@ -113,10 +125,30 @@ export const jsBackend: JitBackend<JsArtifact> = {
       throw new Error(`${art.where}: expected array for nargout=${n}`);
     }
     return raw.map((v, i) =>
-      v === undefined ? undefined : jitToNumbl(v, art.outputTypes[i])
+      v === undefined
+        ? undefined
+        : jitToNumbl(
+            borrowed === undefined ? v : unshared(v, borrowed),
+            art.outputTypes[i]
+          )
     );
   },
 };
+
+/** `v`, or a copy of it when it is a tensor holding one of the `borrowed`
+ *  buffers. */
+function unshared(v: unknown, borrowed: readonly Float64Array[]): unknown {
+  const t = v as { jitTag?: string; data?: Float64Array; imag?: Float64Array };
+  if (t === null || typeof t !== "object" || t.jitTag !== "tensor") return v;
+  const sharesData = t.data !== undefined && borrowed.includes(t.data);
+  const sharesImag = t.imag !== undefined && borrowed.includes(t.imag);
+  if (!sharesData && !sharesImag) return v;
+  return {
+    ...t,
+    data: sharesData ? t.data!.slice() : t.data,
+    imag: sharesImag ? t.imag!.slice() : t.imag,
+  };
+}
 
 /** Whether `jitToNumbl` can rebuild a value of this type. */
 function returnable(t: CompilerType): boolean {

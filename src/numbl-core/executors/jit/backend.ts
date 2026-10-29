@@ -33,9 +33,6 @@ export interface CompileRequest {
   readonly synthetic: boolean;
   /** Suffix for the `onJitCompile` label, e.g. `(double[1×1]:positive) -> nargout=1`. */
   readonly describe: string;
-  /** The spec only reads its parameters and returns none of them, so a
-   *  backend may pass tensor inputs without copying them. */
-  readonly borrowsInputs?: boolean;
 }
 
 export interface JitBackend<A = unknown> {
