@@ -65,7 +65,7 @@ export const logspace: Builtin = {
 
     const nRaw = argTypes.length === 3 ? exactDouble(argTypes[2]) : DEFAULT_N;
     if (nRaw !== undefined) {
-      const n = Math.round(nRaw);
+      const n = Math.floor(nRaw);
       if (n <= 0) return [tensorDouble([1, 0])];
       if (n >= 2) return [tensorDouble([1, n])];
       // n === 1 falls through to the row-unknown type (see above).
@@ -77,13 +77,13 @@ export const logspace: Builtin = {
     const aC = argsC[0];
     const bC = argsC[1];
     const nC = argTypes.length === 3 ? argsC[2] : `${DEFAULT_N}.0`;
-    return `jit_tensor_logspace((double)(${aC}), (double)(${bC}), (long)lround(${nC}))`;
+    return `jit_tensor_logspace((double)(${aC}), (double)(${bC}), (long)floor(${nC}))`;
   },
   emitJs({ argsJs, argTypes, useRuntime }) {
     useRuntime("jit_tensor_logspace");
     const aJs = argsJs[0];
     const bJs = argsJs[1];
     const nJs = argTypes.length === 3 ? argsJs[2] : String(DEFAULT_N);
-    return `jit_tensor_logspace(${aJs}, ${bJs}, Math.round(${nJs}))`;
+    return `jit_tensor_logspace(${aJs}, ${bJs}, Math.floor(${nJs}))`;
   },
 };

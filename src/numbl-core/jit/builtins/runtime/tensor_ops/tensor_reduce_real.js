@@ -154,11 +154,11 @@ function logical_all(t, emptyResult, shortPredicate) {
 function logical_dim(t, dim, emptyResult, shortPredicate) {
   if (dim < 1) jit_raise_bad_dim();
   if (dim > t.shape.length) {
-    // No-op axis: emit a logical cast of the input (each element →
-    // 1 if nonzero, 0 otherwise).
+    // No-op axis: each element is its own fiber (so NaN is ignored, as
+    // in a reduction).
     const out = jit_tensor_alloc_nd(t.shape.length, t.shape.slice());
     for (let i = 0; i < t.data.length; i++) {
-      out.data[i] = t.data[i] !== 0 ? 1 : 0;
+      out.data[i] = shortPredicate(t.data[i]) ? 1 - emptyResult : emptyResult;
     }
     return out;
   }

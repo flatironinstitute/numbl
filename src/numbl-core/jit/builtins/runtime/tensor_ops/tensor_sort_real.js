@@ -78,6 +78,13 @@ function complex_sort_indices(a, descending) {
     ph[i] = Math.atan2(xi, re);
   }
   idx.sort((p, q) => {
+    // A NaN magnitude sorts last ascending, first descending.
+    const pNaN = mag[p] !== mag[p];
+    const qNaN = mag[q] !== mag[q];
+    if (pNaN || qNaN) {
+      if (pNaN && qNaN) return p - q;
+      return pNaN !== descending ? 1 : -1;
+    }
     if (mag[p] < mag[q]) return descending ? 1 : -1;
     if (mag[p] > mag[q]) return descending ? -1 : 1;
     if (ph[p] < ph[q]) return descending ? 1 : -1;

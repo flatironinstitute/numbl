@@ -40,9 +40,13 @@ function staticAnswer(t: Type): boolean | undefined {
     if (t.shape === undefined) return undefined;
     return shapeNumel(t.shape) === 1;
   }
-  if (isString(t)) return true;
-  if (isChar(t)) return false;
-  if (isStruct(t) || isClass(t) || isHandle(t)) return false;
+  // A string and a struct reach the JIT only as 1x1 values.
+  if (isString(t) || isStruct(t)) return true;
+  if (isChar(t)) {
+    if (t.exact !== undefined) return t.exact.length === 1;
+    throw new UnsupportedConstruct(`'isscalar' of a char of unknown length`);
+  }
+  if (isClass(t) || isHandle(t)) return false;
   // Unknown type: defer to runtime. The lowerer treats Unknown
   // conservatively; this matches.
   return undefined;

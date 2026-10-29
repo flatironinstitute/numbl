@@ -29,7 +29,6 @@ import { TypeError, UnsupportedConstruct } from "../../../lowering/errors.js";
 import {
   isMultiElement,
   isNumeric,
-  isScalar,
   scalarDouble,
   signFromNumber,
   tensorDouble,
@@ -91,19 +90,6 @@ export const doubleBuiltin: Builtin = {
     }
     const t = argTypes[0];
     if (isNumeric(t)) {
-      if (t.isComplex && isScalar(t)) {
-        // numbl scalar complex → real part
-        if (
-          t.exact !== undefined &&
-          typeof t.exact === "object" &&
-          !(t.exact instanceof Float64Array) &&
-          typeof (t.exact as { re?: unknown }).re === "number"
-        ) {
-          const re = (t.exact as { re: number; im: number }).re;
-          return [scalarDouble(signFromNumber(re), re)];
-        }
-        return [scalarDouble()];
-      }
       // Real or complex tensor / scalar real — preserve shape/complex,
       // drop logical → double in the result type. Exact data carries
       // through unchanged (logical exact values 0/1 are valid doubles;
@@ -124,10 +110,6 @@ export const doubleBuiltin: Builtin = {
   emitC({ argsC, argTypes, useRuntime }) {
     const t = argTypes[0];
     if (isNumeric(t)) {
-      if (t.isComplex && isScalar(t)) {
-        useRuntime("jit_cscalar");
-        return `jit_creal(${argsC[0]})`;
-      }
       if (isMultiElement(t)) {
         // Fresh tensor copy. Stripping the logical flag isn't
         // represented at the C level — `jit_tensor_t` doesn't carry
@@ -161,9 +143,6 @@ export const doubleBuiltin: Builtin = {
   emitJs({ argsJs, argTypes, useRuntime }) {
     const t = argTypes[0];
     if (isNumeric(t)) {
-      if (t.isComplex && isScalar(t)) {
-        return `(${argsJs[0]}).re`;
-      }
       if (isMultiElement(t)) {
         // Fresh tensor object, dropping any `isLogical` flag (numbl
         // returns a double-class tensor from double(...)). Use an

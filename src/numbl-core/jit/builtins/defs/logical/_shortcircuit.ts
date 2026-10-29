@@ -96,6 +96,11 @@ export function defineShortCircuit(
       }
       asScalarRealOrLogical(argTypes[0], `'${surface}' left operand`, surface);
       asScalarRealOrLogical(argTypes[1], `'${surface}' right operand`, surface);
+      if (argTypes.some(t => isNumeric(t) && t.isComplex)) {
+        throw new UnsupportedConstruct(
+          `'${surface}' of a complex operand raises; left to the interpreter`
+        );
+      }
       const at = scalarTruthy(argTypes[0]);
       const bt = scalarTruthy(argTypes[1]);
       if (kind === "or") {

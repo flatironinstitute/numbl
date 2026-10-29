@@ -19,6 +19,13 @@
 #include <math.h>
 #include <complex.h>
 
+/* <math.h> declares these only under _XOPEN_SOURCE / _DEFAULT_SOURCE,
+ * which the emitted module does not define. */
+double j0(double);
+double j1(double);
+double y0(double);
+double y1(double);
+
 static double _Complex jit_besselh0_scalar(double x) {
   return j0(x) + I * y0(x);
 }

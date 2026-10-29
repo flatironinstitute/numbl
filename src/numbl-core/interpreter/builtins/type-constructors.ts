@@ -103,12 +103,16 @@ builtin({
     }
     if (isRuntimeLogical(v)) return RTV.num(v ? 1 : 0);
     if (isRuntimeNumber(v)) return v;
-    if (isRuntimeComplexNumber(v)) return v;
+    // Like MATLAB, a complex value whose imaginary parts are all zero
+    // comes back real.
+    if (isRuntimeComplexNumber(v)) return v.im === 0 ? RTV.num(v.re) : v;
     if (isRuntimeSparseMatrix(v)) return v;
     if (isRuntimeTensor(v)) {
       if (v.cls === "logical") {
         return RTV.tensor(allocFloat64Array(v.data), v.shape);
       }
+      if (v.imag && v.imag.every(x => x === 0))
+        return RTV.tensor(allocFloat64Array(v.data), v.shape);
       return v;
     }
     if (isRuntimeClassInstance(v) && v._builtinData !== undefined) {
