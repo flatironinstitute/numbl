@@ -193,6 +193,44 @@ assert(isequal(size(sum(GA)), [1 53]) && isequal(size(sum(GA, 2)), [37 1]));
 assert(isequal(size(GA * GC), [37 29]) && isequal(size(GA'), [53 37]));
 assert(strcmp(underlyingType(max(GA > 0)), 'logical'));
 
+% blocks of ranges, indexed and assigned (2D, 3D, complex)
+same(GA(2:end-1, 3:40), A(2:end-1, 3:40), 0);
+T = single(randn(6, 7, 5));
+GT = gpuArray(T);
+same(GT(2:5, 1:3, 2:4), T(2:5, 1:3, 2:4), 0);
+same(GT(:, 2:3, 4:5), T(:, 2:3, 4:5), 0);
+U = A; U(2:end-1, 2:end-1) = 7;
+GU = GA; GU(2:end-1, 2:end-1) = 7;
+same(GU, U, 0);
+U(3:10, 5:9) = B(1:8, 1:5);
+GU(3:10, 5:9) = GB(1:8, 1:5);
+same(GU, U, 0);
+T(2:3, 4:6, 1:2) = -T(2:3, 4:6, 1:2);
+GT(2:3, 4:6, 1:2) = -GT(2:3, 4:6, 1:2);
+same(GT, T, 0);
+Z = complex(A, B);
+GZ = gpuArray(Z);
+same(GZ(5:9, 2:4), Z(5:9, 2:4), 0);
+Z(1:3, 1:2) = 1i;
+GZ(1:3, 1:2) = 1i;
+same(GZ, Z, 0);
+
+% conversions, reshape and division by a scalar on the device
+L = A > 0;
+GL = GA > 0;
+same(single(GL), single(L), 0);
+same(single(GA), A, 0);
+same(logical(GL), L, 0);
+same(reshape(GA, 53, 37), reshape(A, 53, 37), 0);
+same(reshape(GA, [], 1), reshape(A, [], 1), 0);
+same(reshape(GT, [6 35]), reshape(T, [6 35]), 0);
+same(reshape(GZ, 37 * 53, 1), reshape(Z, 37 * 53, 1), 0);
+same(GA / 4, A / 4, 1e-6);
+same(GA / single(3), A / single(3), 1e-6);
+same(GA / GA(2, 2), A / A(2, 2), 1e-6);
+same(4 \ GA, 4 \ A, 1e-6);
+same(GZ / (1 + 2i), Z / (1 + 2i), 1e-6);
+
 disp('SUCCESS')
 
 function same(g, h, tol)

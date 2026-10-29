@@ -83,6 +83,9 @@ export interface KernelSelection {
   start: number;
   step: number;
   offsets: Uint32Array | null;
+  /** Instead of `step`: a product of ranges (at most 4), the offset of
+   *  k = i0 + counts[0] * (i1 + ...) being start + i0 * strides[0] + ... */
+  grid?: { counts: number[]; strides: number[] };
 }
 
 /** Kernels over f32 data. Each returns the result's buffer; the caller

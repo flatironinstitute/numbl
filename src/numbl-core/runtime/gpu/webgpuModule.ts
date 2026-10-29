@@ -420,6 +420,43 @@ fn ccos(a: vec2f) -> vec2f { return vec2f(cos(a.x) * cosh(a.y), -sin(a.x) * sinh
     | { id: number; n: number; strides?: number[] }
     | { scalar: number };
 
+  /** A selection of `take` and `put` (see `KernelSelection`). */
+  interface Sel {
+    n: number;
+    start: number;
+    step: number;
+    offsets: Uint32Array<ArrayBuffer> | null;
+    grid?: { counts: number[]; strides: number[] };
+  }
+
+  /** WGSL for a selection's k-th offset, given the uniform fields `start`
+   *  and `step`, or (`grid`) `gc` and `gs`, and the buffer `offs`. */
+  function selOffset(sel: Sel): string {
+    if (sel.offsets) return "offs[k]";
+    if (!sel.grid) return "p.start + k * p.step";
+    return "at(k)";
+  }
+
+  const GRID_AT = `
+fn at(k: u32) -> u32 {
+  var r = k;
+  var o = p.start;
+  for (var d = 0u; d < 4u; d = d + 1u) {
+    o = o + (r % p.gc[d]) * p.gs[d];
+    r = r / p.gc[d];
+  }
+  return o;
+}`;
+
+  /** A grid's counts and strides padded to 4 dimensions (counts of 1). */
+  function gridWords(sel: Sel): number[] {
+    const c = [1, 1, 1, 1];
+    const s = [0, 0, 0, 0];
+    sel.grid?.counts.forEach((v, d) => (c[d] = v));
+    sel.grid?.strides.forEach((v, d) => (s[d] = v));
+    return [...c, ...s];
+  }
+
   /** A storage buffer holding `data`. */
   function words32(
     device: GPUDevice,
@@ -1058,31 +1095,22 @@ ${pow2 ? "" : `@group(0) @binding(${outIm ? 4 : 3}) var<storage, read> chirp: ar
     },
 
     /** out[k] = src[off(k)] for the selection's offsets: `start + k*step`,
-     *  or `offsets[k]`. */
-    async take(
-      device: GPUDevice,
-      args: {
-        out: number;
-        src: number;
-        n: number;
-        start: number;
-        step: number;
-        offsets: Uint32Array<ArrayBuffer> | null;
-      }
-    ) {
+     *  `offsets[k]`, or a grid's. */
+    async take(device: GPUDevice, args: Sel & { out: number; src: number }) {
       const out = create(device, args.out, args.n);
       if (args.n === 0) return;
       const offs = args.offsets && words32(device, args.offsets);
       const code = `
-struct P { n: u32, w: u32, start: u32, step: u32 }
+struct P { n: u32, w: u32, start: u32, step: u32, gc: vec4u, gs: vec4u }
 @group(0) @binding(0) var<uniform> p: P;
 @group(0) @binding(1) var<storage, read_write> dst: array<f32>;
 @group(0) @binding(2) var<storage, read> src: array<f32>;
 ${offs ? "@group(0) @binding(3) var<storage, read> offs: array<u32>;" : ""}
+${args.grid ? GRID_AT : ""}
 @compute @workgroup_size(256) fn main(@builtin(global_invocation_id) g: vec3u) {
   let k = g.x + g.y * p.w;
   if (k >= p.n) { return; }
-  dst[k] = src[${offs ? "offs[k]" : "p.start + k * p.step"}];
+  dst[k] = src[${selOffset(args)}];
 }`;
       const { groups, width } = grid(args.n);
       const bufs = [out, buffer(args.src)];
@@ -1090,7 +1118,7 @@ ${offs ? "@group(0) @binding(3) var<storage, read> offs: array<u32>;" : ""}
       run(
         device,
         code,
-        uniforms([args.n, width, args.start, args.step]),
+        uniforms([args.n, width, args.start, args.step, ...gridWords(args)]),
         bufs,
         groups
       );
@@ -1102,16 +1130,7 @@ ${offs ? "@group(0) @binding(3) var<storage, read> offs: array<u32>;" : ""}
      *  of 1, or a scalar. */
     async put(
       device: GPUDevice,
-      args: {
-        out: number;
-        src: number;
-        total: number;
-        n: number;
-        start: number;
-        step: number;
-        offsets: Uint32Array<ArrayBuffer> | null;
-        rhs: Operand;
-      }
+      args: Sel & { out: number; src: number; total: number; rhs: Operand }
     ) {
       const out = create(device, args.out, args.total);
       if (args.total === 0) return;
@@ -1127,15 +1146,16 @@ ${offs ? "@group(0) @binding(3) var<storage, read> offs: array<u32>;" : ""}
       const rhs = args.rhs;
       const scalar = "scalar" in rhs;
       const code = `
-struct P { n: u32, w: u32, start: u32, step: u32, s: f32, p1: f32, p2: f32, p3: f32 }
+struct P { n: u32, w: u32, start: u32, step: u32, gc: vec4u, gs: vec4u, s: f32, p1: f32, p2: f32, p3: f32 }
 @group(0) @binding(0) var<uniform> p: P;
 @group(0) @binding(1) var<storage, read_write> dst: array<f32>;
 ${scalar ? "" : "@group(0) @binding(2) var<storage, read> rhs: array<f32>;"}
 ${offs ? `@group(0) @binding(${scalar ? 2 : 3}) var<storage, read> offs: array<u32>;` : ""}
+${args.grid ? GRID_AT : ""}
 @compute @workgroup_size(256) fn main(@builtin(global_invocation_id) g: vec3u) {
   let k = g.x + g.y * p.w;
   if (k >= p.n) { return; }
-  dst[${offs ? "offs[k]" : "p.start + k * p.step"}] = ${scalar ? "p.s" : !scalar && rhs.n === 1 ? "rhs[0]" : "rhs[k]"};
+  dst[${selOffset(args)}] = ${scalar ? "p.s" : !scalar && rhs.n === 1 ? "rhs[0]" : "rhs[k]"};
 }`;
       const { groups, width } = grid(args.n);
       const bufs = [out];
@@ -1145,7 +1165,7 @@ ${offs ? `@group(0) @binding(${scalar ? 2 : 3}) var<storage, read> offs: array<u
         device,
         code,
         uniforms(
-          [args.n, width, args.start, args.step],
+          [args.n, width, args.start, args.step, ...gridWords(args)],
           [scalar ? rhs.scalar : 0, 0, 0, 0]
         ),
         bufs,
