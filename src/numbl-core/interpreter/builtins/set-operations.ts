@@ -21,7 +21,6 @@ import {
   isRuntimeSparseMatrix,
   isRuntimeString,
   isRuntimeTensor,
-  withElementClass,
   isRuntimeStringArray,
   stringArrayValue,
 } from "../../runtime/types.js";
@@ -516,12 +515,7 @@ builtin({
       // An all-zero imaginary lane (e.g. a JIT `sqrt` that lifted to
       // complex without leaving the real domain) sorts by value, not
       // magnitude, and returns a real result.
-      const out = sortTensor(stripZeroImagTensor(v), dim, descend, nargout);
-      if (v.cls === "logical") {
-        const sorted = Array.isArray(out) ? out[0] : out;
-        withElementClass(sorted as RuntimeTensor, "logical");
-      }
-      return out;
+      return sortTensor(stripZeroImagTensor(v), dim, descend, nargout);
     }
     if (isRuntimeCell(v)) {
       if (!isCellstr(v))
@@ -556,14 +550,15 @@ function sortTensor(
   if (!im && !descend && nargout <= 1 && re.length === shape[dimIdx]) {
     const sorted = allocFloat64Array(re);
     sorted.sort();
-    return RTV.tensor(sorted, [...shape]);
+    return RTV.tensor(sorted, [...shape], undefined, v.cls);
   }
 
   if (dimIdx >= shape.length) {
     const cp = RTV.tensor(
       allocFloat64Array(re),
       [...shape],
-      im ? allocFloat64Array(im) : undefined
+      im ? allocFloat64Array(im) : undefined,
+      v.cls
     );
     if (nargout > 1) {
       const ones = allocFloat64Array(re.length).fill(1);
@@ -625,7 +620,7 @@ function sortTensor(
   }
 
   const imOut = resultIm && resultIm.some(x => x !== 0) ? resultIm : undefined;
-  const sorted = RTV.tensor(resultRe, [...shape], imOut);
+  const sorted = RTV.tensor(resultRe, [...shape], imOut, v.cls);
   if (nargout > 1) return [sorted, RTV.tensor(resultIdx!, [...shape])];
   return sorted;
 }
@@ -1456,14 +1451,9 @@ function uniqueValues(
   if (!isRuntimeTensor(v))
     throw new RuntimeError("unique: argument must be numeric");
 
-  const out = byRows
+  return byRows
     ? uniqueByRows(v, nargout, stable)
     : uniqueElements(v, nargout, stable);
-  if (v.cls === "logical") {
-    const C = Array.isArray(out) ? out[0] : out;
-    withElementClass(C as RuntimeTensor, "logical");
-  }
-  return out;
 }
 
 function uniqueCharVector(
@@ -1625,7 +1615,7 @@ function uniqueItems(
     : isRow
       ? [1, nUnique]
       : [nUnique, 1];
-  const C = makeNumeric(reOut, imOut, outShape);
+  const C = makeNumeric(reOut, imOut, outShape, d.isLogical);
   if (nargout <= 1) return C;
 
   const ia = RTV.tensor(allocFloat64Array(order.map(i => i + 1)), [nUnique, 1]);

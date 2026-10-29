@@ -75,6 +75,15 @@ assert(strcmp(class(q(:)), 'logical'));
 assert(strcmp(class(q(2, :)), 'logical'));
 assert(strcmp(class(q(1)), 'logical'));
 
+% Sort and unique
+assert(strcmp(class(sort(q)), 'logical'));
+[s, si] = sort(q, 2, 'descend');
+assert(strcmp(class(s), 'logical') && strcmp(class(si), 'double'));
+assert(strcmp(class(sort(logical([1 0 1]))), 'logical'));
+assert(strcmp(class(unique(q)), 'logical'));
+[u, ui] = unique(q, 'rows');
+assert(strcmp(class(u), 'logical') && strcmp(class(ui), 'double'));
+
 % Arithmetic on logicals gives double
 assert(strcmp(class(q + q), 'double'));
 assert(strcmp(class(-q), 'double'));
