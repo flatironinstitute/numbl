@@ -23,11 +23,12 @@ import {
   type RuntimeSparseMatrix,
   RuntimeChar,
 } from "./types.js";
-import { kstr } from "./kinds.js";
+import { kstr, valueShape } from "./kinds.js";
 import { RuntimeError } from "./error.js";
 import { RTV } from "./constructors.js";
 import { numel, matlabNumToString } from "./utils.js";
 import { allocFloat64Array } from "./alloc.js";
+import { isSingle, toSingleResult } from "./single.js";
 
 /** Create a range start:end or start:step:end */
 export function makeRangeTensor(
@@ -92,6 +93,8 @@ export function horzcat(...values: RuntimeValue[]): RuntimeValue {
     for (const v of values) {
       if (isRuntimeChar(v)) result += v.value;
       else if (isRuntimeNumber(v)) result += String.fromCharCode(Math.round(v));
+      else if (isRuntimeTensor(v) && !v.imag && valueShape(v)[0] <= 1)
+        for (const x of v.data) result += String.fromCharCode(Math.round(x));
       else throw new RuntimeError(`Cannot concatenate ${kstr(v)} into char`);
     }
     return RTV.char(result);
@@ -578,8 +581,15 @@ function sparseCatAlongDim(
   }
 }
 
-/** N-D concatenation along a 0-based dimension index */
+/** N-D concatenation along a 0-based dimension index. The result is single
+ *  when any operand is (empties included), else logical when every operand
+ *  is, else double. */
 function catAlongDim(values: RuntimeValue[], dimIdx: number): RuntimeValue {
+  const r = catNumeric(values, dimIdx);
+  return values.some(isSingle) ? toSingleResult(r, values) : r;
+}
+
+function catNumeric(values: RuntimeValue[], dimIdx: number): RuntimeValue {
   // Track whether all inputs are logical so we can keep the logical class.
   const allLogical = values.every(
     v => isRuntimeLogical(v) || (isRuntimeTensor(v) && v.cls === "logical")

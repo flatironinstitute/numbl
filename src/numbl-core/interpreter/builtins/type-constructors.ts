@@ -33,6 +33,12 @@ import { undefinedForTypeError } from "./value-class.js";
 import { valueClass } from "../../runtime/kinds.js";
 import { builtinError, UNIMPLEMENTED_SPARSE_TYPE } from "./args.js";
 import { allocFloat64Array } from "../../runtime/alloc.js";
+import {
+  isSingle,
+  singleScalar,
+  singleTensor,
+  singleToDouble,
+} from "../../runtime/single.js";
 import { imagAllZero } from "../../helpers/effectively-real.js";
 import { charToNumericTensor } from "../../runtime/indexing.js";
 import { parseShapeArgs } from "../../helpers/shape-utils.js";
@@ -109,6 +115,7 @@ builtin({
     if (isRuntimeComplexNumber(v)) return v.im === 0 ? RTV.num(v.re) : v;
     if (isRuntimeSparseMatrix(v)) return v;
     if (isRuntimeTensor(v)) {
+      if (v.cls === "single") return singleToDouble(v);
       if (v.cls === "logical") {
         return RTV.tensor(allocFloat64Array(v.data), v.shape);
       }
@@ -126,34 +133,17 @@ builtin({
 });
 
 // ── single ──────────────────────────────────────────────────────────────
-//
-// numbl stores all numerics as double, so `single` cannot produce a distinct
-// runtime class. It DOES, however, round values to single precision (via
-// Math.fround), which is observable: code relies on `single(x)` to drop the
-// low-order bits (e.g. ultraSEM classifies boundary points with `single(x) ==
-// real(single(x))`). The result reports class 'double' in numbl.
-
-function froundArray(src: Float64Array): Float64Array {
-  const out = allocFloat64Array(src.length);
-  for (let i = 0; i < src.length; i++) out[i] = Math.fround(src[i]);
-  return out;
-}
 
 function singleApply(v: RuntimeValue): RuntimeValue {
+  if (isSingle(v)) return v;
   if (isRuntimeChar(v)) {
-    if (v.value.length === 0) return RTV.tensor(allocFloat64Array(0), [0, 0]);
-    if (v.value.length === 1)
-      return RTV.num(Math.fround(v.value.charCodeAt(0)));
-    return RTV.row(Array.from(v.value).map(c => Math.fround(c.charCodeAt(0))));
+    const t = charToNumericTensor(v);
+    return singleTensor(t.data, t.shape);
   }
-  if (isRuntimeLogical(v)) return RTV.num(v ? 1 : 0);
-  if (isRuntimeNumber(v)) return RTV.num(Math.fround(v));
-  if (isRuntimeComplexNumber(v))
-    return RTV.complex(Math.fround(v.re), Math.fround(v.im));
-  if (isRuntimeTensor(v)) {
-    const imag = v.imag ? froundArray(v.imag) : undefined;
-    return RTV.tensor(froundArray(v.data), v.shape.slice(), imag);
-  }
+  if (isRuntimeLogical(v)) return singleScalar(v ? 1 : 0);
+  if (isRuntimeNumber(v)) return singleScalar(v);
+  if (isRuntimeComplexNumber(v)) return singleScalar(v.re, v.im);
+  if (isRuntimeTensor(v)) return singleTensor(v.data, v.shape, v.imag);
   if (isRuntimeClassInstance(v) && v._builtinData !== undefined)
     return singleApply(v._builtinData);
   const arr = classInstanceArrayNumeric(v);

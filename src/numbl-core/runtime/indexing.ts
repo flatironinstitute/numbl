@@ -39,6 +39,7 @@ import { RuntimeError } from "./error.js";
 import { RTV } from "./constructors.js";
 import { type RefcountRuntime, isShared } from "./refcount.js";
 import { allocFloat64Array } from "./alloc.js";
+import { froundCopy, tensorElement } from "./single.js";
 import { matlabNumToString } from "./utils.js";
 import {
   COLON_INDEX,
@@ -215,13 +216,8 @@ function gatherTensor(
   sel: Selection,
   shape: number[]
 ): RuntimeValue {
-  if (sel.n === 1 && isScalarShape(shape)) {
-    const o = offsetAt(sel, 0);
-    if (base.imag !== undefined && base.imag[o] !== 0)
-      return RTV.complex(base.data[o], base.imag[o]);
-    if (base.cls === "logical") return base.data[o] !== 0;
-    return base.data[o];
-  }
+  if (sel.n === 1 && isScalarShape(shape))
+    return tensorElement(base, offsetAt(sel, 0));
   const data = allocFloat64Array(sel.n);
   gatherNumbers(base.data, sel, data);
   let imag: Float64Array | undefined;
@@ -303,7 +299,7 @@ function toLogicalValue(re: number, im: number): number {
 }
 
 /** base(indices) = rhs for a numeric or logical tensor. Mutates `base`
- *  in place unless it is shared or grows. A logical target stays logical
+ *  in place unless it is shared or grows. The target keeps its class
  *  (MATLAB converts the assigned values). */
 function storeIntoTensor(
   base: RuntimeTensor,
@@ -357,6 +353,16 @@ function storeIntoTensor(
     } else {
       re = toLogicalValue(re, im);
       im = 0;
+    }
+  }
+  // A single target stays single: the assigned values are rounded.
+  if (base.cls === "single") {
+    if (rhsRe !== null && rhsT!.cls !== "single") {
+      rhsRe = froundCopy(rhsRe);
+      if (rhsIm) rhsIm = froundCopy(rhsIm);
+    } else {
+      re = Math.fround(re);
+      im = Math.fround(im);
     }
   }
 

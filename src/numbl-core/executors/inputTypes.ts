@@ -98,6 +98,8 @@ function signature(v: RuntimeValue): string | null {
   // left to the interpreter.
   if (isRuntimeComplexNumber(v)) return v.im === 0 ? null : "z";
   if (isRuntimeTensor(v)) {
+    // The JIT has no single-precision lane yet.
+    if (v.cls === "single") return null;
     if (v.imag && !v.imag.some(x => x !== 0)) return null;
     const tag = v.imag ? "tz" : v.cls === "logical" ? "tb" : "t";
     return v.shape.length >= 2

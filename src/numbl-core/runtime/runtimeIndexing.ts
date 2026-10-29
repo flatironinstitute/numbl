@@ -61,6 +61,7 @@ import {
 import { resolveHorzcat as _resolveHorzcat } from "./runtimeOperators.js";
 import type { Runtime } from "./runtime.js";
 import { allocFloat64Array } from "./alloc.js";
+import { tensorElement } from "./single.js";
 
 /**
  * Resolve indices that may contain END or COLON sentinels, deferred ranges, or functions.
@@ -169,14 +170,7 @@ export function index(
     if (kind === "tensor") {
       const t = base as RuntimeTensor;
       const lin = scalarOffset(t, indices);
-      if (lin >= 0) {
-        if (t.imag !== undefined) {
-          const im = t.imag[lin];
-          return im === 0 ? t.data[lin] : RTV.complex(t.data[lin], im);
-        }
-        if (t.cls === "logical") return t.data[lin] !== 0;
-        return t.data[lin];
-      }
+      if (lin >= 0) return tensorElement(t, lin);
     } else if (kind === "struct_array") {
       const sa = base as RuntimeStructArray;
       const lin = scalarSubsOffset(sa.shape, sa.elements.length, indices);
@@ -418,10 +412,11 @@ export function indexStore(
     if (kind === "tensor" && typeof rhs === "number") {
       const t = base as RuntimeTensor;
       if (t.imag === undefined && t.cls !== "logical") {
+        const x = t.cls === "single" ? Math.fround(rhs) : rhs;
         if (!isShared(t)) {
           const lin = scalarOffset(t, indices);
           if (lin >= 0) {
-            t.data[lin] = rhs;
+            t.data[lin] = x;
             return t;
           }
         }
@@ -432,8 +427,8 @@ export function indexStore(
           if (col || n === 1 || (s.length === 2 && s[0] === 1)) {
             const data = allocFloat64Array(n);
             data.set(t.data);
-            data[n - 1] = rhs;
-            return RTV.tensorRaw(data, col ? [n, 1] : [1, n]);
+            data[n - 1] = x;
+            return RTV.tensorRaw(data, col ? [n, 1] : [1, n], t.cls);
           }
         }
       }
