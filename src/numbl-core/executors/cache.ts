@@ -15,6 +15,9 @@
  */
 
 const BAILED = Symbol("EXECUTOR_BAILED");
+
+/** See `ExecutorCache.keepsBailing`. */
+export const MAX_RUNTIME_BAILS = 2;
 type Bailed = typeof BAILED;
 
 type ExecutorSlot = Map<string, unknown | Bailed>;
@@ -54,6 +57,33 @@ export class ExecutorCache {
 
   markBailed(executorName: string, owner: object, key: string): void {
     this.set(executorName, owner, key, BAILED);
+  }
+
+  /** owner → executorName → runs that bailed at run time, or -1 once a
+   *  run has succeeded. */
+  private readonly runtimeBails = new WeakMap<object, Map<string, number>>();
+
+  /** Record how a run of a compiled unit ended: a success, or a bail at
+   *  run time (not a compile-time decline). */
+  noteRun(executorName: string, owner: object, bailed: boolean): void {
+    let perOwner = this.runtimeBails.get(owner);
+    if (!perOwner) {
+      perOwner = new Map();
+      this.runtimeBails.set(owner, perOwner);
+    }
+    const n = perOwner.get(executorName) ?? 0;
+    if (n < 0) return;
+    perOwner.set(executorName, bailed ? n + 1 : -1);
+  }
+
+  /** Whether `owner` has bailed at run time under `executorName` with
+   *  `MAX_RUNTIME_BAILS` specializations and never run to completion: a
+   *  unit that keeps bailing (an array that grows in a loop, say) would
+   *  bail with a new specialization too, so the executor stops compiling
+   *  new ones for it. */
+  keepsBailing(executorName: string, owner: object): boolean {
+    const n = this.runtimeBails.get(owner)?.get(executorName) ?? 0;
+    return n >= MAX_RUNTIME_BAILS;
   }
 
   isBailed(value: unknown): value is Bailed {

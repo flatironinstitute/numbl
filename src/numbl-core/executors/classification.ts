@@ -17,7 +17,13 @@ import {
 } from "../runtime/types.js";
 import type { Type } from "../jit/index.js";
 import { inlinableHandleExpr } from "./handleInline.js";
-import { typeKey, typeOfValue, widenAgainst } from "./inputTypes.js";
+import {
+  typeKey,
+  typeOfValue,
+  paramPositions,
+  widenAgainst,
+  type WideningHistory,
+} from "./inputTypes.js";
 
 /** A capture-free function handle the JIT inlines into the spec body as
  *  an in-scope `@...` constant instead of taking it as a runtime input.
@@ -100,7 +106,7 @@ export interface TopLevelClassification {
 export function classifyTopLevel(
   interp: Interpreter,
   stmts: readonly Stmt[],
-  prevInputTypes: readonly Type[] | undefined
+  prevInputTypes: WideningHistory | undefined
 ): TopLevelClassification | null {
   if (stmts.length === 0) return null;
 
@@ -121,7 +127,7 @@ export function classifyTopLevel(
   // Every assigned name is live-out at top level.
   const outputs = [...new Set(analysis.outputs)];
 
-  widenAgainst(inputTypes, prevInputTypes);
+  widenAgainst(inputTypes, inputs, prevInputTypes);
 
   const typeKey = inputsKey(inputs, inputTypes);
   const cacheKey = `$top:${interp.frame.file}|${typeKey}`;
@@ -162,7 +168,7 @@ export function classifyStmt(
   reads: readonly string[],
   calls: readonly string[],
   minNumel: number,
-  prevInputTypes: readonly Type[] | undefined
+  prevInputTypes: WideningHistory | undefined
 ): StmtClassification | null {
   const env = interp.frame.env;
   for (const name of calls) if (env.get(name) !== undefined) return null;
@@ -175,7 +181,7 @@ export function classifyStmt(
   }
   if (!large) return null;
   const { inputs, inputTypes } = gatherTypedEnvInputs(interp, reads);
-  widenAgainst(inputTypes, prevInputTypes);
+  widenAgainst(inputTypes, inputs, prevInputTypes);
   return {
     stmt,
     inputs,
@@ -219,7 +225,7 @@ export function classifyLoop(
   stmt: Stmt & { type: "For" | "While" },
   siblings: readonly Stmt[],
   siblingIndex: number,
-  prevInputTypes: readonly Type[] | undefined
+  prevInputTypes: WideningHistory | undefined
 ): LoopClassification | null {
   const analysis = analyzeLoop(stmt);
 
@@ -295,7 +301,7 @@ export function classifyLoop(
     outputs = [...new Set(analysis.outputs)].filter(n => liveOut.has(n));
   }
 
-  widenAgainst(inputTypes, prevInputTypes);
+  widenAgainst(inputTypes, inputs, prevInputTypes);
 
   const typeKey = inputsKey(inputs, inputTypes);
   const outputKey = outputs.join(",");
@@ -335,7 +341,7 @@ export function classifyCall(
   fn: FunctionDef,
   args: unknown[],
   nargout: number,
-  prevArgTypes: readonly Type[] | undefined
+  prevArgTypes: WideningHistory | undefined
 ): CallClassification | null {
   // `~` placeholder params aren't valid identifiers downstream.
   for (const p of fn.params) {
@@ -355,7 +361,7 @@ export function classifyCall(
   }
 
   const argTypes = args.map(typeOfValue);
-  widenAgainst(argTypes, prevArgTypes);
+  widenAgainst(argTypes, paramPositions(argTypes.length), prevArgTypes);
   const cacheKey = argTypes.map(typeKey).join(",") + "|n=" + nargout;
 
   return {

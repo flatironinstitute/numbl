@@ -68,7 +68,9 @@ the diagnosis and the divergence observed at discovery time.
   transcendentals; opt in with `--fast-math`), plus a NaN-correct any/all.
   Matrix products (C03, C06) were resolved by one algorithm per size range:
   small products run the same reference loop in every mode, and larger ones
-  go through the LAPACK provider stack (BLAS) in every mode.
+  go through the LAPACK provider stack (BLAS) in every mode. C07 pins full
+  reductions of 256 or more elements, which the JS-JIT routes through the
+  interpreter's flat-reduce kernel.
 - **D** — stdout pollution from a debug log (now on stderr).
 - **E** — C-JIT (`--opt 2`) **fails to compile or crashes** on a program the
   interpreter and JS-JIT run fine: a `setjmp` grow-bail guard armed without
