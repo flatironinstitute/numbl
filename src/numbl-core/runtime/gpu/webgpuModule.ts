@@ -36,7 +36,7 @@ export function gpuArrayModule() {
 
   function recycle(b: GPUBuffer): void {
     if (pooled + b.size > POOL_BYTES) {
-      b.destroy();
+      discard(b);
       return;
     }
     pooled += b.size;
@@ -280,27 +280,111 @@ fn ccos(a: vec2f) -> vec2f { return vec2f(cos(a.x) * cosh(a.y), -sin(a.x) * sinh
     return p;
   }
 
-  /** Run `code` with a uniform block of u32/f32 words and storage buffers
-   *  (binding 0 the uniform, then `bufs` in order), over `groups`
+  // ── Batches ─────────────────────────────────────────────────────────
+  // Kernels are encoded into one command buffer, submitted when a request
+  // needs results (`settle`), after BATCH dispatches, or once the posted
+  // calls already received have run (a timer). Their uniforms share one
+  // buffer, written at submit (queue order makes reusing it safe). A batch
+  // runs in one pair of error scopes, popped without waiting; the next
+  // request raises an error. A buffer that queued work may read is
+  // destroyed after the submit (`discard`), and an upload into a reused
+  // buffer submits first.
+
+  const BATCH = 128;
+  const UNI_STRIDE = 256;
+  let enc: GPUCommandEncoder | null = null;
+  let pass: GPUComputePassEncoder | null = null;
+  let dispatches = 0;
+  const uniData = new Uint8Array(BATCH * UNI_STRIDE);
+  let uniBuf: GPUBuffer | null = null;
+  const doomed: GPUBuffer[] = [];
+  let scopes: Promise<(GPUError | Error | null)[]>[] = [];
+
+  /** The batch's command encoder, outside a compute pass. */
+  function encoder(device: GPUDevice): GPUCommandEncoder {
+    if (!enc) {
+      device.pushErrorScope("validation");
+      device.pushErrorScope("out-of-memory");
+      enc = device.createCommandEncoder();
+      setTimeout(() => {
+        try {
+          flush(device);
+        } catch {
+          // The device is gone (shutdown).
+        }
+      }, 0);
+    }
+    if (pass) {
+      pass.end();
+      pass = null;
+    }
+    return enc;
+  }
+
+  function flush(device: GPUDevice): void {
+    if (!enc) return;
+    if (pass) pass.end();
+    pass = null;
+    if (dispatches > 0)
+      device.queue.writeBuffer(uniBuf!, 0, uniData, 0, dispatches * UNI_STRIDE);
+    device.queue.submit([enc.finish()]);
+    enc = null;
+    dispatches = 0;
+    scopes.push(
+      Promise.all([device.popErrorScope(), device.popErrorScope()]).catch(
+        (e: Error) => [e]
+      )
+    );
+    for (const b of doomed) b.destroy();
+    doomed.length = 0;
+  }
+
+  /** Submit the batch and raise an error from the work submitted. */
+  async function settle(device: GPUDevice): Promise<void> {
+    flush(device);
+    const pending = scopes;
+    scopes = [];
+    for (const errs of await Promise.all(pending)) {
+      const err = errs[0] ?? errs[1];
+      if (err) throw new Error("gpuArray kernel: " + err.message);
+    }
+  }
+
+  /** Destroy `b` once the work that may read it is submitted. */
+  function discard(b: GPUBuffer): void {
+    if (enc) doomed.push(b);
+    else b.destroy();
+  }
+
+  /** Encode `code` with a uniform block of u32/f32 words and storage
+   *  buffers (binding 0 the uniform, then `bufs` in order), over `groups`
    *  workgroups ([x, y]). */
-  async function run(
+  function run(
     device: GPUDevice,
     code: string,
     words: ArrayBuffer,
     bufs: GPUBuffer[],
     groups: [number, number]
-  ) {
-    // WebGPU reports errors asynchronously; catch this kernel's.
-    device.pushErrorScope("validation");
-    device.pushErrorScope("out-of-memory");
+  ): void {
+    if (dispatches === BATCH) flush(device);
     const p = pipeline(device, code);
-    const uni = device.createBuffer({
-      size: Math.max(16, words.byteLength),
+    const e = enc ?? encoder(device);
+    if (!pass) pass = e.beginComputePass();
+    uniBuf ??= device.createBuffer({
+      size: uniData.byteLength,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
-    device.queue.writeBuffer(uni, 0, words);
+    const offset = dispatches * UNI_STRIDE;
+    uniData.set(new Uint8Array(words), offset);
     const entries: GPUBindGroupEntry[] = [
-      { binding: 0, resource: { buffer: uni } },
+      {
+        binding: 0,
+        resource: {
+          buffer: uniBuf,
+          offset,
+          size: Math.max(16, words.byteLength),
+        },
+      },
     ];
     bufs.forEach((b, i) =>
       entries.push({ binding: i + 1, resource: { buffer: b } })
@@ -309,18 +393,10 @@ fn ccos(a: vec2f) -> vec2f { return vec2f(cos(a.x) * cosh(a.y), -sin(a.x) * sinh
       layout: p.getBindGroupLayout(0),
       entries,
     });
-    const enc = device.createCommandEncoder();
-    const pass = enc.beginComputePass();
     pass.setPipeline(p);
     pass.setBindGroup(0, bg);
     pass.dispatchWorkgroups(groups[0], groups[1]);
-    pass.end();
-    device.queue.submit([enc.finish()]);
-    uni.destroy();
-    const oom = await device.popErrorScope();
-    const invalid = await device.popErrorScope();
-    const err = oom ?? invalid;
-    if (err) throw new Error("gpuArray kernel: " + err.message);
+    dispatches++;
   }
 
   /** Workgroups of 256 covering `n` threads, and the thread count of one
@@ -363,6 +439,7 @@ fn ccos(a: vec2f) -> vec2f { return vec2f(cos(a.x) * cosh(a.y), -sin(a.x) * sinh
     src: GPUBuffer,
     n: number
   ): Promise<Uint32Array> {
+    await settle(device);
     const staging = device.createBuffer({
       size: n * 4,
       usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
@@ -516,11 +593,14 @@ fn ccos(a: vec2f) -> vec2f { return vec2f(cos(a.x) * cosh(a.y), -sin(a.x) * sinh
       device: GPUDevice,
       args: { id: number; data: Float32Array<ArrayBuffer> }
     ) {
+      // Queued work may still read a reused buffer.
+      flush(device);
       const b = create(device, args.id, args.data.length);
       if (args.data.byteLength > 0) device.queue.writeBuffer(b, 0, args.data);
     },
 
     async download(device: GPUDevice, args: { id: number; n: number }) {
+      await settle(device);
       const bytes = args.n * 4;
       if (bytes === 0) return new Float32Array(0);
       const src = buffer(args.id);
@@ -633,7 +713,7 @@ ${decls.join("\n")}
         ...strides[0],
         ...strides[1],
       ]);
-      await run(device, code, words, bufs, groups);
+      run(device, code, words, bufs, groups);
       if (!flag) return { bad: false };
       const bad = (await readWords(device, flag, 1))[0] !== 0;
       flag.destroy();
@@ -696,7 +776,7 @@ ${decls.join("\n")}
       const words = new ArrayBuffer(80);
       new Uint32Array(words, 0, 2).set([args.n, width]);
       new Float32Array(words, 16, args.scalars.length).set(args.scalars);
-      await run(
+      run(
         device,
         code,
         words,
@@ -795,7 +875,7 @@ ${decls.join("\n")}
         ...strides[0],
         ...strides[1],
       ]);
-      await run(device, code, words, bufs, groups);
+      run(device, code, words, bufs, groups);
     },
 
     /** The DFT (or inverse) of length `n` over the middle dimension of
@@ -888,7 +968,7 @@ ${pow2 ? "" : `@group(0) @binding(${cplxIn ? 4 : 3}) var<storage, read> chirp: a
       const packBufs = [a, buffer(args.src)];
       if (cplxIn) packBufs.push(buffer(args.srcIm));
       if (!pow2) packBufs.push(chirp(device, n, sign));
-      await run(device, pack, u(nseq * m), packBufs, grid(nseq * m).groups);
+      run(device, pack, u(nseq * m), packBufs, grid(nseq * m).groups);
       // One radix-2 pass: sub-transforms of length ns combine into 2*ns.
       const half = m >> 1;
       const pass = `${head}
@@ -908,10 +988,10 @@ ${pow2 ? "" : `@group(0) @binding(${cplxIn ? 4 : 3}) var<storage, read> chirp: a
   dst[d] = x0 + x1;
   dst[d + p.ns] = x0 - x1;
 }`;
-      const transform = async (dir: number) => {
+      const transform = (dir: number) => {
         const tw = twiddles(device, m, dir);
         for (let ns = 1; ns < m; ns *= 2) {
-          await run(
+          run(
             device,
             pass,
             u(nseq * half, ns),
@@ -921,11 +1001,11 @@ ${pow2 ? "" : `@group(0) @binding(${cplxIn ? 4 : 3}) var<storage, read> chirp: a
           [a, b] = [b, a];
         }
       };
-      if (pow2) await transform(sign);
+      if (pow2) transform(sign);
       else {
         // Convolve with the chirp filter: forward transform, multiply by
         // the filter's transform, inverse transform (scaled below).
-        await transform(-1);
+        transform(-1);
         const mul = `${head}
 @group(0) @binding(1) var<storage, read_write> x: array<vec2f>;
 @group(0) @binding(2) var<storage, read> h: array<vec2f>;
@@ -934,14 +1014,14 @@ ${pow2 ? "" : `@group(0) @binding(${cplxIn ? 4 : 3}) var<storage, read> chirp: a
   if (t >= p.nseq * p.m) { return; }
   x[t] = cmul(x[t], h[t % p.m]);
 }`;
-        await run(
+        run(
           device,
           mul,
           u(nseq * m),
           [a, chirpFilter(device, n, m, sign)],
           grid(nseq * m).groups
         );
-        await transform(1);
+        transform(1);
       }
       // Copy out the first n elements of each sequence, scaled (and, for
       // Bluestein, multiplied by the chirp).
@@ -966,15 +1046,15 @@ ${pow2 ? "" : `@group(0) @binding(${outIm ? 4 : 3}) var<storage, read> chirp: ar
       const outBufs = [out, a];
       if (outIm) outBufs.push(outIm);
       if (!pow2) outBufs.push(chirp(device, n, sign));
-      await run(
+      run(
         device,
         unpack,
         u(nseq * n, 0, scale),
         outBufs,
         grid(nseq * n).groups
       );
-      a.destroy();
-      b.destroy();
+      discard(a);
+      discard(b);
     },
 
     /** out[k] = src[off(k)] for the selection's offsets: `start + k*step`,
@@ -1007,14 +1087,14 @@ ${offs ? "@group(0) @binding(3) var<storage, read> offs: array<u32>;" : ""}
       const { groups, width } = grid(args.n);
       const bufs = [out, buffer(args.src)];
       if (offs) bufs.push(offs);
-      await run(
+      run(
         device,
         code,
         uniforms([args.n, width, args.start, args.step]),
         bufs,
         groups
       );
-      offs?.destroy();
+      if (offs) discard(offs);
     },
 
     /** out = src (`total` elements) with out[off(k)] = rhs for the
@@ -1035,9 +1115,13 @@ ${offs ? "@group(0) @binding(3) var<storage, read> offs: array<u32>;" : ""}
     ) {
       const out = create(device, args.out, args.total);
       if (args.total === 0) return;
-      const enc = device.createCommandEncoder();
-      enc.copyBufferToBuffer(buffer(args.src), 0, out, 0, args.total * 4);
-      device.queue.submit([enc.finish()]);
+      encoder(device).copyBufferToBuffer(
+        buffer(args.src),
+        0,
+        out,
+        0,
+        args.total * 4
+      );
       if (args.n === 0) return;
       const offs = args.offsets && words32(device, args.offsets);
       const rhs = args.rhs;
@@ -1057,7 +1141,7 @@ ${offs ? `@group(0) @binding(${scalar ? 2 : 3}) var<storage, read> offs: array<u
       const bufs = [out];
       if (!scalar) bufs.push(buffer(rhs.id));
       if (offs) bufs.push(offs);
-      await run(
+      run(
         device,
         code,
         uniforms(
@@ -1067,7 +1151,7 @@ ${offs ? `@group(0) @binding(${scalar ? 2 : 3}) var<storage, read> offs: array<u
         bufs,
         groups
       );
-      offs?.destroy();
+      if (offs) discard(offs);
     },
 
     /** out = op over the middle dimension of `src` viewed as
@@ -1152,7 +1236,7 @@ ${withIdx && !first ? "@group(0) @binding(4) var<storage, read> srcIdx: array<f3
         const bufs = [part, src];
         if (partIdx) bufs.push(partIdx);
         if (partIdx && !first) bufs.push(srcIdx!);
-        await run(
+        run(
           device,
           code(first),
           uniforms([geom.inner, len, geom.outer, chunk, nchunks, width]),
@@ -1171,14 +1255,14 @@ ${withIdx && !first ? "@group(0) @binding(4) var<storage, read> srcIdx: array<f3
       const bufs = [out, src];
       if (outIdx) bufs.push(outIdx);
       if (outIdx && !first) bufs.push(srcIdx!);
-      await run(
+      run(
         device,
         code(first),
         uniforms([geom.inner, len, geom.outer, len, 1, width]),
         bufs,
         groups
       );
-      for (const b of temps) b.destroy();
+      for (const b of temps) discard(b);
     },
 
     /** Concatenation: a new `out` of `total` elements, into which each
@@ -1211,7 +1295,7 @@ struct P { n: u32, w: u32, block: u32, stride: u32, offset: u32, p1: u32, p2: u3
         const n = part.block * args.outer;
         if (n === 0) continue;
         const { groups, width } = grid(n);
-        await run(
+        run(
           device,
           code,
           uniforms([n, width, part.block, args.stride, part.offset, 0, 0, 0]),
@@ -1312,7 +1396,7 @@ fn at(s: u32, k: u32) -> u32 {
           0,
           0,
         ]);
-      await run(
+      run(
         device,
         local,
         u(nseq * nchunks),
@@ -1320,8 +1404,8 @@ fn at(s: u32, k: u32) -> u32 {
         grid(nseq * nchunks).groups
       );
       if (nchunks > 1) {
-        await run(device, across, u(nseq), [totals], grid(nseq).groups);
-        await run(
+        run(device, across, u(nseq), [totals], grid(nseq).groups);
+        run(
           device,
           fix,
           u(nseq * args.len),
@@ -1329,7 +1413,7 @@ fn at(s: u32, k: u32) -> u32 {
           grid(nseq * args.len).groups
         );
       }
-      totals.destroy();
+      discard(totals);
     },
 
     /** out (m x n) = a (m x k) * b (k x n), column-major, tiled. */
@@ -1381,12 +1465,10 @@ var<workgroup> Bs: array<f32, 256>;
 }`;
       if (args.k === 0) {
         // An empty inner dimension gives zeros.
-        const enc = device.createCommandEncoder();
-        enc.clearBuffer(out);
-        device.queue.submit([enc.finish()]);
+        encoder(device).clearBuffer(out);
         return;
       }
-      await run(
+      run(
         device,
         code,
         uniforms([args.m, args.k, args.n, 0]),
@@ -1416,7 +1498,7 @@ struct P { m: u32, n: u32, w: u32, pad: u32 }
   dst[j + i * p.n] = src[t];
 }`;
       const { groups, width } = grid(total);
-      await run(
+      run(
         device,
         code,
         uniforms([args.m, args.n, width, 0]),
@@ -1426,10 +1508,18 @@ struct P { m: u32, n: u32, w: u32, pad: u32 }
     },
 
     async synchronize(device: GPUDevice) {
+      await settle(device);
       await device.queue.onSubmittedWorkDone();
     },
 
     dispose() {
+      enc = null;
+      pass = null;
+      dispatches = 0;
+      doomed.length = 0;
+      scopes = [];
+      uniBuf?.destroy();
+      uniBuf = null;
       for (const b of buffers.values()) b.destroy();
       buffers.clear();
       for (const list of pool.values()) for (const b of list) b.destroy();
