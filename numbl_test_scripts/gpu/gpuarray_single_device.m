@@ -7,8 +7,20 @@ if exist('isnumbl', 'builtin') ~= 5
   return
 end
 
-d = gpuDevice(2);
-assert(~d.SupportsDouble && d.Index == 2 && d.DeviceSelected);
+% A device without double precision (a WebGPU device, or numbl's CPU
+% reference device that acts as one) and one with.
+single_dev = 0;
+double_dev = 0;
+for k = 1:gpuDeviceCount
+  dk = gpuDevice(k);
+  if dk.SupportsDouble && double_dev == 0
+    double_dev = k;
+  elseif ~dk.SupportsDouble && single_dev == 0
+    single_dev = k;
+  end
+end
+d = gpuDevice(single_dev);
+assert(~d.SupportsDouble && d.Index == single_dev && d.DeviceSelected);
 msg = 'The selected GPU device does not support double precision. Convert the data to single first, for example gpuArray(single(X)).';
 expectError(@() gpuArray([1 2]), msg);
 expectError(@() zeros(2, 'gpuArray'), msg);
@@ -27,10 +39,10 @@ assert(strcmp(underlyingType(gpuArray(true)), 'logical'));
 assert(isgpuarray(i) && strcmp(underlyingType(i), 'double') && gather(i) == 3);
 
 % selecting a device resets it
-gpuDevice(1);
+gpuDevice(double_dev);
 assert(~existsOnGPU(S));
 d = gpuDevice;
-assert(d.SupportsDouble && d.Index == 1);
+assert(d.SupportsDouble && d.Index == double_dev);
 assert(isgpuarray(gpuArray([1 2])));
 
 disp('SUCCESS')

@@ -61,7 +61,7 @@ export interface NumblHost {
    *  null or undefined when there is no WebGPU. */
   gpu?: unknown;
   /** The devices behind gpuArray and which one is selected. */
-  readonly gpuDevices: GpuDeviceSet;
+  gpuDevices: GpuDeviceSet;
   /** Resolves once the capabilities that load asynchronously (qhull, the
    *  GPU helper, a wasm accelerator) are installed or have failed to load.
    *  Hosts await it before the first run. */

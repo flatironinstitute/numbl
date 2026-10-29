@@ -123,6 +123,8 @@ Options (for run and eval):
 Environment variables:
   NUMBL_PATH              Extra workspace directories (separated by ${delimiter})
   NUMBL_NO_NATIVE         If set, do not load the native LAPACK addon
+  NUMBL_NO_WEBGPU         If set, do not give gpuArray a WebGPU device (one is
+                          used when the optional webgpu package is installed)
   NUMBL_JIT_LOG           If set, print every JIT decline (executor, source
                           position, reason) to stderr`);
 }

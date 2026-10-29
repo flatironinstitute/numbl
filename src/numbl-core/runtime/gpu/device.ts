@@ -20,7 +20,16 @@ export class GpuDeviceSet {
   /** The selected device's position in `devices`, or -1 for none. */
   private selected = -1;
 
-  constructor(readonly devices: GpuDevice[]) {}
+  private list: GpuDevice[] | null = null;
+
+  /** `devices`, or a function that lists them on first use (a host whose
+   *  WebGPU device is found by starting the GPU helper). */
+  constructor(private readonly source: GpuDevice[] | (() => GpuDevice[])) {}
+
+  get devices(): GpuDevice[] {
+    return (this.list ??=
+      typeof this.source === "function" ? this.source() : this.source);
+  }
 
   /** The selected device, selecting the first one when none is (as
    *  MATLAB selects the default device on first use). */

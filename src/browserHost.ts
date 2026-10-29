@@ -19,6 +19,9 @@
 
 import { addPending, createHost, type NumblHost } from "./numbl-core/host.js";
 import { startGpuHelper } from "./gpuHelper.js";
+import { GpuDeviceSet } from "./numbl-core/runtime/gpu/device.js";
+import { defaultGpuDevices } from "./numbl-core/runtime/gpu/cpuDevice.js";
+import { WebGpuDevice } from "./numbl-core/runtime/gpu/webgpuDevice.js";
 
 export interface BrowserHostOptions {
   /** Install geometry backends into the host; `host.ready` waits for it.
@@ -33,12 +36,17 @@ export interface BrowserHostOptions {
 /** Build a browser worker's host. Await `host.ready` (or use
  *  `deferUntilReady`) before the first run. */
 export function bootBrowserHost(opts: BrowserHostOptions = {}): NumblHost {
-  const host = createHost();
-  if (opts.gpu !== false) {
-    const gpu = startGpuHelper();
-    host.gpu = gpu;
-    if (gpu) addPending(host, gpu.ready);
-  }
+  const gpu = opts.gpu !== false ? startGpuHelper() : null;
+  // The WebGPU device (when the helper finds an adapter) comes first, as
+  // MATLAB's default device is the GPU; the CPU reference devices follow.
+  const host = createHost({
+    gpu,
+    gpuDevices: new GpuDeviceSet(() => {
+      const d = gpu && WebGpuDevice.probe(gpu);
+      return d ? [d, ...defaultGpuDevices()] : defaultGpuDevices();
+    }),
+  });
+  if (gpu) addPending(host, gpu.ready);
   if (opts.geometry) addPending(host, opts.geometry(host));
   return host;
 }
