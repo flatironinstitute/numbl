@@ -44,15 +44,26 @@ import {
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
-/** A one-argument predicate builtin. */
-function predicate(name: string, test: (v: RuntimeValue) => boolean): void {
+/** A one-argument predicate builtin. A gpuArray argument is gathered and
+ *  the result stays on the host, unless `shapeOnly` (the test reads only
+ *  the size, which a gpuArray has without gathering). */
+function predicate(
+  name: string,
+  test: (v: RuntimeValue) => boolean,
+  shapeOnly = false
+): void {
   builtin({
     name,
     nargin: 1,
-    accepts: { sparse: true },
+    accepts: shapeOnly ? SHAPE_QUERY : { sparse: true },
+    hostOutputs: true,
     apply: args => test(args[0]),
   });
 }
+
+/** For the builtins that read only a value's class or size: sparse
+ *  matrices and gpuArrays as they are. */
+const SHAPE_QUERY = { sparse: true, gpu: true } as const;
 
 // ── Type predicates ──────────────────────────────────────────────────────
 
@@ -62,7 +73,7 @@ function categoryPredicate(name: string, category: string): void {
   builtin({
     name,
     nargin: 1,
-    accepts: { sparse: true },
+    accepts: SHAPE_QUERY,
     apply: (args, _nargout, { rt }) =>
       isaValue(args[0], category, cls => rt.classAncestors(cls)),
   });
@@ -232,32 +243,44 @@ builtin({
 
 // isscalar is numel(x)==1 for ANY type (cells, structs, strings, ...),
 // not just numeric arrays.
-predicate("isscalar", v => valueNumel(v) === 1);
+predicate("isscalar", v => valueNumel(v) === 1, true);
 
-predicate("isempty", isEmptyValue);
+predicate("isempty", isEmptyValue, true);
 
-predicate("isvector", v => {
-  const shape = valueShape(v);
-  return shape.length === 2 && (shape[0] === 1 || shape[1] === 1);
-});
+predicate(
+  "isvector",
+  v => {
+    const shape = valueShape(v);
+    return shape.length === 2 && (shape[0] === 1 || shape[1] === 1);
+  },
+  true
+);
 
-predicate("isrow", v => {
-  const shape = valueShape(v);
-  return shape.length === 2 && shape[0] === 1;
-});
+predicate(
+  "isrow",
+  v => {
+    const shape = valueShape(v);
+    return shape.length === 2 && shape[0] === 1;
+  },
+  true
+);
 
-predicate("iscolumn", v => {
-  const shape = valueShape(v);
-  return shape.length === 2 && shape[1] === 1;
-});
+predicate(
+  "iscolumn",
+  v => {
+    const shape = valueShape(v);
+    return shape.length === 2 && shape[1] === 1;
+  },
+  true
+);
 
-predicate("ismatrix", v => valueShape(v).length <= 2);
+predicate("ismatrix", v => valueShape(v).length <= 2, true);
 
 // ── Shape queries ────────────────────────────────────────────────────────
 
 builtin({
   name: "numel",
-  accepts: { sparse: true },
+  accepts: SHAPE_QUERY,
   nargin: [1, Infinity],
   apply: args => {
     if (args.length > 1)
@@ -270,7 +293,7 @@ builtin({
 
 builtin({
   name: "length",
-  accepts: { sparse: true },
+  accepts: SHAPE_QUERY,
   nargin: 1,
   apply: args => {
     const v = args[0];
@@ -280,7 +303,7 @@ builtin({
 
 builtin({
   name: "ndims",
-  accepts: { sparse: true },
+  accepts: SHAPE_QUERY,
   nargin: 1,
   apply: args => {
     return Math.max(2, valueShape(args[0]).length);
@@ -315,7 +338,7 @@ function sizeDims(args: RuntimeValue[]): number[] {
 
 builtin({
   name: "size",
-  accepts: { sparse: true },
+  accepts: SHAPE_QUERY,
   nargin: [1, Infinity],
   nargout: [0, Infinity],
   apply: (args, nargout) => {
@@ -356,7 +379,7 @@ builtin({
 
 builtin({
   name: "class",
-  accepts: { sparse: true },
+  accepts: SHAPE_QUERY,
   nargin: [1, Infinity],
   apply: args => {
     if (args.length === 1) return RTV.char(valueClass(args[0]));
@@ -558,7 +581,7 @@ builtin({
 
 builtin({
   name: "isa",
-  accepts: { sparse: true },
+  accepts: SHAPE_QUERY,
   nargin: 2,
   apply: (args, _nargout, ctx) => ctx.rt.isa(args[0], args[1]),
 });

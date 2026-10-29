@@ -55,7 +55,7 @@ builtin({
 // functions (MATLAB's string-named calls do not see them).
 builtin({
   name: "feval",
-  accepts: { sparse: true },
+  accepts: { sparse: true, gpu: true },
   nargin: [1, Infinity],
   nargout: Infinity,
   apply: (args, nargout, ctx) => {
@@ -151,6 +151,7 @@ builtin({
 
 builtin({
   name: "subsref",
+  accepts: { gpu: true },
   nargin: 2,
   nargout: Infinity,
   apply: (args, nargout, ctx) =>
@@ -159,7 +160,7 @@ builtin({
 
 builtin({
   name: "subsasgn",
-  accepts: { sparse: true },
+  accepts: { sparse: true, gpu: true },
   nargin: 3,
   apply: (args, nargout, ctx) =>
     subsasgnBuiltin(ctx.rt, nargout, args) as RuntimeValue | RuntimeValue[],
@@ -167,7 +168,7 @@ builtin({
 
 builtin({
   name: "builtin",
-  accepts: { sparse: true },
+  accepts: { sparse: true, gpu: true },
   nargin: [1, Infinity],
   nargout: Infinity,
   apply: (args, nargout, ctx) => {

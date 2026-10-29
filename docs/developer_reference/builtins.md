@@ -20,6 +20,7 @@ Builtins are defined with `builtin(spec)` (`interpreter/builtins/builtin.ts`):
 
 - `accepts`: how the builtin takes the non-dense value kinds (below). Default: every such argument is converted first.
 - `singleOutputs`: the outputs that take a single argument's class (below). Default: none.
+- `hostOutputs`: with a gpuArray argument, the outputs stay on the host instead of being returned as gpuArrays (see [runtime/gpu.md](runtime/gpu.md)). Default: false.
 
 Apart from the argument-kind policy below, there are no argument-type rules. `apply` sees whatever values the caller passed and must reject what it cannot handle; `args.ts` provides coercion helpers that raise MATLAB's errors instead of silently dropping data (`numericArg`, `realNumericArg`, `realScalarArg`, `boolToNumber`, `builtinError`). For unary element-wise math, `types.ts` provides ready-made applies: `unaryElemwise`, `unaryRealResult`, and `unaryPredicate`.
 
@@ -37,7 +38,7 @@ Some value kinds are storage variants of an ordinary array that most builtins ha
 
 The policy is resolved once per builtin and costs one property lookup per argument; the argument list is copied only when an argument is converted. It applies wherever a builtin is called (directly, through a handle, `feval`, `builtin(...)`, `cellfun`, method dispatch), including the methods registered with `classMethod`. Name resolution runs first, so a method of an argument's class (a classdef method, or one registered from TypeScript) is chosen before any builtin, and the method's own `accepts` then applies.
 
-A new kind plugs in by adding a rule to `RULES` in `argKinds.ts` (its policy key, the default conversion, the generic error) and a key to `ArgKindPolicy`. For example, an array held in device memory would be gathered to a host tensor by default, so every existing builtin keeps working on it; builtins with device implementations would declare `accepts: { gpu: true }`. Nothing else in the builtins needs to change. Values nested in cells or structs are not converted; a builtin that looks inside containers handles the kinds it finds there. `.numbl.js` user functions are wrapped as the same shape (`jsUserFunctions.ts`).
+A new kind plugs in by adding a rule to `RULES` in `argKinds.ts` (its policy key, the default conversion, the generic error) and a key to `ArgKindPolicy`. The gpuArray kind works this way: by default its arguments are gathered to the host, and the call wrapper returns the numeric outputs to the device (see [runtime/gpu.md](runtime/gpu.md)); builtins that handle gpuArrays themselves declare `accepts: { gpu: true }`. Nothing else in the builtins needs to change. Values nested in cells or structs are not converted; a builtin that looks inside containers handles the kinds it finds there. `.numbl.js` user functions are wrapped as the same shape (`jsUserFunctions.ts`).
 
 ## Result class: single
 

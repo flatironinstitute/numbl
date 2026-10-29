@@ -1,7 +1,7 @@
 /**
  * Host capabilities: what the platform running numbl provides (file I/O,
  * system info, native libraries, numeric providers, geometry backends, the
- * C-JIT, a GPU helper). A run gets its host from `ExecOptions.host` (an
+ * C-JIT, a GPU helper, the gpuArray devices). A run gets its host from `ExecOptions.host` (an
  * `ExecSession` passes its own), else the process-default host, and exposes
  * it as `rt.host`; helpers without a runtime handle use `currentHost()`.
  *
@@ -11,8 +11,8 @@
  * `setDelaunayBackend`, `setJsGpuHelper`, `registerNodeCompileC`) edit, so
  * code that never passes a host keeps working.
  *
- * Kept a leaf (type imports aside, only the provider stack and refcount),
- * so that the runtime can import it.
+ * Kept a leaf (type imports aside, only the provider stack, refcount and the
+ * GPU device set), so that the runtime can import it.
  */
 
 import type { FileIOAdapter } from "./fileIOAdapter.js";
@@ -20,6 +20,8 @@ import type { SystemAdapter } from "./systemAdapter.js";
 import type { NativeBridge } from "./workspace/types.js";
 import { ProviderStack, defaultProviderStack } from "./native/lapack-bridge.js";
 import { getCurrentRuntime } from "./runtime/refcount.js";
+import { GpuDeviceSet } from "./runtime/gpu/device.js";
+import { defaultGpuDevices } from "./runtime/gpu/cpuDevice.js";
 
 /**
  * Compute a Delaunay triangulation of `points` (an array of dim-dimensional
@@ -58,6 +60,8 @@ export interface NumblHost {
   /** The `gpu` object passed to `.numbl.js` files (see src/gpuHelper.ts);
    *  null or undefined when there is no WebGPU. */
   gpu?: unknown;
+  /** The devices behind gpuArray and which one is selected. */
+  readonly gpuDevices: GpuDeviceSet;
   /** Resolves once the capabilities that load asynchronously (qhull, the
    *  GPU helper, a wasm accelerator) are installed or have failed to load.
    *  Hosts await it before the first run. */
@@ -73,6 +77,8 @@ export interface NumblHostInit {
   geometry?: GeometryBackends;
   cjit?: object;
   gpu?: unknown;
+  /** Default: the CPU reference devices (`defaultGpuDevices`). */
+  gpuDevices?: GpuDeviceSet;
   ready?: Promise<void>;
 }
 
@@ -83,6 +89,7 @@ export function createHost(init: NumblHostInit = {}): NumblHost {
     ...init,
     numeric: init.numeric ?? new ProviderStack(),
     geometry: { ...init.geometry },
+    gpuDevices: init.gpuDevices ?? new GpuDeviceSet(defaultGpuDevices()),
     ready: init.ready ?? Promise.resolve(),
   };
 }

@@ -49,7 +49,7 @@ import { convertJsonValue } from "../../runtime/jsonDecode.js";
 import { PARULA_ANCHORS } from "../../plotting/colormaps.js";
 import { incref, decref } from "../../runtime/refcount.js";
 import type { Runtime } from "../../runtime/runtime.js";
-import { stripClassNameArgs } from "./array-construction.js";
+import { stripClassNameArgs, withGpuOption } from "./array-construction.js";
 import { parseShapeArgs } from "../../helpers/shape-utils.js";
 
 // ── substruct ────────────────────────────────────────────────────────────
@@ -334,7 +334,7 @@ for (const [name, fillVal] of [
   builtin({
     name,
     accepts: { sparse: true },
-    apply: rawArgs => {
+    apply: withGpuOption(rawArgs => {
       // true/false accept a trailing 'logical' class spec; numbl ignores it.
       const args = stripClassNameArgs(rawArgs);
       if (args.length === 0) return RTV.logical(fillVal === 1);
@@ -344,7 +344,7 @@ for (const [name, fillVal] of [
       if (fillVal) data.fill(1);
       const t = RTV.logicalTensor(data, shape);
       return t;
-    },
+    }),
   });
 }
 

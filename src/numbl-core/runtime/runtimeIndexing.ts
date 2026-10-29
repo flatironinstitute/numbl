@@ -31,6 +31,7 @@ import {
   isRuntimeClassInstance,
   isRuntimeClassInstanceArray,
   isRuntimeSparseMatrix,
+  isRuntimeGpuArray,
   isRuntimeDictionary,
   isRuntimeStringArray,
   type RuntimeClassInstanceArray,
@@ -531,7 +532,8 @@ export function indexStore(
     isRuntimeClassInstanceArray(mv) ||
     isRuntimeString(mv) ||
     isRuntimeStringArray(mv) ||
-    isRuntimeSparseMatrix(mv)
+    isRuntimeSparseMatrix(mv) ||
+    isRuntimeGpuArray(mv)
   ) {
     const idxMvals = resolveIndices(
       indices,

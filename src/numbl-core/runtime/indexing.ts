@@ -31,6 +31,7 @@ import {
   isRuntimeChar,
   isRuntimeStringArray,
   type RuntimeStringArray,
+  type RuntimeGpuArray,
   stringArrayValue,
   structArrayValue,
 } from "./types.js";
@@ -40,6 +41,12 @@ import { RTV } from "./constructors.js";
 import { type RefcountRuntime, isShared } from "./refcount.js";
 import { allocFloat64Array } from "./alloc.js";
 import { froundCopy, tensorElement } from "./single.js";
+import {
+  firstGpuArg,
+  gatherValue,
+  isGpuArray,
+  outputToGpu,
+} from "./gpu/gpuArray.js";
 import { matlabNumToString } from "./utils.js";
 import {
   COLON_INDEX,
@@ -1362,6 +1369,18 @@ function sparseScatter(
   return out.finish();
 }
 
+/** A gpuArray's host value; any other value as it is. */
+function gatherIfGpu(v: RuntimeValue): RuntimeValue {
+  return isGpuArray(v) ? gatherValue(v) : v;
+}
+
+/** A numeric or logical scalar (a number, logical or complex number). */
+function isNumericValue(v: RuntimeValue): boolean {
+  return (
+    typeof v === "number" || typeof v === "boolean" || isRuntimeComplexNumber(v)
+  );
+}
+
 // ── Index read: main dispatcher ──────────────────────────────────────────
 
 /** Index into a value: v(i1, i2, ...) */
@@ -1369,6 +1388,7 @@ export function indexIntoRTValue(
   base: RuntimeValue,
   indices: RuntimeValue[]
 ): RuntimeValue {
+  if (firstGpuArg(indices)) indices = indices.map(gatherIfGpu);
   if (typeof base === "number" || typeof base === "boolean")
     return indexIntoScalar(base, indices);
   if (typeof base === "string") return indexIntoStringArray(base, indices);
@@ -1391,6 +1411,11 @@ export function indexIntoRTValue(
       return indexIntoObjectArray(base, indices);
     case "sparse_matrix":
       return indexIntoSparse(base, indices);
+    case "gpu_array":
+      return outputToGpu(
+        indexIntoRTValue(gatherValue(base), indices),
+        base.device
+      );
     case "function":
     case "dictionary":
     case "dummy_handle":
@@ -1418,6 +1443,27 @@ export function storeIntoRTValueIndex(
   storeBack = false,
   nullAssign?: boolean
 ): RuntimeValue {
+  if (firstGpuArg(indices)) indices = indices.map(gatherIfGpu);
+  // A gpuArray target, or a numeric target given a gpuArray, gives a
+  // gpuArray (stored on the host, then uploaded).
+  if (
+    isGpuArray(base) ||
+    (isGpuArray(rhs) && (isNumericValue(base) || isRuntimeTensor(base)))
+  ) {
+    const device = isGpuArray(base)
+      ? base.device
+      : (rhs as RuntimeGpuArray).device;
+    const r = storeIntoRTValueIndex(
+      gatherIfGpu(base),
+      indices,
+      gatherIfGpu(rhs),
+      parenAssign,
+      rt,
+      storeBack,
+      nullAssign
+    );
+    return outputToGpu(r, device);
+  }
   const del = nullAssign ?? isDeletionRhs(rhs);
   if (isRuntimeSparseMatrix(base)) {
     if (del) return deleteFromSparse(base, indices);

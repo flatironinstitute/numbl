@@ -43,6 +43,7 @@ A single entry point (the `executeCode` function) accepts source, options, and a
 - [runtime/refcount.md](runtime/refcount.md): refcounts, copy-on-write, slot ownership, transient scopes.
 - [runtime/indexing.md](runtime/indexing.md): the storage-independent index planner and per-container gather/scatter.
 - [runtime/native-addon.md](runtime/native-addon.md): LAPACK/FFTW bindings and JS fallbacks.
+- [runtime/gpu.md](runtime/gpu.md): gpuArray values, devices (the CPU reference devices), and how builtins run on a gpuArray.
 - [builtins.md](builtins.md): defining builtins with `builtin()`, arity and errors, scope builtins, sparse solvers.
 - [stdlib.md](stdlib.md): `.m`-defined standard library and bundle generation.
 - [cli.md](cli.md): CLI commands, options, environment variables.

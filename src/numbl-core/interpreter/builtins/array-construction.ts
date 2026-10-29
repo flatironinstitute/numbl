@@ -22,6 +22,7 @@ import { allocFloat64Array } from "../../runtime/alloc.js";
 import { parseShapeArgs, validateDim } from "../../helpers/shape-utils.js";
 import { sparseToDense } from "../../helpers/sparse-arithmetic.js";
 import { isSingle, toSingleResult } from "../../runtime/single.js";
+import { currentGpuDevice, toGpuArray } from "../../runtime/gpu/gpuArray.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -59,6 +60,22 @@ export function requestsSingle(args: RuntimeValue[]): boolean {
   )
     return isSingle(args[n - 1]);
   return n >= 1 && isText(args[n - 1]) && toString(args[n - 1]) === "single";
+}
+
+/** A constructor's `apply` with MATLAB's `'gpuArray'` option
+ *  (`zeros(n, 'gpuArray')`, `rand(n, 'single', 'gpuArray')`): the option is
+ *  removed before `apply` runs, and the result is created on the selected
+ *  GPU device. */
+export function withGpuOption(
+  apply: (args: RuntimeValue[]) => RuntimeValue
+): (args: RuntimeValue[]) => RuntimeValue {
+  return args => {
+    const rest = args.filter(
+      a => !(isText(a) && toString(a).toLowerCase() === "gpuarray")
+    );
+    if (rest.length === args.length) return apply(args);
+    return toGpuArray(apply(rest), currentGpuDevice(), true);
+  };
 }
 
 /** A constructor's result in the class its arguments ask for. */
@@ -190,11 +207,11 @@ function defineFill(name: string, idName: string, value: number): void {
   builtin({
     name,
     accepts: { sparse: true },
-    apply: args => {
+    apply: withGpuOption(args => {
       const sizeArgs = sizeCtorArgs(args, spec);
       if (sizeArgs.length === 0) return inRequestedClass(args, value);
       return inRequestedClass(args, filled(sizeCtorShape(sizeArgs), value));
-    },
+    }),
   });
 }
 
@@ -209,7 +226,7 @@ defineFill("Inf", "Inf", Infinity);
 
 builtin({
   name: "eye",
-  apply: args => {
+  apply: withGpuOption(args => {
     const sizeArgs = sizeCtorArgs(args, {
       idName: "eye",
       classes: ALL_NUMERIC_CLASSES,
@@ -227,7 +244,7 @@ builtin({
     const minDim = Math.min(rows, cols);
     for (let i = 0; i < minDim; i++) data[i * rows + i] = 1;
     return inRequestedClass(args, makeTensor(data, undefined, [rows, cols]));
-  },
+  }),
 });
 
 // ── linspace / logspace ──────────────────────────────────────────────────

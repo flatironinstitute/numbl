@@ -48,6 +48,7 @@ import "./path-env.js";
 import "./ode.js";
 import "./gmres.js";
 import "./eigs.js";
+import "./gpu.js";
 
 import "./scope.js";
 // The plot builtins register at module load.

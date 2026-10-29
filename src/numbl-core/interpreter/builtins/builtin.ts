@@ -36,6 +36,7 @@ import {
   type ArgKindPolicy,
 } from "../../runtime/argKinds.js";
 import { checkNargin, checkNargout } from "./args.js";
+import { firstGpuArg, outputToGpu } from "../../runtime/gpu/gpuArray.js";
 import {
   hasSingleArg,
   isSingle,
@@ -96,6 +97,12 @@ interface BuiltinSpecBase {
    *  arguments (`sum(x, 'double')` is double). Other outputs stay as
    *  `apply` returns them (`size`, `find`, an index output). */
   singleOutputs?: SingleOutputs | ((args: RuntimeValue[]) => SingleOutputs);
+  /** With a gpuArray argument (gathered to the host under the default
+   *  `accepts`), the numeric and logical outputs are returned as gpuArrays
+   *  on its device, as MATLAB runs the function on the GPU. Set for the
+   *  builtins whose results stay on the host (`size`, `isempty`,
+   *  `isequal`, ...). */
+  hostOutputs?: boolean;
 }
 
 /** Outputs that take a single argument's class: `true` (every output) or
@@ -199,6 +206,8 @@ export function makeBuiltin(spec: BuiltinSpec): IBuiltin {
   const apply = spec.apply as BuiltinApply;
   const policy = resolveArgPolicy(name, spec.accepts);
   const singleOutputs = spec.singleOutputs ?? NO_OUTPUTS;
+  const uploadsToGpu =
+    !spec.hostOutputs && (spec.accepts?.gpu ?? "convert") === "convert";
 
   return {
     name,
@@ -208,16 +217,25 @@ export function makeBuiltin(spec: BuiltinSpec): IBuiltin {
     call: (args, n) => {
       checkNargin(args.length, inMin, inMax, mfile);
       checkNargout(n, outMin, outMax, mfile);
-      const result = apply(applyArgPolicy(policy, args), n, ctx);
+      const cargs = applyArgPolicy(policy, args);
+      let result = apply(cargs, n, ctx) as RuntimeValue | RuntimeValue[];
       if (isVoid) return undefined;
-      if (!hasSingleArg(args)) return result as RuntimeValue | RuntimeValue[];
-      return singleResults(
-        result as RuntimeValue | RuntimeValue[],
-        typeof singleOutputs === "function"
-          ? singleOutputs(args)
-          : singleOutputs,
-        args
-      );
+      if (hasSingleArg(cargs))
+        result = singleResults(
+          result,
+          typeof singleOutputs === "function"
+            ? singleOutputs(cargs)
+            : singleOutputs,
+          cargs
+        );
+      // A gathered gpuArray argument: the outputs go back to its device.
+      const gpu = uploadsToGpu && cargs !== args ? firstGpuArg(args) : null;
+      if (gpu === null) return result;
+      return Array.isArray(result)
+        ? result.map(v => (v === undefined ? v : outputToGpu(v, gpu.device)))
+        : result === undefined
+          ? result
+          : outputToGpu(result, gpu.device);
     },
   };
 }

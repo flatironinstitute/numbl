@@ -9,6 +9,7 @@ import {
   type RuntimeValue,
 } from "./types.js";
 import { assertNever } from "./kinds.js";
+import { gatherValue } from "./gpu/gpuArray.js";
 
 export const valuesAreEqual = (a: RuntimeValue, b: RuntimeValue): boolean => {
   if (isRuntimeNumber(a)) {
@@ -87,6 +88,8 @@ export const valuesAreEqual = (a: RuntimeValue, b: RuntimeValue): boolean => {
     case "dummy_handle":
     case "graphics_handle":
       return false;
+    case "gpu_array":
+      return valuesAreEqual(gatherValue(a), gatherValue(b as typeof a));
     default:
       return assertNever(a);
   }

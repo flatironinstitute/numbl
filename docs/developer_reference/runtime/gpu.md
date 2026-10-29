@@ -1,0 +1,25 @@
+# gpuArray
+
+numbl implements MATLAB's `gpuArray`: an array held in a GPU device's memory, on which functions and operators run on the device and return gpuArrays. The code is in `runtime/gpu/` and `interpreter/builtins/gpu.ts`.
+
+## Values
+
+A gpuArray is a `RuntimeGpuArray` (kind `gpu_array`): its device, an opaque device buffer, its shape, its underlying class (`cls`: double, single or logical, what `underlyingType` returns), whether it is complex, and the device generation it was made in. `class` gives `gpuArray`; `isa(G, 'float')` and the other categories follow the underlying class, while `isa(G, 'single')` is false, as in MATLAB. The contents are immutable: every operation, indexed assignment included, makes a new array, so a gpuArray never needs copy-on-write. `gather` copies the data back to a host value (a 1x1 double or logical array as a scalar).
+
+## Devices
+
+A device (`GpuDevice` in `runtime/gpu/device.ts`) stores data (`upload`, `download`) and says whether it computes in double precision (`supportsDouble`, `gpuDevice().SupportsDouble`). The host lists its devices (`NumblHost.gpuDevices`, a `GpuDeviceSet`), one of which is selected; `gpuDevice(index)` selects and resets one, `gpuDevice([])` deselects, and `reset(D)` resets. Resetting increments the device's `generation`, so the arrays made before no longer exist (`existsOnGPU` is false and using one raises `The data no longer exists on the device.`).
+
+Without a GPU backend a host has two CPU reference devices (`runtime/gpu/cpuDevice.ts`), whose memory is host memory: device 1 computes in double precision and device 2 does not. They make gpuArray code run and testable without a GPU, and are the reference a real device's results are compared against.
+
+A device without double precision follows MATLAB's advice to use single on such hardware strictly: creating a double gpuArray is an error that names the fix (`gpuArray(single(X))`). The creations checked are `gpuArray(X)`, the constructors with `'gpuArray'` (`zeros(n, 'gpuArray')` is double), `double(G)` and `cast(G, 'double')`. Results of operations are not checked: single combined with double gives single, and the index output of `max` is double.
+
+## Running builtins on a gpuArray
+
+Every builtin runs on gpuArray arguments, through the call wrapper (`makeBuiltin` in `builtin.ts`) and the argument-kind policy (`runtime/argKinds.ts`): unless a builtin declares `accepts: { gpu: true }`, its gpuArray arguments are gathered to the host before `apply` runs, and its numeric and logical outputs are uploaded to the device of the first gpuArray argument. Text, cells and other outputs stay on the host. A builtin whose results MATLAB leaves on the host declares `hostOutputs: true` (the type predicates, `isequal`); the shape and class queries (`size`, `numel`, `class`, `isa`, `isempty`, `isnumeric`, ...) declare `accepts: { gpu: true }` and read the gpuArray's shape and class without gathering. Builtins that store or pass on a value (`struct`, `setfield`, `deal`, `feval`, `subsref`, `subsasgn`, `builtin`) also take gpuArrays as they are.
+
+Operators reach the same path: a gpuArray is an object (`isObject` in its `KINDS` entry) with registered methods, so `G + 1` dispatches to `plus`, which, having no gpuArray method, is the builtin. Indexing and indexed assignment (`indexIntoRTValue`, `storeIntoRTValueIndex`), concatenation (`Runtime.horzcat` / `vertcat` dispatch to the builtins), colon and `for` loops (`runtimeOperators.ts`), and conditions (`toBool`) gather, compute on the host and upload. Assigning a gpuArray into a host numeric array makes the result a gpuArray. The constructors take `'gpuArray'` (`withGpuOption` in `array-construction.ts`); their `'like', G` form needs nothing special, since the gathered prototype gives the class and the result goes back to the device.
+
+On the CPU reference devices this path is the whole implementation. A device with kernels will register gpuArray methods (`classMethod("gpuArray", ...)`) for the operations it runs natively; resolution picks a method of an object argument before the builtin, so the generic path remains the fallback for everything else.
+
+The JIT declines gpuArray values (`typeOfValue` types them as unknown), so code that handles them runs on the interpreter.

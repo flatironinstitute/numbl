@@ -11,6 +11,7 @@
  * runtimeDispatch.ts, and helper types/utilities in runtimeHelpers.ts.
  */
 
+import { isGpuArray } from "./gpu/gpuArray.js";
 import {
   type RuntimeValue,
   type RuntimeLogical,
@@ -111,7 +112,13 @@ import {
 } from "../plotting/figuresReducer.js";
 import { computeAxisLimits } from "../plotting/axisLimits.js";
 import { isRuntimeChar, isRuntimeString } from "./types.js";
-import { dispatchClassOf, kstr, valueClass, valueShape } from "./kinds.js";
+import {
+  dispatchClassOf,
+  kstr,
+  valueClass,
+  valueNumel,
+  valueShape,
+} from "./kinds.js";
 import { allocFloat64Array } from "./alloc.js";
 
 /** One `beginOutputCapture()` frame: where its output goes, plus the plot
@@ -874,10 +881,11 @@ export class Runtime {
     const rv = ensureRuntimeValue(v);
     if (isRuntimeNumber(rv)) return 8;
     if (isRuntimeLogical(rv)) return 1;
-    if (isRuntimeTensor(rv)) {
-      const n = rv.data.length;
+    if (isRuntimeTensor(rv) || isGpuArray(rv)) {
+      const n = valueNumel(rv);
       const w = rv.cls === "logical" ? 1 : rv.cls === "single" ? 4 : 8;
-      return n * w + (rv.imag ? n * w : 0);
+      const complex = isGpuArray(rv) ? rv.isComplex : !!rv.imag;
+      return n * w * (complex ? 2 : 1);
     }
     if (isRuntimeSparseMatrix(rv)) {
       const nnz = rv.pr.length;
@@ -1138,6 +1146,7 @@ export class Runtime {
     }
     // Single element: just return it
     if (flat.length === 1) return flat[0];
+    if (flat.some(isGpuArray)) return this.dispatch("horzcat", 1, flat);
     const mvals = flat.map(e =>
       typeof e === "number" ? null : ensureRuntimeValue(e)
     );
@@ -1158,6 +1167,7 @@ export class Runtime {
   public vertcat(rows: unknown[]): unknown {
     // Single element: just return it (vertcat(x) == x)
     if (rows.length === 1) return rows[0];
+    if (rows.some(isGpuArray)) return this.dispatch("vertcat", 1, rows);
     const mvals = rows.map(r =>
       typeof r === "number" ? null : ensureRuntimeValue(r)
     );

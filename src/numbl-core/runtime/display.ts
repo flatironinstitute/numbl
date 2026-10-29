@@ -22,6 +22,7 @@ import { valueClass, valueShape } from "./kinds.js";
 import { formatDatetimePattern } from "./datetime-format.js";
 import { MEXCEPTION_PROPERTIES } from "./mexception.js";
 import { getCurrentRuntime } from "./refcount.js";
+import { gatherValue } from "./gpu/gpuArray.js";
 import type { Runtime } from "./runtime.js";
 
 /** Format a value for display */
@@ -74,6 +75,8 @@ export function displayValue(v: RuntimeValue): string {
       return `  ${v.shape[0]}x${v.shape[1]} ${v.className} array`;
     case "string_array":
       return formatStringArray(v);
+    case "gpu_array":
+      return displayValue(gatherValue(v));
   }
 }
 

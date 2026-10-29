@@ -849,7 +849,7 @@ builtin({
 
 builtin({
   name: "struct",
-  accepts: { sparse: true },
+  accepts: { sparse: true, gpu: true },
   apply: args => {
     if (args.length === 0) return RTV.struct(new Map());
     if (args.length === 1) {
@@ -990,7 +990,7 @@ builtin({
 
 builtin({
   name: "deal",
-  accepts: { sparse: true },
+  accepts: { sparse: true, gpu: true },
   nargin: [0, Infinity],
   nargout: [0, Infinity],
   mfile: true,
