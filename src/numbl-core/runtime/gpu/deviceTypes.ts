@@ -37,6 +37,14 @@ export interface GpuDevice {
   ): HostArray;
   /** Wait for queued work to finish (`wait(D)`). */
   synchronize?(): void;
+  /** A gpuArray now uses `buffer` (several may: `reshape` shares it). */
+  retain?(buffer: unknown): void;
+  /** A gpuArray no longer uses `buffer`; the device frees it when nothing
+   *  does. Also frees an unused buffer, such as a kernel's intermediate. */
+  release?(buffer: unknown): void;
+  /** Bytes held by the device's arrays (`TotalMemory - AvailableMemory`),
+   *  when the device tracks them. */
+  usedMemory?(): number;
   /** Kernels the device runs natively (see runtime/gpu/kernels.ts); an
    *  operation without one runs on the host. */
   kernels?: GpuKernels;

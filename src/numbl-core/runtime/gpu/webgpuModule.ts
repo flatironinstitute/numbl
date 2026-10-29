@@ -17,10 +17,32 @@ export function gpuArrayModule() {
     return b;
   }
 
+  // Freed buffers are kept for reuse by size (up to POOL_BYTES), which
+  // saves the allocation and the zero-fill WebGPU gives a new buffer.
+  // Every kernel writes all of its output.
+  const pool = new Map<number, GPUBuffer[]>();
+  let pooled = 0;
+  const POOL_BYTES = 512 * 2 ** 20;
+
   function create(device: GPUDevice, id: number, n: number): GPUBuffer {
-    const b = device.createBuffer({ size: Math.max(4, n * 4), usage: usage() });
+    const size = Math.max(4, n * 4);
+    const free = pool.get(size);
+    let b = free?.pop();
+    if (b) pooled -= size;
+    else b = device.createBuffer({ size, usage: usage() });
     buffers.set(id, b);
     return b;
+  }
+
+  function recycle(b: GPUBuffer): void {
+    if (pooled + b.size > POOL_BYTES) {
+      b.destroy();
+      return;
+    }
+    pooled += b.size;
+    let list = pool.get(b.size);
+    if (!list) pool.set(b.size, (list = []));
+    list.push(b);
   }
 
   // ── Kernels ─────────────────────────────────────────────────────────
@@ -299,12 +321,8 @@ fn pow_(a: f32, b: f32) -> f32 {
       device: GPUDevice,
       args: { id: number; data: Float32Array<ArrayBuffer> }
     ) {
-      const b = device.createBuffer({
-        size: Math.max(4, args.data.byteLength),
-        usage: usage(),
-      });
+      const b = create(device, args.id, args.data.length);
       if (args.data.byteLength > 0) device.queue.writeBuffer(b, 0, args.data);
-      buffers.set(args.id, b);
     },
 
     async download(device: GPUDevice, args: { id: number; n: number }) {
@@ -327,7 +345,8 @@ fn pow_(a: f32, b: f32) -> f32 {
 
     free(_device: GPUDevice, args: { ids: number[] }) {
       for (const id of args.ids) {
-        buffers.get(id)?.destroy();
+        const b = buffers.get(id);
+        if (b) recycle(b);
         buffers.delete(id);
       }
     },
@@ -829,7 +848,10 @@ var<workgroup> Bs: array<f32, 256>;
   if (row < p.m && col < p.n) { C[row + col * p.m] = acc; }
 }`;
       if (args.k === 0) {
-        // An empty inner dimension gives zeros (the buffer starts zeroed).
+        // An empty inner dimension gives zeros.
+        const enc = device.createCommandEncoder();
+        enc.clearBuffer(out);
+        device.queue.submit([enc.finish()]);
         return;
       }
       await run(
@@ -878,6 +900,9 @@ struct P { m: u32, n: u32, w: u32, pad: u32 }
     dispose() {
       for (const b of buffers.values()) b.destroy();
       buffers.clear();
+      for (const list of pool.values()) for (const b of list) b.destroy();
+      pool.clear();
+      pooled = 0;
     },
   };
 }
