@@ -12,6 +12,7 @@ import { allocFloat64Array } from "../../runtime/alloc.js";
 
 builtin({
   name: "real",
+  singleOutputs: true,
   nargin: 1,
   apply: unaryRealResult(
     x => x,
@@ -24,6 +25,7 @@ builtin({
 
 builtin({
   name: "imag",
+  singleOutputs: true,
   nargin: 1,
   apply: unaryRealResult(
     () => 0,
@@ -36,6 +38,7 @@ builtin({
 
 builtin({
   name: "conj",
+  singleOutputs: true,
   nargin: 1,
   apply: args => {
     const v = denseNumericArg(args[0]);
@@ -55,6 +58,7 @@ builtin({
 
 builtin({
   name: "angle",
+  singleOutputs: true,
   nargin: 1,
   mfile: true,
   apply: unaryRealResult(

@@ -21,13 +21,15 @@ import { builtinError, denseNumericArg } from "./args.js";
 import { allocFloat64Array } from "../../runtime/alloc.js";
 import { parseShapeArgs, validateDim } from "../../helpers/shape-utils.js";
 import { sparseToDense } from "../../helpers/sparse-arithmetic.js";
+import { isSingle, toSingleResult } from "../../runtime/single.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
 // MATLAB's size constructors (zeros, ones, eye, rand, …) accept a trailing
 // class-name string — `zeros(2,3,'int32')` — and the `'like'` prototype form
-// — `zeros(sz,'like',p)`. numbl only has the double type, so we accept and
-// ignore the class spec rather than erroring on the extra arg.
+// — `zeros(sz,'like',p)`. A single class gives a single result
+// (`inRequestedClass`); numbl has no integer classes, so the other class
+// names are accepted and give double.
 
 /** Drop a trailing class-name spec from the runtime args (used in `apply`). */
 export function stripClassNameArgs(args: RuntimeValue[]): RuntimeValue[] {
@@ -44,6 +46,28 @@ export function stripClassNameArgs(args: RuntimeValue[]): RuntimeValue[] {
 }
 
 const isText = (v: RuntimeValue) => isRuntimeChar(v) || isRuntimeString(v);
+
+/** Whether a constructor's trailing class name or `'like', p` pair asks
+ *  for a single result. Other class names (integer, logical) are accepted
+ *  and give double. */
+export function requestsSingle(args: RuntimeValue[]): boolean {
+  const n = args.length;
+  if (
+    n >= 2 &&
+    isText(args[n - 2]) &&
+    toString(args[n - 2]).toLowerCase() === "like"
+  )
+    return isSingle(args[n - 1]);
+  return n >= 1 && isText(args[n - 1]) && toString(args[n - 1]) === "single";
+}
+
+/** A constructor's result in the class its arguments ask for. */
+export function inRequestedClass(
+  args: RuntimeValue[],
+  result: RuntimeValue
+): RuntimeValue {
+  return requestsSingle(args) ? toSingleResult(result, []) : result;
+}
 
 const ALL_NUMERIC_CLASSES = [
   "double",
@@ -168,8 +192,8 @@ function defineFill(name: string, idName: string, value: number): void {
     accepts: { sparse: true },
     apply: args => {
       const sizeArgs = sizeCtorArgs(args, spec);
-      if (sizeArgs.length === 0) return value;
-      return filled(sizeCtorShape(sizeArgs), value);
+      if (sizeArgs.length === 0) return inRequestedClass(args, value);
+      return inRequestedClass(args, filled(sizeCtorShape(sizeArgs), value));
     },
   });
 }
@@ -190,7 +214,7 @@ builtin({
       idName: "eye",
       classes: ALL_NUMERIC_CLASSES,
     });
-    if (sizeArgs.length === 0) return 1;
+    if (sizeArgs.length === 0) return inRequestedClass(args, 1);
     const shape = sizeCtorShape(sizeArgs);
     while (shape.length > 2 && shape[shape.length - 1] === 1) shape.pop();
     if (shape.length > 2)
@@ -202,7 +226,7 @@ builtin({
     const data = allocFloat64Array(rows * cols);
     const minDim = Math.min(rows, cols);
     for (let i = 0; i < minDim; i++) data[i * rows + i] = 1;
-    return makeTensor(data, undefined, [rows, cols]);
+    return inRequestedClass(args, makeTensor(data, undefined, [rows, cols]));
   },
 });
 
@@ -262,6 +286,7 @@ function linspaceData(start: number, end: number, n: number): Float64Array {
 
 builtin({
   name: "linspace",
+  singleOutputs: true,
   nargin: [2, 3],
   mfile: true,
   apply: args => {
@@ -280,6 +305,7 @@ builtin({
 
 builtin({
   name: "logspace",
+  singleOutputs: true,
   nargin: [2, 3],
   mfile: true,
   apply: args => {

@@ -31,6 +31,7 @@ import { makeTensor, mkc } from "./types.js";
 import { builtin } from "./builtin.js";
 import { undefinedForTypeError } from "./value-class.js";
 import { valueClass } from "../../runtime/kinds.js";
+import { getIBuiltin } from "../../runtime/builtinRegistry.js";
 import { builtinError, UNIMPLEMENTED_SPARSE_TYPE } from "./args.js";
 import { allocFloat64Array } from "../../runtime/alloc.js";
 import {
@@ -160,6 +161,62 @@ builtin({
   apply: args => singleApply(args[0]),
 });
 
+// ── cast ────────────────────────────────────────────────────────────────
+
+const CAST_CLASSES = new Set([
+  "double",
+  "single",
+  "logical",
+  "char",
+  "int8",
+  "int16",
+  "int32",
+  "int64",
+  "uint8",
+  "uint16",
+  "uint32",
+  "uint64",
+]);
+
+builtin({
+  name: "cast",
+  help: {
+    signatures: ["B = cast(A, newclass)", "B = cast(A, 'like', p)"],
+    description:
+      "Convert A to the class newclass, or to the class of p, by calling the conversion function of that class (double, single, logical, char, int8, ...).",
+  },
+  // cast(A, newclass), cast(A, 'like', p)
+  nargin: [2, 3],
+  mfile: true,
+  apply: args => {
+    let cls: string;
+    if (args.length === 3) {
+      if (
+        !(isRuntimeChar(args[1]) || isRuntimeString(args[1])) ||
+        toString(args[1]).toLowerCase() !== "like"
+      )
+        throw builtinError(
+          "MATLAB:cast:InvalidLikeInput",
+          "The second input must be 'like' when three inputs are given."
+        );
+      cls = valueClass(args[2]);
+    } else {
+      if (!(isRuntimeChar(args[1]) || isRuntimeString(args[1])))
+        throw builtinError(
+          "MATLAB:cast:InvalidClassName",
+          "The second input must be a character vector or string scalar naming a class."
+        );
+      cls = toString(args[1]);
+    }
+    if (!CAST_CLASSES.has(cls))
+      throw builtinError(
+        "MATLAB:cast:UnsupportedClass",
+        `Unsupported data type '${cls}'.`
+      );
+    return getIBuiltin(cls)!.call([args[0]], 1) as RuntimeValue;
+  },
+});
+
 // ── Integer types ───────────────────────────────────────────────────────
 //
 // numbl represents all numeric data as double-precision floats, so the
@@ -243,12 +300,11 @@ for (const { name, min, max } of INT_RANGES) {
 // ── typecast ────────────────────────────────────────────────────────────
 //
 // Reinterpret the raw bytes of a numeric array as another numeric class.
-// numbl stores all numerics as double, so the INPUT is treated as
-// double-precision (8 bytes/element) and its IEEE-754 little-endian bytes are
-// reinterpreted as the requested class. This is the "serialize to bytes"
-// direction (e.g. `typecast(double(x), 'uint8')` to write binary data); the
-// reverse (bytes -> double) is not supported because numbl cannot represent a
-// genuine integer-typed array.
+// A single input contributes 4 bytes per element and any other numeric input
+// 8 (numbl has no integer classes, so integer data is treated as double);
+// the IEEE-754 little-endian bytes are reinterpreted as the requested class.
+// A 'single' result is a single array; other results are double arrays
+// holding the reinterpreted values.
 
 const TYPECAST_VIEWS: Record<
   string,
@@ -269,7 +325,7 @@ builtin({
   help: {
     signatures: ["B = typecast(X, CLASS)"],
     description:
-      "Reinterpret the raw bytes of numeric array X as CLASS (e.g. 'uint8', 'single', 'int32'). numbl stores all numerics as double, so X is treated as double-precision; this is mainly for serializing numeric data to bytes, e.g. typecast(double(x), 'uint8').",
+      "Reinterpret the raw bytes of numeric array X as CLASS (e.g. 'uint8', 'single', 'int32'). A single X has 4 bytes per element; numbl has no integer classes, so other numeric X is treated as double (8 bytes per element), and integer results are double arrays holding the values.",
   },
   nargin: 2,
   accepts: {
@@ -288,8 +344,12 @@ builtin({
       );
     const cls = toString(clsArg).toLowerCase();
 
-    let src: Float64Array;
-    if (isRuntimeNumber(X)) src = Float64Array.of(X);
+    let src: Float64Array | Float32Array;
+    if (isSingle(X)) {
+      if (X.imag && !imagAllZero(X.imag))
+        throw new RuntimeError("typecast: complex input not supported");
+      src = Float32Array.from(X.data);
+    } else if (isRuntimeNumber(X)) src = Float64Array.of(X);
     else if (isRuntimeLogical(X)) src = Float64Array.of(X ? 1 : 0);
     else if (isRuntimeTensor(X)) {
       if (X.imag && !imagAllZero(X.imag))
@@ -316,7 +376,7 @@ builtin({
         );
       throw builtinError(
         "MATLAB:typecast:unsupportedClass",
-        `Data conversion from 'double' to '${toString(clsArg)}' is not supported.`
+        `Data conversion from '${isSingle(X) ? "single" : "double"}' to '${toString(clsArg)}' is not supported.`
       );
     }
 
@@ -328,7 +388,12 @@ builtin({
     const view = makeView(buffer);
     const out = allocFloat64Array(view.length);
     for (let i = 0; i < view.length; i++) out[i] = view[i];
-    return RTV.tensor(out, [1, view.length]);
+    return RTV.tensor(
+      out,
+      [1, view.length],
+      undefined,
+      cls === "single" ? "single" : "double"
+    );
   },
 });
 
@@ -685,6 +750,7 @@ function complexPart(
 
 builtin({
   name: "complex",
+  singleOutputs: true,
   nargin: [1, 2],
   apply: args => {
     if (args.length === 1) {

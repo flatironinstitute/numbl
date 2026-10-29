@@ -24,6 +24,7 @@ import { OpBin } from "../../ops/index.js";
 
 builtin({
   name: "atan2",
+  singleOutputs: true,
   nargin: 2,
   apply: args =>
     applyBinaryElemwise(
@@ -70,6 +71,7 @@ function minMaxBuiltin(mode: "min" | "max"): void {
 
   builtin({
     name: mode,
+    singleOutputs: [1],
     // min(A), min(A, B), min(A, [], dim), min(A, [], dim, flag)
     nargin: [1, 4],
     nargout: 2,
@@ -129,6 +131,7 @@ minMaxBuiltin("max");
 function realBinary(name: string, op: number): void {
   builtin({
     name,
+    singleOutputs: true,
     nargin: 2,
     apply: args =>
       applyBinaryElemwise(

@@ -36,6 +36,7 @@ import { toF64 } from "../../helpers/check-helpers.js";
 
 builtin({
   name: "gmres",
+  singleOutputs: [1, 3],
   accepts: { sparse: true },
   nargout: 5,
   mfile: true,

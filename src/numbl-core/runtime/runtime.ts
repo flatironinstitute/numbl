@@ -876,7 +876,8 @@ export class Runtime {
     if (isRuntimeLogical(rv)) return 1;
     if (isRuntimeTensor(rv)) {
       const n = rv.data.length;
-      return n * 8 + (rv.imag ? n * 8 : 0);
+      const w = rv.cls === "logical" ? 1 : rv.cls === "single" ? 4 : 8;
+      return n * w + (rv.imag ? n * w : 0);
     }
     if (isRuntimeSparseMatrix(rv)) {
       const nnz = rv.pr.length;

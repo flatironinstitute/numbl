@@ -724,6 +724,7 @@ function decompositionDivide(
 for (const name of ["mldivide", "mrdivide"] as const)
   classMethod(DEC_CLASS, {
     name,
+    singleOutputs: true,
     nargin: 2,
     apply: args => decompositionDivide(name, args[0], args[1]),
   });

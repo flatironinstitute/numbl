@@ -419,6 +419,7 @@ builtin({
 
 builtin({
   name: "spdiags",
+  singleOutputs: [1],
   accepts: { sparse: true },
   nargin: [1, 4],
   nargout: 2,

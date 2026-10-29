@@ -37,6 +37,7 @@ import { sparseToDense } from "../../helpers/sparse-arithmetic.js";
 import { getLapackBridge } from "../../native/lapack-bridge.js";
 import { linsolveLapack } from "../../helpers/linsolve.js";
 import { allocFloat64Array, withScratch } from "../../runtime/alloc.js";
+import { isSingle, singleScalar } from "../../runtime/single.js";
 
 const isText = (v: RuntimeValue) => isRuntimeChar(v) || isRuntimeString(v);
 const textOf = (v: RuntimeValue) =>
@@ -136,52 +137,101 @@ function epsOfScalar(x: number): number {
 const DOUBLE_EPS = 2.220446049250313e-16; // 2^-52
 const SINGLE_EPS = 1.1920928955078125e-7; // 2^-23
 
-const epsClassError = () =>
-  builtinError(
-    "MATLAB:eps:invalidClassName",
-    'Class name must be a class that supports EPS, such as "double" or "single".'
-  );
+/** eps of a single value: the distance to the next larger single in
+ *  magnitude (2^-149 below the smallest normal single). */
+function singleEpsOfScalar(x: number): number {
+  const a = Math.abs(x);
+  if (!Number.isFinite(a)) return NaN;
+  if (a < SINGLE_REALMIN) return 2 ** -149;
+  let e = Math.floor(Math.log2(a));
+  if (2 ** e > a) e--;
+  else if (2 ** (e + 1) <= a) e++;
+  return 2 ** (e - 23);
+}
+
+const SINGLE_REALMIN = 2 ** -126;
+
+/** The single or double value of a class-query builtin (`eps('single')`,
+ *  `realmax('like', p)`, ...) from its arguments, or null when the
+ *  arguments are not a class query. */
+function classQuery(
+  name: string,
+  args: RuntimeValue[],
+  dbl: number,
+  sgl: number
+): RuntimeValue | null {
+  if (args.length === 0) return dbl;
+  const v = args[0];
+  const classError = () =>
+    builtinError(
+      `MATLAB:${name}:invalidClassName`,
+      `Class name must be a class that supports ${name.toUpperCase()}, such as "double" or "single".`
+    );
+  if (args.length === 2) {
+    if (!(isText(v) && textOf(v) === "like"))
+      throw builtinError(
+        `MATLAB:${name}:mustBeLike`,
+        'With two input arguments, the first argument must be "like".'
+      );
+    return isSingle(args[1]) ? singleScalar(sgl) : dbl;
+  }
+  if (!isText(v)) return null;
+  const s = textOf(v);
+  if (s === "double") return dbl;
+  if (s === "single") return singleScalar(sgl);
+  throw classError();
+}
 
 builtin({
   name: "eps",
+  singleOutputs: true,
   // eps, eps(x), eps(classname), eps('like', p)
   nargin: [0, 2],
   apply: args => {
-    if (args.length === 0) return DOUBLE_EPS;
+    const q = classQuery("eps", args, DOUBLE_EPS, SINGLE_EPS);
+    if (q !== null) return q;
     const v = args[0];
-    if (args.length === 2) {
-      if (!(isText(v) && textOf(v) === "like"))
-        throw builtinError(
-          "MATLAB:eps:mustBeLike",
-          'With two input arguments, the first argument must be "like".'
-        );
-      return DOUBLE_EPS;
-    }
-    if (isText(v)) {
-      const s = textOf(v);
-      if (s === "double") return DOUBLE_EPS;
-      if (s === "single") return SINGLE_EPS;
-      throw epsClassError();
-    }
     let x: NumericArg;
     try {
       x = floatArg(v);
     } catch {
-      throw epsClassError();
+      throw builtinError(
+        "MATLAB:eps:invalidClassName",
+        'Class name must be a class that supports EPS, such as "double" or "single".'
+      );
     }
     // eps of a complex value is eps of its magnitude.
-    return unaryRealResult(
-      epsOfScalar,
-      (re, im) => epsOfScalar(Math.hypot(re, im)),
-      "eps"
-    )([x]);
+    const f = isSingle(v) ? singleEpsOfScalar : epsOfScalar;
+    return unaryRealResult(f, (re, im) => f(Math.hypot(re, im)), "eps")([x]);
   },
 });
+
+// realmax, realmin and flintmax with a class argument (the bare names are
+// constants).
+for (const [name, dbl, sgl] of [
+  ["realmax", Number.MAX_VALUE, 3.4028234663852886e38],
+  ["realmin", 2.2250738585072014e-308, SINGLE_REALMIN],
+  ["flintmax", 2 ** 53, 2 ** 24],
+] as const)
+  builtin({
+    name,
+    nargin: [0, 2],
+    mfile: true,
+    apply: args => {
+      const q = classQuery(name, args, dbl, sgl);
+      if (q !== null) return q;
+      throw builtinError(
+        `MATLAB:${name}:invalidClassName`,
+        `Class name must be a class that supports ${name.toUpperCase()}, such as "double" or "single".`
+      );
+    },
+  });
 
 // ── conv ─────────────────────────────────────────────────────────────
 
 builtin({
   name: "conv",
+  singleOutputs: true,
   accepts: { sparse: true },
   nargin: [2, 3],
   mfile: true,
@@ -372,6 +422,7 @@ function conv2Crop(
 
 builtin({
   name: "conv2",
+  singleOutputs: true,
   nargin: [2, 4],
   apply: args => {
     // Optional trailing shape string.
@@ -412,6 +463,7 @@ builtin({
 
 builtin({
   name: "deconv",
+  singleOutputs: true,
   nargin: 2,
   nargout: 2,
   mfile: true,
@@ -453,6 +505,7 @@ builtin({
 
 builtin({
   name: "polyval",
+  singleOutputs: true,
   // y = polyval(p, x), polyval(p, x, S, mu); [y, delta] is not supported
   nargin: [2, 4],
   nargout: 2,
@@ -563,6 +616,7 @@ builtin({
 
 builtin({
   name: "trapz",
+  singleOutputs: true,
   accepts: { sparse: true },
   nargin: [1, 3],
   mfile: true,
@@ -599,6 +653,7 @@ builtin({
 
 builtin({
   name: "cumtrapz",
+  singleOutputs: true,
   accepts: { sparse: true },
   nargin: [1, 3],
   mfile: true,
@@ -635,6 +690,7 @@ builtin({
 
 builtin({
   name: "gradient",
+  singleOutputs: true,
   nargin: [1, Infinity],
   nargout: 2,
   mfile: true,
@@ -1016,6 +1072,7 @@ builtin({
 
 builtin({
   name: "roots",
+  singleOutputs: true,
   nargin: 1,
   mfile: true,
   apply: args => {
@@ -1042,6 +1099,7 @@ builtin({
 
 builtin({
   name: "poly",
+  singleOutputs: true,
   nargin: 1,
   mfile: true,
   apply: args => {
@@ -1094,6 +1152,7 @@ builtin({
 
 builtin({
   name: "cov",
+  singleOutputs: true,
   accepts: { sparse: true },
   nargin: [1, Infinity],
   mfile: true,
@@ -1191,6 +1250,7 @@ builtin({
 
 builtin({
   name: "corrcoef",
+  singleOutputs: true,
   nargin: [1, Infinity],
   nargout: 4,
   mfile: true,

@@ -37,6 +37,7 @@ import {
   isRuntimeStructArray,
   stringArrayValue,
   structArrayValue,
+  type ElementClass,
 } from "../../runtime/types.js";
 import { builtin, type PlainBuiltinSpec } from "./builtin.js";
 import {
@@ -930,6 +931,7 @@ function repmatObjects(
 
 structAwareBuiltin({
   name: "repmat",
+  singleOutputs: true,
   nargin: [2, Infinity],
   mfile: true,
   apply: args => {
@@ -1597,14 +1599,14 @@ structAwareBuiltin({
 interface GridVec {
   re: Float64Array;
   im: Float64Array | undefined;
-  logical: boolean;
+  cls: ElementClass;
 }
 
 function gridVec(v: RuntimeValue, name: string): GridVec {
   if (isScalarValue(v)) v = scalarTensor(v, name);
   if (!isRuntimeTensor(v))
     throw new RuntimeError(`${name}: arguments must be numeric vectors`);
-  return { re: v.data, im: v.imag, logical: v.cls === "logical" };
+  return { re: v.data, im: v.imag, cls: v.cls };
 }
 
 /** The ndgrid outputs for `vecs` (one per output dimension). */
@@ -1615,7 +1617,7 @@ function ndgridOutputs(vecs: GridVec[]): RuntimeTensor[] {
   const totalElems = shape.reduce((acc, s) => acc * s, 1);
   const outputs: RuntimeTensor[] = [];
   for (let k = 0; k < n; k++) {
-    const { re, im, logical } = vecs[k];
+    const { re, im, cls } = vecs[k];
     const data = allocFloat64Array(totalElems);
     const imag = im ? allocFloat64Array(totalElems) : undefined;
     let stride = 1;
@@ -1626,12 +1628,8 @@ function ndgridOutputs(vecs: GridVec[]): RuntimeTensor[] {
       data[i] = re[j];
       if (imag) imag[i] = im![j];
     }
-    const out = RTV.tensor(
-      data,
-      [...shape],
-      imag,
-      logical ? "logical" : "double"
-    );
+    // Each output takes its own vector's class.
+    const out = RTV.tensor(data, [...shape], imag, cls);
     outputs.push(out);
   }
   return outputs;

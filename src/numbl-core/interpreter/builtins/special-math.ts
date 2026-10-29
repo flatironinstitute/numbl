@@ -132,6 +132,7 @@ for (const [name, fn, scaleFn, opCode] of besselDefs) {
   const scalesReal = name === "besseli" || name === "besselk";
   builtin({
     name,
+    singleOutputs: true,
     nargin: [2, 3],
     apply: args => {
       const { nu, z } = besselArgs(name, args[0], args[1]);
@@ -200,6 +201,7 @@ function besselhScalar(
 
 builtin({
   name: "besselh",
+  singleOutputs: true,
   // besselh(nu, z), besselh(nu, K, z), besselh(nu, K, z, scale)
   nargin: [2, 4],
   apply: args => {
@@ -328,6 +330,7 @@ function applyAiryElementwise(
 
 builtin({
   name: "airy",
+  singleOutputs: true,
   // airy(z), airy(k, z), airy(k, z, scale)
   nargin: [1, 3],
   apply: args => {
@@ -384,6 +387,7 @@ function ellipjScalar(
 
 builtin({
   name: "ellipj",
+  singleOutputs: true,
   // [sn, cn, dn] = ellipj(u, m), ellipj(u, m, tol)
   nargin: [0, 3],
   nargout: 3,

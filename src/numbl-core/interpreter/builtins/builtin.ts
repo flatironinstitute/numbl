@@ -36,6 +36,11 @@ import {
   type ArgKindPolicy,
 } from "../../runtime/argKinds.js";
 import { checkNargin, checkNargout } from "./args.js";
+import {
+  hasSingleArg,
+  isSingle,
+  toSingleResult,
+} from "../../runtime/single.js";
 
 /** An argument count: exactly `n`, or an inclusive range `[min, max]`
  *  (max may be Infinity). For `nargout`, a single number `n` means up to
@@ -83,7 +88,19 @@ interface BuiltinSpecBase {
    *  it through for a builtin that handles sparse itself, and
    *  `sparse: "error"` (or `{ identifier, message }`) rejects it. */
   accepts?: ArgKindPolicy;
+  /** The outputs that take a single argument's class (MATLAB: `sin`,
+   *  `sum`, `reshape`, the value but not the index of `max`, ...): when an
+   *  argument is single, these outputs are converted to single when they
+   *  are double (see runtime/single.ts). `true` means every output; a list
+   *  gives output positions, counting from 1; a function chooses from the
+   *  arguments (`sum(x, 'double')` is double). Other outputs stay as
+   *  `apply` returns them (`size`, `find`, an index output). */
+  singleOutputs?: SingleOutputs | ((args: RuntimeValue[]) => SingleOutputs);
 }
+
+/** Outputs that take a single argument's class: `true` (every output) or
+ *  1-based output positions. */
+export type SingleOutputs = true | readonly number[];
 
 export interface PlainBuiltinSpec extends BuiltinSpecBase {
   scope?: false;
@@ -129,6 +146,28 @@ function activeRuntime(): Runtime {
   return rt as Runtime;
 }
 
+const NO_OUTPUTS: readonly number[] = [];
+
+/** The results of a call with a single argument: each declared output (see
+ *  `singleOutputs`) as single, and every single output rounded (a builtin
+ *  that builds its result from `v.cls` may hold values computed in
+ *  double). */
+function singleResults(
+  result: RuntimeValue | RuntimeValue[],
+  outputs: SingleOutputs,
+  args: RuntimeValue[]
+): RuntimeValue | RuntimeValue[] {
+  const one = (v: RuntimeValue, pos: number): RuntimeValue =>
+    outputs === true || outputs.includes(pos)
+      ? toSingleResult(v, args)
+      : isSingle(v)
+        ? toSingleResult(v, args)
+        : v;
+  if (!Array.isArray(result))
+    return result === undefined ? result : one(result, 1);
+  return result.map((v, i) => one(v, i + 1));
+}
+
 /** Build the IBuiltin for a spec without registering it. */
 export function makeBuiltin(spec: BuiltinSpec): IBuiltin {
   const { name } = spec;
@@ -159,6 +198,7 @@ export function makeBuiltin(spec: BuiltinSpec): IBuiltin {
     : plain;
   const apply = spec.apply as BuiltinApply;
   const policy = resolveArgPolicy(name, spec.accepts);
+  const singleOutputs = spec.singleOutputs ?? NO_OUTPUTS;
 
   return {
     name,
@@ -169,7 +209,15 @@ export function makeBuiltin(spec: BuiltinSpec): IBuiltin {
       checkNargin(args.length, inMin, inMax, mfile);
       checkNargout(n, outMin, outMax, mfile);
       const result = apply(applyArgPolicy(policy, args), n, ctx);
-      return isVoid ? undefined : (result as RuntimeValue | RuntimeValue[]);
+      if (isVoid) return undefined;
+      if (!hasSingleArg(args)) return result as RuntimeValue | RuntimeValue[];
+      return singleResults(
+        result as RuntimeValue | RuntimeValue[],
+        typeof singleOutputs === "function"
+          ? singleOutputs(args)
+          : singleOutputs,
+        args
+      );
     },
   };
 }
