@@ -12,6 +12,7 @@
  */
 
 import { isGpuArray } from "./gpu/gpuArray.js";
+import { flushPendingGpu } from "./gpu/fusion.js";
 import {
   type RuntimeValue,
   type RuntimeLogical,
@@ -455,6 +456,7 @@ export class Runtime {
     } finally {
       this.currentScope = prev;
       scope.drain(this);
+      flushPendingGpu();
     }
   }
 

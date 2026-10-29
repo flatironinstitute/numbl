@@ -57,6 +57,19 @@ export type KernelOperand =
   | { buffer: unknown; n: number; strides?: number[] }
   | { scalar: number };
 
+/** A fused element-wise expression over `n` elements: buffer inputs (of
+ *  `n` elements or 1), scalars, and nodes in evaluation order, each an
+ *  element-wise operation (`plus`, `sin`, ...) on inputs, scalars or
+ *  earlier nodes. The last node is the result. */
+export interface FusedExpr {
+  n: number;
+  inputs: { buffer: unknown; n: number }[];
+  scalars: number[];
+  nodes: { op: string; args: FusedRef[] }[];
+}
+
+export type FusedRef = { in: number } | { s: number } | { t: number };
+
 /** Linear offsets into column-major data: `start + k*step`, or
  *  `offsets[k]`, for k < n. */
 export interface KernelSelection {
@@ -80,6 +93,9 @@ export interface GpuKernels {
     n: number,
     dims?: number[]
   ): unknown;
+  /** Evaluate a fused expression in one kernel (a device that fuses
+   *  element-wise operations defines it). */
+  fused?(expr: FusedExpr): unknown;
   /** `elementwise` for an operation with a real domain (`sqrt`, `log`,
    *  `power`, ...), waiting for it: also whether an element was outside
    *  the domain (its real result is NaN). */

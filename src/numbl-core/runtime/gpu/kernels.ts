@@ -26,12 +26,16 @@ import type {
   KernelSelection,
 } from "./device.js";
 import { checkExists, firstGpuArg, toGpuArray } from "./gpuArray.js";
+import { fuse } from "./fusion.js";
+import { getCurrentRuntime } from "../refcount.js";
 import { singleTensor } from "../single.js";
 import { RuntimeError } from "../error.js";
 import { planIndex, planStore, type Selection } from "../indexPlan.js";
 
 interface Arg {
   op: KernelOperand;
+  /** The gpuArray, for an array operand. */
+  gpu?: RuntimeGpuArray;
   cls: ElementClass;
   /** The gpuArray's shape; null for a host scalar. */
   shape: number[] | null;
@@ -55,10 +59,20 @@ function kernelArg(
 ): Arg | null {
   if (v instanceof RuntimeGpuArray) {
     if (v.device !== device || v.isComplex || v.cls === "double") return null;
-    if (!k.holds(v.buffer)) return null;
+    // A lazy array is on the device; reading its buffer would compute it.
+    if (!v.lazy && !k.holds(v.buffer)) return null;
     checkExists(v);
     const n = numelOf(v.shape);
-    return { op: { buffer: v.buffer, n }, cls: v.cls, shape: v.shape, n };
+    return {
+      // The buffer is read (computing a lazy array) only when needed.
+      get op() {
+        return { buffer: v.buffer, n };
+      },
+      gpu: v,
+      cls: v.cls,
+      shape: v.shape,
+      n,
+    };
   }
   if (typeof v === "number")
     return { op: { scalar: v }, cls: "double", shape: null, n: 1 };
@@ -148,15 +162,31 @@ export function elementwiseKernel(
   if (LOGICAL_RESULT.has(op)) cls = "logical";
   else if (xs.some(x => x.cls === "single")) cls = "single";
   else return null; // a double result (logical + 1, abs of a logical, ...)
+  // On a device that fuses, the result is a lazy array (see fusion.ts),
+  // inside a statement (whose end computes what remains).
+  if (
+    dk.k.fused &&
+    !broadcast &&
+    !DOMAIN_OPS.has(op) &&
+    getCurrentRuntime()?.currentScope
+  )
+    return fuse(
+      dk.device,
+      op,
+      xs.map(x =>
+        x.gpu ? { gpu: x.gpu } : { scalar: (x.op as { scalar: number }).scalar }
+      ),
+      numelOf(shape),
+      shape.slice(),
+      cls
+    );
   let dims: number[] | undefined;
+  if (broadcast && shape.length > 4) return null;
   let ops = xs.map(x => x.op);
   if (broadcast) {
-    if (shape.length > 4) return null;
     dims = [...shape, 1, 1, 1].slice(0, 4);
-    ops = xs.map(x =>
-      "scalar" in x.op
-        ? x.op
-        : { ...x.op, strides: expandStrides(x.shape!, dims!) }
+    ops = ops.map((o, i) =>
+      "scalar" in o ? o : { ...o, strides: expandStrides(xs[i].shape!, dims!) }
     );
   }
   const n = numelOf(shape);

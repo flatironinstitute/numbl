@@ -1,4 +1,4 @@
-import type { GpuDevice } from "./gpu/deviceTypes.js";
+import type { FusedExpr, GpuDevice } from "./gpu/deviceTypes.js";
 import {
   Refcounted,
   type RefcountRuntime,
@@ -489,27 +489,52 @@ export class RuntimeClassInstanceArray extends Refcounted {
  *  runtime/gpu/. */
 export class RuntimeGpuArray extends Refcounted {
   readonly kind = "gpu_array" as const;
+  private _buffer: unknown;
+  /** A pending element-wise expression (see runtime/gpu/fusion.ts): the
+   *  array is computed when its buffer is first read. The expression holds
+   *  its input buffers until then. */
+  lazy: FusedExpr | null;
 
   constructor(
     readonly device: GpuDevice,
-    readonly buffer: unknown,
+    buffer: unknown,
     readonly shape: number[],
     /** The underlying class (`underlyingType`). */
     readonly cls: ElementClass,
     readonly isComplex: boolean,
-    readonly generation: number
+    readonly generation: number,
+    lazy: FusedExpr | null = null
   ) {
     super();
-    device.retain?.(buffer);
+    this._buffer = buffer;
+    this.lazy = lazy;
+    if (!lazy) device.retain?.(buffer);
+  }
+
+  /** The device buffer, computing a pending expression first. */
+  get buffer(): unknown {
+    const e = this.lazy;
+    if (e) {
+      this._buffer = this.device.kernels!.fused!(e);
+      this.device.retain?.(this._buffer);
+      this.lazy = null;
+      for (const x of e.inputs) this.device.release?.(x.buffer);
+    }
+    return this._buffer;
   }
 
   shallowClone(): RuntimeGpuArray {
     return this;
   }
 
-  /** Release the device buffer when the last reference goes. */
+  /** Release the device buffer (or a pending expression's inputs) when
+   *  the last reference goes. */
   protected _destroy(): void {
-    this.device.release?.(this.buffer);
+    const e = this.lazy;
+    if (e) {
+      this.lazy = null;
+      for (const x of e.inputs) this.device.release?.(x.buffer);
+    } else this.device.release?.(this._buffer);
   }
 }
 
