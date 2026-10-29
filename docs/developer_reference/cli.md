@@ -41,7 +41,7 @@ The full option list is the `--help` output, mirrored in [docs/agents.md](../age
 
 - At `--opt 2`, `--dump-js` and `--dump-c` can be used together: C-JIT kernels land in the `--dump-c` file and the JS-JIT units that picked up the rest in the `--dump-js` file.
 - `--profile <file>` (run/eval) writes per-builtin timing JSON, which `numbl show-profile <file>` pretty-prints. Neither is listed in `--help`.
-- `NUMBL_CC` selects the C compiler for the C-JIT (default `cc`) and `NUMBL_NO_QHULL` skips loading the qhull WASM backend. Neither is listed in `--help`.
+- `NUMBL_CC` selects the C compiler for the C-JIT (default `cc`), `NUMBL_CJIT_CACHE` the directory of compiled C-JIT objects (default `~/.cache/numbl/c-jit`; point it at an empty directory to time cold compiles), and `NUMBL_NO_QHULL` skips loading the qhull WASM backend. None of them is listed in `--help`.
 
 ## Stream protocol
 
