@@ -8,7 +8,6 @@ import {
   RuntimeTensor,
   RuntimeComplexNumber,
   isRuntimeComplexNumber,
-  isRuntimeSparseMatrix,
   isRuntimeTensor,
 } from "../../runtime/types.js";
 import {
@@ -19,8 +18,7 @@ import {
   realElem,
 } from "../../ops/index.js";
 import { RTV } from "../../runtime/constructors.js";
-import { numericArg } from "./args.js";
-import { sparseToDense } from "../../helpers/sparse-arithmetic.js";
+import { denseNumericArg, numericArg } from "./args.js";
 import { allocFloat64Array } from "../../runtime/alloc.js";
 
 // ── Shared helpers ──────────────────────────────────────────────────────
@@ -51,8 +49,6 @@ export function applyUnaryElemwise(
   name: string,
   op?: number
 ): RuntimeValue {
-  if (isRuntimeSparseMatrix(v))
-    return applyUnaryElemwise(sparseToDense(v), realFn, complexFn, name, op);
   if (typeof v === "boolean") return realFn(v ? 1 : 0);
   if (typeof v === "number") return realFn(v);
 
@@ -98,14 +94,6 @@ function applyUnaryElemwiseMaybeComplex(
   name: string,
   op?: number
 ): RuntimeValue {
-  if (isRuntimeSparseMatrix(v))
-    return applyUnaryElemwiseMaybeComplex(
-      sparseToDense(v),
-      realFn,
-      complexFn,
-      name,
-      op
-    );
   if (typeof v === "boolean") v = (v ? 1 : 0) as unknown as RuntimeValue;
   if (typeof v === "number") {
     const r = realFn(v);
@@ -191,8 +179,6 @@ function applyUnaryRealResult(
   name: string,
   op?: number
 ): RuntimeValue {
-  if (isRuntimeSparseMatrix(v))
-    return applyUnaryRealResult(sparseToDense(v), realFn, complexFn, name, op);
   if (typeof v === "boolean") return realFn(v ? 1 : 0);
   if (typeof v === "number") return realFn(v);
 
@@ -259,8 +245,9 @@ export interface UnaryElemwiseFns {
 //
 // Each returns an `apply` for `builtin({ nargin: 1, apply })`. Input goes
 // through `numericArg`, so logical and char input are handled the way MATLAB
-// handles them, sparse input is densified, and any other type raises
-// MATLAB's invalid-data-type error.
+// handles them, and any other type raises MATLAB's invalid-data-type error.
+// Sparse input never arrives: the builtins take the default argument policy,
+// which densifies it.
 
 type UnaryApply = (args: RuntimeValue[]) => RuntimeValue;
 
@@ -309,8 +296,7 @@ export function unaryPredicate(
   complexTest: (re: number, im: number) => boolean
 ): UnaryApply {
   return args => {
-    let v = numericArg(args[0]);
-    if (isRuntimeSparseMatrix(v)) v = sparseToDense(v);
+    const v = denseNumericArg(args[0]);
     if (typeof v === "number") return realTest(v);
     if (isRuntimeComplexNumber(v)) return complexTest(v.re, v.im);
     const n = v.data.length;

@@ -136,6 +136,7 @@ function buildSparseFromTriplets(
 
 builtin({
   name: "sparse",
+  accepts: { sparse: true },
   nargin: [1, 6],
   apply: args => {
     if (args.length === 4)
@@ -319,6 +320,7 @@ builtin({
 
 builtin({
   name: "speye",
+  accepts: { sparse: true },
   nargin: [0, 3],
   apply: rawArgs => {
     const args = [...rawArgs];
@@ -366,6 +368,7 @@ builtin({
 
 builtin({
   name: "spconvert",
+  accepts: { sparse: true },
   nargin: 1,
   mfile: true,
   apply: args => {
@@ -416,6 +419,7 @@ builtin({
 
 builtin({
   name: "spdiags",
+  accepts: { sparse: true },
   nargin: [1, 4],
   nargout: 2,
   mfile: true,

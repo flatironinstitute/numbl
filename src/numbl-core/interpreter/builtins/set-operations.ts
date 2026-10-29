@@ -291,6 +291,7 @@ function setInputClassError(
 
 builtin({
   name: "find",
+  accepts: { sparse: true },
   nargin: [1, 3],
   nargout: 3,
   apply: (args, nargout) => {
@@ -464,6 +465,7 @@ function parseSortArgs(args: RuntimeValue[]): {
 
 builtin({
   name: "sort",
+  accepts: { sparse: true },
   nargin: [1, Infinity],
   nargout: 2,
   apply: (args, nargout) => {
@@ -885,6 +887,7 @@ function defineSetOp(
     nargin: [2, 4],
     nargout: kind === "setdiff" ? 2 : 3,
     mfile: true,
+    accepts: { sparse: true },
     apply: (args, nargout) => {
       const { rows, order } = parseSetOptions(args, kind);
       if (!rows && isTextSetOp(args[0], args[1]))
@@ -948,6 +951,7 @@ builtin({
 
 builtin({
   name: "ismembc",
+  accepts: { sparse: true },
   nargin: 2,
   apply: (args, nargout) => ismemberApply(args, nargout),
 });
@@ -1080,6 +1084,7 @@ function ismembertolMatrix(
 
 builtin({
   name: "ismembertol",
+  accepts: { sparse: true },
   nargin: [2, Infinity],
   nargout: 2,
   apply: (args, nargout) => {
@@ -1202,6 +1207,7 @@ builtin({
 
 builtin({
   name: "nnz",
+  accepts: { sparse: true },
   nargin: 1,
   apply: args => {
     const v = numericArg(args[0]);
@@ -1221,6 +1227,7 @@ builtin({
 
 builtin({
   name: "nonzeros",
+  accepts: { sparse: true },
   nargin: 1,
   apply: args => {
     const v = args[0];
@@ -1311,6 +1318,7 @@ function parseSortrowsArgs(
 
 builtin({
   name: "sortrows",
+  accepts: { sparse: true },
   nargin: [1, Infinity],
   nargout: 2,
   mfile: true,
@@ -1367,6 +1375,7 @@ builtin({
 
 builtin({
   name: "unique",
+  accepts: { sparse: true },
   nargin: [1, 4],
   nargout: 3,
   mfile: true,
@@ -1651,6 +1660,7 @@ function uniqueElements(
 
 builtin({
   name: "uniquetol",
+  accepts: { sparse: true },
   nargin: [1, Infinity],
   nargout: 3,
   apply: (args, nargout) => {
@@ -1792,6 +1802,7 @@ function uniquetolElements(
 // index of its last occurrence in the sorted array s (0 if absent).
 builtin({
   name: "ismembc2",
+  accepts: { sparse: true },
   nargin: 2,
   apply: args => {
     const toFlat = (v: RuntimeValue): ArrayLike<number> => {

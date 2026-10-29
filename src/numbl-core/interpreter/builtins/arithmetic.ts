@@ -5,7 +5,6 @@
 import {
   isRuntimeChar,
   isRuntimeComplexNumber,
-  isRuntimeSparseMatrix,
   isRuntimeString,
   isRuntimeTensor,
   type RuntimeValue,
@@ -59,7 +58,6 @@ function minMaxBuiltin(mode: "min" | "max"): void {
         typeof v === "number" ||
         isRuntimeTensor(v) ||
         isRuntimeComplexNumber(v) ||
-        isRuntimeSparseMatrix(v) ||
         isRuntimeChar(v)
       )
     )

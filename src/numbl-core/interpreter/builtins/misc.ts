@@ -99,6 +99,7 @@ builtin({
 
 builtin({
   name: "odeset",
+  accepts: { sparse: true },
   mfile: true,
   apply: args => {
     const fields = new Map<string, RuntimeValue>();
@@ -332,6 +333,7 @@ for (const [name, fillVal] of [
 ] as const) {
   builtin({
     name,
+    accepts: { sparse: true },
     apply: rawArgs => {
       // true/false accept a trailing 'logical' class spec; numbl ignores it.
       const args = stripClassNameArgs(rawArgs);
@@ -421,6 +423,8 @@ for (const [binop, op] of opMap) {
     nargin: 2,
     // mpower is an M-file in MATLAB.
     mfile: name === "mpower",
+    // The operators' own code, which handles sparse operands.
+    accepts: { sparse: true },
     apply: args => {
       if (name === "eq" || name === "ne") {
         const h = handleEquality(args[0], args[1], name === "eq");
@@ -431,9 +435,19 @@ for (const [binop, op] of opMap) {
   });
 }
 
-builtin({ name: "uminus", nargin: 1, apply: args => mNeg(args[0]) });
+builtin({
+  name: "uminus",
+  nargin: 1,
+  accepts: { sparse: true },
+  apply: args => mNeg(args[0]),
+});
 
-builtin({ name: "uplus", nargin: 1, apply: args => uplusOp(args[0]) });
+builtin({
+  name: "uplus",
+  nargin: 1,
+  accepts: { sparse: true },
+  apply: args => uplusOp(args[0]),
+});
 
 // ── Dummy/placeholder builtins ──────────────────────────────────────────
 
@@ -458,6 +472,7 @@ for (const name of ["ishandle", "ishghandle", "isgraphics"]) {
     name,
     // ishghandle(h, type) and isgraphics(h, type) also take a type name.
     nargin: name === "ishandle" ? 1 : [1, 2],
+    accepts: { sparse: true },
     apply: args => {
       const v = args[0];
       if (isRuntimeDummyHandle(v) || isRuntimeGraphicsHandle(v))
@@ -598,6 +613,7 @@ function parulaColormap(m: number): RuntimeValue {
 
 builtin({
   name: "parula",
+  accepts: { sparse: true },
   nargin: [0, 1],
   mfile: true,
   apply: args => {
@@ -636,6 +652,7 @@ function ensureBucket(rt: Runtime, key: number): Map<string, RuntimeValue> {
 
 builtin({
   name: "setappdata",
+  accepts: { sparse: true },
   nargin: 3,
   nargout: 0,
   apply: (args, _nargout, ctx) => {

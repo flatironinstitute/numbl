@@ -8,11 +8,7 @@
  * logical, and char input and reject complex input.
  */
 
-import {
-  isRuntimeTensor,
-  isRuntimeSparseMatrix,
-  type RuntimeValue,
-} from "../../runtime/types.js";
+import { isRuntimeTensor, type RuntimeValue } from "../../runtime/types.js";
 import { RTV } from "../../runtime/constructors.js";
 import { toBool } from "../../runtime/index.js";
 import { not as notOp } from "../../runtime/runtimeOperators.js";
@@ -28,14 +24,7 @@ function applyBinaryLogical(
 ): RuntimeValue {
   const a = realNumericArg(args[0]);
   const b = realNumericArg(args[1]);
-  if (
-    isRuntimeTensor(a) ||
-    isRuntimeSparseMatrix(a) ||
-    isRuntimeTensor(b) ||
-    isRuntimeSparseMatrix(b)
-  ) {
-    return mLogical(op, a, b);
-  }
+  if (isRuntimeTensor(a) || isRuntimeTensor(b)) return mLogical(op, a, b);
   return RTV.logical(scalarFn(toBool(a), toBool(b)));
 }
 

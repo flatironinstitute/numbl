@@ -2,13 +2,9 @@
  * Complex number builtins: real, imag, conj, angle.
  */
 
-import {
-  isRuntimeComplexNumber,
-  isRuntimeSparseMatrix,
-} from "../../runtime/types.js";
-import { sparseToDense } from "../../helpers/sparse-arithmetic.js";
+import { isRuntimeComplexNumber } from "../../runtime/types.js";
 import { builtin } from "./builtin.js";
-import { numericArg } from "./args.js";
+import { denseNumericArg } from "./args.js";
 import { unaryRealResult, mkc, makeTensor } from "./types.js";
 import { allocFloat64Array } from "../../runtime/alloc.js";
 
@@ -42,10 +38,9 @@ builtin({
   name: "conj",
   nargin: 1,
   apply: args => {
-    let v = numericArg(args[0]);
+    const v = denseNumericArg(args[0]);
     if (typeof v === "number") return v;
     if (isRuntimeComplexNumber(v)) return mkc(v.re, -v.im);
-    if (isRuntimeSparseMatrix(v)) v = sparseToDense(v);
     const n = v.data.length;
     const outR = allocFloat64Array(n);
     outR.set(v.data);

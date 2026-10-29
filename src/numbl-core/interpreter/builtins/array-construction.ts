@@ -17,7 +17,7 @@ import type { RuntimeValue } from "../../runtime/types.js";
 import { toString, numel } from "../../runtime/index.js";
 import { makeTensor, mkc } from "./types.js";
 import { builtin } from "./builtin.js";
-import { builtinError, numericArg } from "./args.js";
+import { builtinError, denseNumericArg } from "./args.js";
 import { allocFloat64Array } from "../../runtime/alloc.js";
 import { parseShapeArgs, validateDim } from "../../helpers/shape-utils.js";
 import { sparseToDense } from "../../helpers/sparse-arithmetic.js";
@@ -165,6 +165,7 @@ function defineFill(name: string, idName: string, value: number): void {
   };
   builtin({
     name,
+    accepts: { sparse: true },
     apply: args => {
       const sizeArgs = sizeCtorArgs(args, spec);
       if (sizeArgs.length === 0) return value;
@@ -209,10 +210,9 @@ builtin({
 
 /** A scalar endpoint for linspace/logspace as [re, im]. */
 function scalarEndpoint(v: RuntimeValue): [number, number] {
-  const a = numericArg(v);
-  if (typeof a === "number") return [a, 0];
-  if (isRuntimeComplexNumber(a)) return [a.re, a.im];
-  const t = isRuntimeSparseMatrix(a) ? sparseToDense(a) : a;
+  const t = denseNumericArg(v);
+  if (typeof t === "number") return [t, 0];
+  if (isRuntimeComplexNumber(t)) return [t.re, t.im];
   if (t.data.length !== 1)
     throw builtinError(
       "MATLAB:linspace:scalarInputs",

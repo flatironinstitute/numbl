@@ -18,11 +18,25 @@ Builtins are defined with `builtin(spec)` (`interpreter/builtins/builtin.ts`):
 - `scope`: set to `true` when the builtin needs the calling scope (below).
 - `apply(args, nargout, ctx)`: the implementation, on runtime values. It returns one value, or an array when `nargout > 1`. `ctx.name` is the builtin's name and `ctx.rt` the active `Runtime` (output, file I/O, figures, search path).
 
-There are no argument-type rules. `apply` sees whatever values the caller passed and must reject what it cannot handle; `args.ts` provides coercion helpers that raise MATLAB's errors instead of silently dropping data (`numericArg`, `realNumericArg`, `realScalarArg`, `boolToNumber`, `builtinError`). For unary element-wise math, `types.ts` provides ready-made applies: `unaryElemwise`, `unaryRealResult`, and `unaryPredicate`.
+- `accepts`: how the builtin takes the non-dense value kinds (below). Default: every such argument is converted first.
+
+Apart from the argument-kind policy below, there are no argument-type rules. `apply` sees whatever values the caller passed and must reject what it cannot handle; `args.ts` provides coercion helpers that raise MATLAB's errors instead of silently dropping data (`numericArg`, `realNumericArg`, `realScalarArg`, `boolToNumber`, `builtinError`). For unary element-wise math, `types.ts` provides ready-made applies: `unaryElemwise`, `unaryRealResult`, and `unaryPredicate`.
 
 Arity is checked before `apply` runs, using MATLAB's messages and identifiers: "Not enough input arguments." (`MATLAB:minrhs`), "Too many input arguments." (`MATLAB:maxrhs`, or `MATLAB:TooManyInputs` with `mfile`), "Too many output arguments." (`MATLAB:maxlhs`, or `MATLAB:TooManyOutputs` with `mfile`). `nargin(@name)` reports the maximum input count, or -1 when it is unbounded (MATLAB reports -1 for nearly all variadic builtins, e.g. `zeros`, `numel`, `fprintf`). `nargout(@name)` likewise reports the maximum output count, or -1 when it is unbounded. For user functions both come from the declaration (negative when the last parameter is `varargin` / `varargout`), and anonymous functions report `nargout` -1.
 
-`builtin()` registers an `IBuiltin`: the name, help, normalized `nargin` / `nargout` ranges, and a `call(args, nargout)` that checks arity and runs `apply`. `.numbl.js` user functions are wrapped as the same shape (`jsUserFunctions.ts`).
+`builtin()` registers an `IBuiltin`: the name, help, normalized `nargin` / `nargout` ranges, and a `call(args, nargout)` that checks arity, applies the argument-kind policy and runs `apply`.
+
+## Argument kinds: sparse and other non-dense values
+
+Some value kinds are storage variants of an ordinary array that most builtins have no code for. Today that is the sparse matrix. Rather than have every builtin test for it, a builtin declares the kinds it handles in `accepts`, and the call wrapper `builtin()` builds applies a per-kind policy to every argument after the arity check and before `apply` runs (`runtime/argKinds.ts`):
+
+- `accepts: { sparse: true }`: the builtin receives sparse matrices as they are. Builtins with sparse code paths declare this: `sum`, `find`, `nnz`, `transpose`, `reshape`, `kron`, `chol`, the operator builtins (`plus`, `mtimes`, ...), the type and shape queries (`size`, `numel`, `class`, `isa`, `isempty`, the `is*` predicates), and builtins that store or pass on a value unchanged (`struct`, `setfield`, `deal`, `feval`, `cellfun`, `subsasgn`, the dictionary functions, the validators).
+- omitted, or `sparse: "convert"`: a sparse argument is converted to a dense tensor first, so `apply` never sees one. This matches MATLAB for the many functions that return full results for sparse input (`meshgrid`, `poly`, `num2str`, the plotting functions, ...). It is also what numbl did before for most element-wise math (`sin`, `exp`, `abs`), where MATLAB keeps the result sparse; those remain a known divergence.
+- `sparse: { identifier, message }`: a sparse argument raises that error, for the functions MATLAB defines only for full input (`int8` and the other integer classes, `char`, the bit operations, `erf`, `gamma`, `svd`, `pinv`, `rank`, `null`, `linsolve`, `pagemtimes`, `qz`, `jsonencode`, `typecast`, `sprintf`, `fprintf`). `sparse: "error"` uses a generic message.
+
+The policy is resolved once per builtin and costs one property lookup per argument; the argument list is copied only when an argument is converted. It applies wherever a builtin is called (directly, through a handle, `feval`, `builtin(...)`, `cellfun`, method dispatch), including the methods registered with `classMethod`. Name resolution runs first, so a method of an argument's class (a classdef method, or one registered from TypeScript) is chosen before any builtin, and the method's own `accepts` then applies.
+
+A new kind plugs in by adding a rule to `RULES` in `argKinds.ts` (its policy key, the default conversion, the generic error) and a key to `ArgKindPolicy`. For example, an array held in device memory would be gathered to a host tensor by default, so every existing builtin keeps working on it; builtins with device implementations would declare `accepts: { gpu: true }`. Nothing else in the builtins needs to change. Values nested in cells or structs are not converted; a builtin that looks inside containers handles the kinds it finds there. `.numbl.js` user functions are wrapped as the same shape (`jsUserFunctions.ts`).
 
 ## Builtins that need the runtime or the caller's scope
 
