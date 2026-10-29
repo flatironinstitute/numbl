@@ -62,6 +62,13 @@ v = single(rand(1, 100000));
 same(sum(gpuArray(v)), sum(v), 1e-5);
 same(GA * GC, A * C, 1e-5);
 same(GA' * GA, A' * A, 1e-5);
+% large tiles, with partial tiles at the edges; a matrix-vector product
+L = single(rand(531, 77)) - 0.5;
+R = single(rand(77, 467)) - 0.5;
+same(gpuArray(L) * gpuArray(R), L * R, 1e-5);
+M = single(rand(600, 300));
+x = single(rand(300, 1));
+same(gpuArray(M) * gpuArray(x), M * x, 1e-5);
 
 % functions with a real domain, inside it
 P = gpuArray(abs(A) + single(0.1));
