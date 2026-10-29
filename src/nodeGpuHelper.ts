@@ -51,5 +51,15 @@ parentPort.on("message", data => self.onmessage && self.onmessage({ data }));
     void worker.terminate();
     return null;
   }
-  return gpuHelperClient(worker, ready, Promise.resolve());
+  const helper = gpuHelperClient(worker, ready, Promise.resolve());
+  // Dawn aborts the process if its device is still alive when the worker is
+  // torn down at exit, so release it first.
+  process.once("exit", () => {
+    try {
+      helper.shutdown();
+    } catch {
+      // ignore
+    }
+  });
+  return helper;
 }

@@ -13,7 +13,12 @@
 import { RuntimeError } from "../error.js";
 import type { GpuDevice } from "./deviceTypes.js";
 
-export type { GpuDevice, HostArray } from "./deviceTypes.js";
+export type {
+  GpuDevice,
+  GpuKernels,
+  HostArray,
+  KernelOperand,
+} from "./deviceTypes.js";
 
 /** A host's GPU devices and which one is selected. */
 export class GpuDeviceSet {

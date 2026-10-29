@@ -13,7 +13,7 @@
 
 import { RuntimeTensor, type ElementClass } from "../types.js";
 import { allocFloat64Array } from "../alloc.js";
-import type { GpuDevice } from "./device.js";
+import type { GpuDevice, GpuKernels, KernelOperand } from "./device.js";
 import { gpuArrayModule } from "./webgpuModule.js";
 
 /** What the device needs of a GPU helper (`GpuHelper` in src/gpuHelper.ts). */
@@ -30,8 +30,11 @@ type WebGpuBuffer =
   | { id: number; imagId: number; n: number }
   | { host: Float64Array; hostImag: Float64Array | undefined };
 
-export class WebGpuDevice implements GpuDevice {
+type DeviceBuffer = { id: number; imagId: number; n: number };
+
+export class WebGpuDevice implements GpuDevice, GpuKernels {
   readonly supportsDouble = false;
+  readonly kernels: GpuKernels = this;
   generation = 0;
   private nextId = 1;
   private readonly freed = new FinalizationRegistry<number[]>(ids =>
@@ -96,6 +99,83 @@ export class WebGpuDevice implements GpuDevice {
 
   synchronize(): void {
     this.helper.call(MODULE, "synchronize");
+  }
+
+  // ── Kernels ─────────────────────────────────────────────────────────
+
+  holds(buffer: unknown): boolean {
+    return !("host" in (buffer as WebGpuBuffer));
+  }
+
+  elementwise(op: string, inputs: KernelOperand[], n: number): DeviceBuffer {
+    const out = this.result(n);
+    this.helper.post(MODULE, "elementwise", {
+      out: out.id,
+      op,
+      n,
+      inputs: inputs.map(x =>
+        "scalar" in x
+          ? { scalar: x.scalar }
+          : { id: (x.buffer as DeviceBuffer).id, n: x.n }
+      ),
+    });
+    return out;
+  }
+
+  reduce(
+    op: string,
+    src: unknown,
+    inner: number,
+    len: number,
+    outer: number
+  ): DeviceBuffer {
+    const out = this.result(inner * outer);
+    this.helper.post(MODULE, "reduce", {
+      out: out.id,
+      op,
+      src: (src as DeviceBuffer).id,
+      inner,
+      len,
+      outer,
+    });
+    return out;
+  }
+
+  matmul(
+    a: unknown,
+    b: unknown,
+    m: number,
+    k: number,
+    n: number
+  ): DeviceBuffer {
+    const out = this.result(m * n);
+    this.helper.post(MODULE, "matmul", {
+      out: out.id,
+      a: (a as DeviceBuffer).id,
+      b: (b as DeviceBuffer).id,
+      m,
+      k,
+      n,
+    });
+    return out;
+  }
+
+  transpose(src: unknown, m: number, n: number): DeviceBuffer {
+    const out = this.result(m * n);
+    this.helper.post(MODULE, "transpose", {
+      out: out.id,
+      src: (src as DeviceBuffer).id,
+      m,
+      n,
+    });
+    return out;
+  }
+
+  /** A new buffer id for a kernel's result of `n` elements. */
+  private result(n: number): DeviceBuffer {
+    const b = { id: this.nextId++, imagId: 0, n };
+    this.freed.register(b, [b.id]);
+    return b;
   }
 
   private send(data: Float64Array): number {

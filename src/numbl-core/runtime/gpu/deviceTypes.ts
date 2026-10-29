@@ -37,4 +37,34 @@ export interface GpuDevice {
   ): HostArray;
   /** Wait for queued work to finish (`wait(D)`). */
   synchronize?(): void;
+  /** Kernels the device runs natively (see runtime/gpu/kernels.ts); an
+   *  operation without one runs on the host. */
+  kernels?: GpuKernels;
+}
+
+/** A kernel operand: a device buffer of `n` elements (1 broadcasts), or a
+ *  scalar. */
+export type KernelOperand = { buffer: unknown; n: number } | { scalar: number };
+
+/** Kernels over real f32 data. Each returns the result's buffer; the
+ *  caller has checked the operands and shapes. */
+export interface GpuKernels {
+  /** Whether `buffer` is in device memory and can be a kernel operand. */
+  holds(buffer: unknown): boolean;
+  /** An element-wise operation (`plus`, `lt`, `sin`, ...) over `n`
+   *  elements. */
+  elementwise(op: string, inputs: KernelOperand[], n: number): unknown;
+  /** `sum`, `prod`, `max` or `min` (NaN skipped) over the middle dimension
+   *  of `src` viewed as [inner, len, outer]. */
+  reduce(
+    op: string,
+    src: unknown,
+    inner: number,
+    len: number,
+    outer: number
+  ): unknown;
+  /** a (m x k) * b (k x n). */
+  matmul(a: unknown, b: unknown, m: number, k: number, n: number): unknown;
+  /** The transpose of src (m x n). */
+  transpose(src: unknown, m: number, n: number): unknown;
 }

@@ -37,6 +37,8 @@ export interface GpuHelper {
    *  made, posted or not; an error from a posted call is raised by the next
    *  `call`. */
   post(name: string, method: string, args?: unknown): void;
+  /** Release the GPU device, waiting until it is gone. */
+  shutdown(): void;
   /** Resolves when the helper worker has started (or failed to). A run
    *  before then would find it unstarted, so hosts await this first (it is
    *  part of the host's `ready`). */
@@ -125,6 +127,27 @@ function helperMain(
       }
     },
     request(cmd, body, reply) {
+      if (cmd === "shutdown") {
+        // Release the modules' resources and the device, and wait until
+        // the device is gone.
+        enqueue(async () => {
+          for (const entry of modules.values()) {
+            const dispose = entry.mod?.dispose;
+            if (typeof dispose === "function") dispose();
+          }
+          if (devP) {
+            const d = await devP.catch(() => null);
+            if (d) {
+              d.destroy();
+              await d.lost;
+            }
+          }
+        }).then(
+          () => reply.ok(null),
+          err => reply.error(message(err))
+        );
+        return;
+      }
       if (cmd !== "call") {
         reply.error("gpu: unknown request " + cmd);
         return;
@@ -224,6 +247,9 @@ export function gpuHelperClient(
     },
     post(name, method, args) {
       channel().post(worker, "call", { name, method, args });
+    },
+    shutdown() {
+      if (Atomics.load(ready, 0) === 1) channel().request(worker, "shutdown");
     },
   };
 }
