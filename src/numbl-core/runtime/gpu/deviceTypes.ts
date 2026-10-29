@@ -70,6 +70,12 @@ export interface FusedExpr {
 
 export type FusedRef = { in: number } | { s: number } | { t: number };
 
+/** An operand of a complex element-wise kernel: a buffer's real part and
+ *  imaginary part (null for real data), or a complex scalar. */
+export type ComplexOperand =
+  | { re: unknown; im: unknown | null; n: number; strides?: number[] }
+  | { scalar: [number, number] };
+
 /** Linear offsets into column-major data: `start + k*step`, or
  *  `offsets[k]`, for k < n. */
 export interface KernelSelection {
@@ -79,11 +85,48 @@ export interface KernelSelection {
   offsets: Uint32Array | null;
 }
 
-/** Kernels over real f32 data. Each returns the result's buffer; the
- *  caller has checked the operands and shapes. */
+/** Kernels over f32 data. Each returns the result's buffer; the caller
+ *  has checked the operands and shapes. Except for `celementwise` and
+ *  `fft`, the kernels take real data: a complex array is processed as its
+ *  real and imaginary parts (`parts`), each a real buffer. */
 export interface GpuKernels {
   /** Whether `buffer` is in device memory and can be a kernel operand. */
   holds(buffer: unknown): boolean;
+  /** A complex buffer from real buffers `re` and `im` of as many
+   *  elements. It takes them over: they are not released separately. */
+  complex(re: unknown, im: unknown): unknown;
+  /** The real and imaginary parts of a complex buffer, as real buffers
+   *  that share its memory: kernel operands while the complex buffer is
+   *  in use, never a gpuArray's buffer, and never released. */
+  parts(buffer: unknown): { re: unknown; im: unknown };
+  /** A complex element-wise operation (`plus`, `times`, `exp`, `abs`,
+   *  ...) over `n` elements, broadcast as in `elementwise`. The result is
+   *  complex, or real for an operation with a real result (`abs`, `eq`,
+   *  ...). */
+  celementwise(
+    op: string,
+    inputs: ComplexOperand[],
+    n: number,
+    complexResult: boolean,
+    dims?: number[]
+  ): unknown;
+  /** The discrete Fourier transform (or its inverse) of length `n` over
+   *  the middle dimension of `src` (real or complex) viewed as
+   *  [inner, len, outer]: each sequence is padded with zeros or truncated
+   *  to `n`. The result, [inner, n, outer], is complex; with `symmetric`
+   *  (an inverse transform), the second half of each sequence is taken to
+   *  mirror the first, and the result is real. Null when the device
+   *  cannot run it (the data is too large). */
+  fft(
+    src: unknown,
+    isComplex: boolean,
+    inner: number,
+    len: number,
+    outer: number,
+    n: number,
+    inverse: boolean,
+    symmetric: boolean
+  ): unknown;
   /** An element-wise operation (`plus`, `lt`, `sin`, ...) over `n`
    *  elements; with `dims` (at most 4), the operands are broadcast to the
    *  result's dimensions by their `strides`. */

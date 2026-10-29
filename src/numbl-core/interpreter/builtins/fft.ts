@@ -495,10 +495,73 @@ builtin({
   apply: args => withScratch(() => applyFFT(args, false)),
 });
 
+/** `ifft(Y, n, dim, 'symmetric')`: the inverse transform of Y with the
+ *  second half of each sequence (after padding or truncating it to n)
+ *  replaced by the conjugate mirror of the first, which is real. */
+function symmetricIfft(args: RuntimeValue[]): RuntimeValue {
+  const x0 = fftDataArg(args[0]);
+  const x: RuntimeTensor = isRuntimeTensor(x0)
+    ? x0
+    : RTV.tensor(
+        Float64Array.of(isRuntimeNumber(x0) ? x0 : x0.re),
+        [1, 1],
+        isRuntimeComplexNumber(x0) ? Float64Array.of(x0.im) : undefined
+      );
+  const nArg = scalarOptArg(args[1], () =>
+    builtinError(
+      "MATLAB:fftfcn:lengthNotNonNegInt",
+      "FFT length must be a nonnegative integer scalar."
+    )
+  );
+  const dimArg = scalarOptArg(
+    args[2],
+    () => new RuntimeError("fft: dim must be a positive integer scalar")
+  );
+  const shape = x.shape.slice();
+  let dim: number;
+  if (dimArg !== undefined) {
+    dim = Math.round(dimArg) - 1;
+    if (dim < 0) throw new RuntimeError("fft: dim out of range");
+  } else {
+    dim = shape.findIndex(s => s > 1);
+    if (dim === -1) dim = 0;
+  }
+  while (shape.length <= dim) shape.push(1);
+  const len = shape[dim];
+  const n = nArg !== undefined ? Math.round(nArg) : len;
+  if (n <= 0) throw new RuntimeError("fft: n must be a positive integer");
+  let inner = 1;
+  for (let d = 0; d < dim; d++) inner *= shape[d];
+  let outer = 1;
+  for (let d = dim + 1; d < shape.length; d++) outer *= shape[d];
+  const outShape = shape.slice();
+  outShape[dim] = n;
+  const re = allocFloat64Array(inner * n * outer);
+  const im = allocFloat64Array(inner * n * outer);
+  for (let o = 0; o < outer; o++)
+    for (let i = 0; i < inner; i++)
+      for (let q = 0; q < n; q++) {
+        const mirror = 2 * q > n;
+        const src = mirror ? n - q : q;
+        if (src >= len) continue;
+        const from = i + src * inner + o * inner * len;
+        const to = i + q * inner + o * inner * n;
+        re[to] = x.data[from];
+        const v = x.imag ? x.imag[from] : 0;
+        im[to] = mirror ? -v : v;
+      }
+  const y = applyFFT(
+    [RTV.tensor(re, outShape, im), n, dim + 1],
+    true
+  ) as RuntimeValue;
+  if (isRuntimeTensor(y)) return RTV.tensor(y.data, y.shape);
+  return isRuntimeComplexNumber(y) ? y.re : y;
+}
+
 builtin({
   name: "ifft",
   singleOutputs: true,
-  // ifft(Y, n, dim, symflag); only 'nonsymmetric' (the default) is supported
+  // ifft(Y, n, dim, symflag)
   nargin: [1, 4],
   accepts: { sparse: true },
   apply: args => {
@@ -506,9 +569,10 @@ builtin({
     const last = args[args.length - 1];
     if (args.length >= 2 && (isRuntimeChar(last) || isRuntimeString(last))) {
       const f = (isRuntimeChar(last) ? last.value : String(last)).toLowerCase();
-      if (f !== "nonsymmetric")
+      if (f !== "nonsymmetric" && f !== "symmetric")
         throw new RuntimeError(`ifft: the '${f}' option is not supported`);
       rest = args.slice(0, -1);
+      if (f === "symmetric") return withScratch(() => symmetricIfft(rest));
     }
     return withScratch(() => applyFFT(rest, true));
   },
