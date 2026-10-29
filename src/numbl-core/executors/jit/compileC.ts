@@ -1,17 +1,9 @@
 /**
- * Browser-safe surface for the koffi C-JIT pipeline.
- *
- * The real implementation (`compileAndLoadCImpl`) lives in
- * `compileC.node.ts` because it imports Node-only modules (`node:fs`,
- * `node:child_process`, `node:os`, `node:crypto`) that vite/rollup
- * cannot bundle for the browser. The CLI's bootstrap registers the
- * Node implementation here at startup via `setCompileAndLoadCImpl()`;
- * any browser bundle leaves it unregistered, so the koffi-backed
- * executors decline (their proposals already gate on
- * `bridge.koffi !== undefined`).
- *
- * Types stay in this file so the koffi executors can import them
- * without dragging Node-only deps into the static dep graph.
+ * Types of the koffi C-JIT pipeline, kept apart from the Node-only
+ * implementation (`compileC.node.ts`, which imports `node:fs`,
+ * `node:child_process`, ...) so modules the browser bundle reaches can
+ * import them. The C backend itself reaches a run only through its host
+ * (`NumblHost.cjit`, installed by `nodeCJitBackend` in `cjit.node.ts`).
  */
 
 import type { NativeBridge } from "../../workspace/types.js";
@@ -47,44 +39,3 @@ export type CompileAndLoadCImpl = (
   declaration: string,
   bridge: NativeBridge
 ) => CompiledC;
-
-let impl: CompileAndLoadCImpl | null = null;
-
-/** Install the Node-side C-JIT implementation. Called by `cli.ts`
- *  during CLI bootstrap; browser bundles never call this, so `impl`
- *  stays null and the koffi executors decline. */
-export function setCompileAndLoadCImpl(fn: CompileAndLoadCImpl): void {
-  impl = fn;
-}
-
-/** Compile (or look up cached) and load. Delegates to whatever was
- *  registered via `setCompileAndLoadCImpl()`; throws if no
- *  implementation is available (= running in a browser host that
- *  somehow got past the koffi executor's `bridge.koffi` gate). */
-export function compileAndLoadC(
-  source: string,
-  declaration: string,
-  bridge: NativeBridge
-): CompiledC {
-  if (impl === null) {
-    throw new Error(
-      "compileAndLoadC: no Node-side implementation registered " +
-        "(call setCompileAndLoadCImpl from cli.ts during bootstrap)"
-    );
-  }
-  return impl(source, declaration, bridge);
-}
-
-/** Read a previously-compiled C source from disk. Diagnostic helper.
- *  Set alongside the main impl in the Node bootstrap. */
-let readCachedCSourceImpl: ((hash: string) => string | null) | null = null;
-
-export function setReadCachedCSourceImpl(
-  fn: (hash: string) => string | null
-): void {
-  readCachedCSourceImpl = fn;
-}
-
-export function readCachedCSource(hash: string): string | null {
-  return readCachedCSourceImpl?.(hash) ?? null;
-}

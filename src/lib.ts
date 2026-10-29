@@ -20,10 +20,25 @@ export type { ExecSessionInit } from "./numbl-core/execSession.js";
 // pass one as ExecOptions.session to share it between executeCode calls.
 export { SessionState } from "./numbl-core/sessionState.js";
 
-// Delaunay triangulation (delaunay/delaunayn) is backed by the qhull WASM
-// module, which loads asynchronously. Call loadDelaunayBackend() once before
-// running code that uses those builtins; otherwise they throw.
-// setDelaunayBackend lets you supply a custom backend (e.g. a browser loader).
+// Host capabilities (numeric providers, geometry backends, C-JIT, native
+// libraries, gpu): pass a host as ExecOptions.host or to ExecSession; runs
+// without one use defaultHost(). In Node, initNodePlatform ("numbl/node")
+// fills one.
+export { createHost, defaultHost } from "./numbl-core/host.js";
+export type {
+  NumblHost,
+  NumblHostInit,
+  GeometryBackends,
+  DelaunayBackend,
+  ConvexHullBackend,
+} from "./numbl-core/host.js";
+export { ProviderStack } from "./numbl-core/native/lapack-bridge.js";
+export type { LapackProvider } from "./numbl-core/native/lapack-bridge.js";
+
+// Delaunay triangulation and convex hulls are backed by the qhull WASM
+// module, which loads asynchronously. loadDelaunayBackend(host?) installs it
+// into a host (default: the process-default host); initNodePlatform does this
+// too. setDelaunayBackend (deprecated) sets the default host's backend.
 export { loadQhullNodeBackend as loadDelaunayBackend } from "./numbl-core/native/qhull-node.js";
 export { setDelaunayBackend } from "./numbl-core/native/geometry-bridge.js";
 

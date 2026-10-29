@@ -20,6 +20,7 @@ import {
   validateManifest,
   type WasmLapackExports,
 } from "./wasm-lapack-bridge.js";
+import type { ProviderStack } from "./lapack-bridge.js";
 
 /** Persistent byte cache (e.g. IndexedDB) for wasm binaries, keyed by URL.
  *  Optional; failures must be non-fatal. */
@@ -36,6 +37,8 @@ export interface LoadWasmLapackDeps {
     imports: WebAssembly.Imports
   ) => Promise<WebAssembly.Instance>;
   cache?: WasmByteCache;
+  /** Where to install it (default: the process-default host's stack). */
+  stack?: ProviderStack;
 }
 
 let currentUrl: string | null = null;
@@ -50,7 +53,7 @@ export function ensureWasmLapackBridge(
   deps: LoadWasmLapackDeps = {}
 ): Promise<boolean> {
   if (!url) {
-    uninstallWasmLapackBridge();
+    uninstallWasmLapackBridge(deps.stack);
     currentUrl = null;
     inflight = null;
     return Promise.resolve(false);
@@ -141,7 +144,7 @@ async function load(
     makeImportObject()
   );
   const exports = instance.exports as unknown as WasmLapackExports;
-  const res = installWasmLapackBridge(exports, manifest);
+  const res = installWasmLapackBridge(exports, manifest, deps.stack);
   return res.matmul;
 }
 

@@ -46,6 +46,9 @@ test.describe("IDE", () => {
         "disp('hello from main')\n" +
         "y = helper(20);\n" +
         "fprintf('y=%d\\n', y);\n" +
+        // qhull is a capability of the worker's host (browserHost.ts).
+        "t = delaunay([0 1 0 1], [0 0 1 1]);\n" +
+        "fprintf('tri=%d\\n', size(t, 1));\n" +
         "plot(1:10, (1:10).^2);\n",
       "helper.m": "function r = helper(x)\n  r = x + 1;\nend\n",
       "bad.m": "disp('before error')\nerror('boom here');\n",
@@ -53,6 +56,7 @@ test.describe("IDE", () => {
     await runButton(page).click();
     await expect(output(page)).toContainText("hello from main");
     await expect(output(page)).toContainText("y=21");
+    await expect(output(page)).toContainText("tri=2");
     await expect(page.getByRole("tab", { name: "Figure 1" })).toBeVisible();
     await expect(runButton(page)).toBeVisible();
 

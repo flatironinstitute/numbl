@@ -2,7 +2,7 @@
 // ("numbl" = src/lib.ts, "numbl/node" = src/node.ts) are imported.
 import { describe, it, expect } from "vitest";
 import { execSync } from "node:child_process";
-import { executeCode, ExecSession } from "../lib.js";
+import { createHost, defaultHost, executeCode, ExecSession } from "../lib.js";
 import { initNodePlatform } from "../node.js";
 
 const platform = await initNodePlatform({ native: false });
@@ -40,6 +40,33 @@ describe("initNodePlatform", () => {
     );
     expect(result.variableValues.s).toBe(338350);
     expect(langs).toContain("c");
+  });
+
+  it.skipIf(!canCJit)("fills the default host, so runs need no bridge", () => {
+    expect(platform.host).toBe(defaultHost());
+    const langs: string[] = [];
+    executeCode(LOOP, {
+      optimization: "2",
+      onJitCompile: (_desc, _code, lang) => langs.push(lang),
+    });
+    expect(langs).toContain("c");
+  });
+
+  it("fills a separate host without touching the default", async () => {
+    const host = createHost();
+    const p = await initNodePlatform({ host, native: false, cjit: false });
+    expect(p.host).toBe(host);
+    expect(host.cjit).toBeUndefined();
+    expect(host.geometry.delaunay).toBeDefined();
+    expect(defaultHost().cjit).toBeDefined();
+    const langs: string[] = [];
+    const r = executeCode(LOOP, {
+      host,
+      optimization: "2",
+      onJitCompile: (_desc, _code, lang) => langs.push(lang),
+    });
+    expect(r.variableValues.s).toBe(338350);
+    expect(langs).not.toContain("c");
   });
 });
 

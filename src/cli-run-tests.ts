@@ -12,10 +12,8 @@ import {
   getSourceForFile,
 } from "./numbl-core/diagnostics";
 import type { OptLevel } from "./numbl-core/executors/plugins.js";
-import type {
-  NativeBridge,
-  WorkspaceFile,
-} from "./numbl-core/workspace/types.js";
+import type { WorkspaceFile } from "./numbl-core/workspace/types.js";
+import type { NumblHost } from "./numbl-core/host.js";
 import { NodeFileIOAdapter } from "./cli-fileio.js";
 import { NodeSystemAdapter } from "./cli-system.js";
 import { findTestScripts, scanMFiles } from "./cli-scan.js";
@@ -35,7 +33,7 @@ export function runTestScript(
   source: string,
   options: {
     optimization?: OptLevel;
-    nativeBridge?: NativeBridge;
+    host?: NumblHost;
     workspaceFiles?: WorkspaceFile[];
   } = {}
 ): { output: string; lastLine: string } {
@@ -46,11 +44,11 @@ export function runTestScript(
       optimization: options.optimization ?? "1",
       fileIO: new NodeFileIOAdapter(),
       system: new NodeSystemAdapter(),
+      host: options.host,
     },
     options.workspaceFiles ?? testScriptWorkspace(filepath),
     filepath,
-    [dirname(filepath)],
-    options.nativeBridge
+    [dirname(filepath)]
   );
   const output = result.output.join("");
   const lines = output.split("\n").filter(l => l.length > 0);
@@ -60,7 +58,7 @@ export function runTestScript(
 export function runTests(
   dir: string,
   optimization: OptLevel,
-  nativeBridge: NativeBridge | undefined
+  host: NumblHost
 ): void {
   const testFiles = findTestScripts(resolve(process.cwd(), dir));
 
@@ -80,7 +78,7 @@ export function runTests(
     try {
       const { output, lastLine } = runTestScript(filepath, source, {
         optimization,
-        nativeBridge,
+        host,
         workspaceFiles,
       });
       if (lastLine === "SUCCESS") {

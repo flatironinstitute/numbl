@@ -94,7 +94,7 @@ A `JitBackend` supplies:
 
 | Member              | JS (`jsBackend.ts`)                            | C (`cBackend.ts`)                                                        |
 | ------------------- | ---------------------------------------------- | ------------------------------------------------------------------------ |
-| `available`         | always                                         | `interp.nativeBridge.koffi` present                                      |
+| `available`         | always                                         | `interp.rt.host.nativeBridge.koffi` present                              |
 | `accepts`           | any input type but `Unknown`                   | input types with a C declaration (`compilerTypeToCDecl`)                 |
 | `compile`           | `compileSpec` → `new Function` → spec function | `compileSpecC` → `cc -shared` → koffi `dlopen`                           |
 | `invoke`            | `numblToJit` / `jitToNumbl` around the JS call | `marshalInputs` / out-pointer buffers / `unmarshal*` around the FFI call |
@@ -149,7 +149,7 @@ Streaming means user output callbacks (`onOutput`) run while compiled code is on
 | 1       | jit-top-level, jit-loop, jit-call                                                        |
 | 2       | cjit-top-level, cjit-loop, cjit-call, then jit-top-level, jit-loop, jit-call (Node only) |
 
-The C backend is not imported by `plugins.ts`. `initNodePlatform` (`src/node-platform.ts`, used by the CLI and exported from `numbl/node`) calls `registerNodeCompileC()` (`executors/jit/compileC.node.ts`), which installs the `cc` + koffi compile/load implementation behind the browser-safe stub in `compileC.ts` and registers `cBackend` with `registerCJitBackend`. The browser worker bundle never imports `compileC.node.ts`, so the Node modules and the C compile graph stay out of the web build; there, and whenever `koffi` is unavailable, `--opt 2` behaves like `--opt 1`.
+The C backend is not imported by `plugins.ts`: `registerExecutorsForOpt(registry, opt, host)` takes it from the run's host (`host.cjit`, see [architecture.md](architecture.md#host-capabilities)). `initNodePlatform` (`src/node-platform.ts`, used by the CLI and exported from `numbl/node`) puts it there with `nodeCJitBackend()` (`executors/jit/cjit.node.ts`), together with the koffi bridge (`host.nativeBridge`). Only that module imports `cBackend.ts` and, through it, `compileC.node.ts` (`cc` + koffi compile/load), so the Node modules and the C compile graph stay out of the web build; there, and whenever `koffi` is unavailable, `--opt 2` behaves like `--opt 1`.
 
 ## Files
 

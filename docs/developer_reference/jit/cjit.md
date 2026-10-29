@@ -35,7 +35,7 @@ Program output reaches the host through a koffi callback while the call runs, so
 
 ## Native compile/load
 
-The `cc`-invoke + koffi `dlopen` step lives in `executors/jit/compileC.node.ts` (Node only; uses `node:fs`/`node:child_process`). It is wired in behind a browser-safe stub (`compileC.ts`) via `registerNodeCompileC()`, called by `initNodePlatform` (`src/node-platform.ts`; the CLI and `numbl/node` hosts). Compiled `.so`s are cached on disk keyed by a hash of the flags + C source. Without `cc` or `koffi`, the C-JIT executors decline and `--opt 2` behaves like `--opt 1`.
+The `cc`-invoke + koffi `dlopen` step lives in `executors/jit/compileC.node.ts` (Node only; uses `node:fs`/`node:child_process`). `cBackend.ts` calls it directly; the backend reaches a run through its host (`host.cjit`, set from `nodeCJitBackend()` in `cjit.node.ts` by `initNodePlatform` in `src/node-platform.ts`), and `compileC.ts` keeps only the types. Compiled `.so`s are cached on disk keyed by a hash of the flags + C source. Without `cc` or `koffi`, the C-JIT executors decline and `--opt 2` behaves like `--opt 1`.
 
 ## When it helps
 

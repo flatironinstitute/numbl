@@ -17,8 +17,7 @@ import { formatExecuteError } from "../workerErrorFormat.js";
 import { channelInput } from "../inputChannel.js";
 import { fetchMipCoreFiles, MIP_MARKER_PATH, MIP_SEARCH_PATH } from "./mip.js";
 import { SystemStore } from "./system-store.js";
-import { startGpuHelper } from "../gpuHelper.js";
-import { setJsGpuHelper } from "../numbl-core/jsUserFunctions.js";
+import { bootBrowserHost } from "../browserHost.js";
 import type {
   BootMessage,
   FromWorker,
@@ -28,15 +27,15 @@ import type {
 
 const post = (msg: FromWorker) => self.postMessage(msg);
 
-// Spawn the WebGPU helper now: a worker created during a (synchronous) run
-// would not start until the run ends. See gpuHelper.ts.
-setJsGpuHelper(startGpuHelper());
+// The worker's capabilities (the WebGPU helper; no qhull or wasm
+// accelerator, see browserHost.ts). `boot` waits for `host.ready`.
+const host = bootBrowserHost();
 
 let vfs: VirtualFileSystem | null = null;
 let store: SystemStore | null = null;
 // Workspace state carried across `execute` calls (REPL semantics), including
 // the live uihtml session that `dispatch` re-enters.
-const session = new ExecSession();
+const session = new ExecSession({ host });
 const components: UihtmlComponent[] = [];
 // Files written before boot finishes are stashed and applied once the VFS exists.
 const pendingWrites: { path: string; content: string | Uint8Array }[] = [];
@@ -94,6 +93,7 @@ async function persistSystemChanges() {
 }
 
 async function boot(msg: BootMessage) {
+  await host.ready;
   vfs = new VirtualFileSystem();
   if (msg.mip) session.extraSearchPaths = [MIP_SEARCH_PATH];
   optimization = msg.optimization;

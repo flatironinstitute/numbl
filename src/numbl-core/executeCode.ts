@@ -28,6 +28,7 @@ import { parseMFile } from "./parser/index.js";
 import { Interpreter } from "./interpreter/interpreter.js";
 import { stdlibFiles, shimFiles } from "./stdlib-bundle.js";
 import { SessionState } from "./sessionState.js";
+import { defaultHost, type NumblHost } from "./host.js";
 import { registerExecutorsForOpt } from "./executors/plugins.js";
 import { pushCurrentRuntime, popCurrentRuntime } from "./runtime/refcount.js";
 import {
@@ -69,9 +70,15 @@ export interface ExecOptions {
   /** Override or add builtins for this execution only. */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   customBuiltins?: Record<string, (nargout: number, args: any[]) => any>;
-  /** Platform-specific file I/O adapter (e.g. Node.js fs). */
+  /** The platform's capabilities (numeric providers, geometry backends,
+   *  C-JIT, native libraries, gpu; see host.ts). An `ExecSession` passes its
+   *  own; when omitted the run uses the process-default host. */
+  host?: NumblHost;
+  /** Platform-specific file I/O adapter (e.g. Node.js fs); default
+   *  `host.fileIO`. */
   fileIO?: FileIOAdapter;
-  /** Platform-specific system adapter (env vars, cwd, platform info). */
+  /** Platform-specific system adapter (env vars, cwd, platform info);
+   *  default `host.system`. */
   system?: SystemAdapter;
   /** Synchronous callback for the `input()` builtin. Displays prompt, returns user's line. */
   onInput?: (prompt: string) => string;
@@ -158,14 +165,26 @@ export interface FigureHandles {
 
 // ── Implementation ──────────────────────────────────────────────────────
 
+/**
+ * Parse and run `source`. `nativeBridge` is the older way to give the run a
+ * koffi bridge; it overrides `host.nativeBridge` for this run.
+ */
 export function executeCode(
   source: string,
   options: ExecOptions = {},
   workspaceFiles?: WorkspaceFile[],
   mainFileName: string = "script.m",
   searchPaths?: string[],
+  /** @deprecated Set `nativeBridge` on the host (`initNodePlatform` does). */
   nativeBridge?: NativeBridge
 ): ExecResult {
+  const host = runHost(options.host ?? defaultHost(), nativeBridge);
+  options = {
+    ...options,
+    host,
+    fileIO: options.fileIO ?? host.fileIO,
+    system: options.system ?? host.system,
+  };
   // ── 1. Parse main file ──────────────────────────────────────────────
   const ast = parseMFile(source, mainFileName);
 
@@ -188,7 +207,7 @@ export function executeCode(
     mainFileName,
     source,
     options.fileIO && fileIOView(options.fileIO),
-    nativeBridge
+    host
   );
   ws.load(
     workspaceFiles ?? [],
@@ -209,7 +228,7 @@ export function executeCode(
 
   // ── 3. Create runtime ──────────────────────────────────────────────
   const session = options.session ?? new SessionState();
-  const rt = new Runtime(options, session);
+  const rt = new Runtime(options, session, host);
   const baseEnv = session.baseEnv;
   baseEnv.rt = rt;
   if (options.initialVariableValues) {
@@ -243,12 +262,11 @@ export function executeCode(
   ws.onFileRemoved = name => interpreter.fileSources.delete(name);
 
   interpreter.optimization = options.optimization ?? "1";
-  interpreter.nativeBridge = nativeBridge;
   interpreter.log = options.log;
 
   // Register mode-specific executor plugins. The AST interpreter is
   // the dispatcher's hardcoded fallback (not a registered executor).
-  registerExecutorsForOpt(interpreter.registry, interpreter.optimization);
+  registerExecutorsForOpt(interpreter.registry, interpreter.optimization, host);
 
   // Collect JIT compilations for generatedJS/generatedC output and
   // profiling. JS-JIT and C-JIT sections are kept apart so the CLI's
@@ -379,4 +397,11 @@ export function executeCode(
     // contents reach the host now.
     rt.files?.flush();
   }
+}
+
+/** `host`, or a copy of it with a different koffi bridge (the deprecated
+ *  `nativeBridge` argument). The copy shares everything else. */
+function runHost(host: NumblHost, nativeBridge?: NativeBridge): NumblHost {
+  if (!nativeBridge || nativeBridge === host.nativeBridge) return host;
+  return { ...host, nativeBridge };
 }

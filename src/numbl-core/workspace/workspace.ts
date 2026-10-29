@@ -8,13 +8,14 @@
 import { CodeIndex } from "./codeIndex.js";
 import type { FileIOAdapter } from "../fileIOAdapter.js";
 import type { SystemAdapter } from "../systemAdapter.js";
-import type { WorkspaceFile, NativeBridge } from "./types.js";
+import type { WorkspaceFile } from "./types.js";
 import { parseMFile } from "../parser/index.js";
 import { SyntaxError } from "../parser/errors.js";
 import {
   isNumblJsFile,
   loadJsUserFunctions,
   type LoadedJsUserFunction,
+  type JsHostBindings,
 } from "../jsUserFunctions.js";
 
 /** Search-path entry for bundled shim files; always last. */
@@ -46,7 +47,7 @@ export class Workspace {
     mainFileName: string,
     mainSource: string,
     private readonly fileIO: FileIOAdapter | undefined,
-    private readonly nativeBridge: NativeBridge | undefined
+    private readonly host: JsHostBindings = {}
   ) {
     this.code = new CodeIndex(mainFileName, mainSource);
   }
@@ -130,7 +131,7 @@ export class Workspace {
     this.jsFunctions = loadJsUserFunctions(
       this.jsFiles,
       this.wasmFiles,
-      this.nativeBridge
+      this.host
     );
 
     for (const f of bundled) {
@@ -211,11 +212,7 @@ export class Workspace {
       }
     }
     if (newJs.length === 0) return;
-    for (const entry of loadJsUserFunctions(
-      newJs,
-      newWasm,
-      this.nativeBridge
-    )) {
+    for (const entry of loadJsUserFunctions(newJs, newWasm, this.host)) {
       const i = this.jsFunctions.findIndex(e => e.fileName === entry.fileName);
       if (i >= 0) this.jsFunctions[i] = entry;
       else this.jsFunctions.push(entry);

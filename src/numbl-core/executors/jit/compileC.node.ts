@@ -6,11 +6,8 @@
  * no `cc` invocation. On miss, write `<sha>.c`, exec `cc`, then
  * `dlopen`.
  *
- * This file is split out of `compileC.ts` so the browser bundle stays
- * free of `node:fs` / `node:child_process` imports — vite/rollup
- * cannot resolve them for the browser target. Browser bundles import
- * only `compileC.ts` (types + a runtime-injected stub); the CLI
- * imports this file at bootstrap and calls `setCompileAndLoadCImpl()`.
+ * Node-only (`node:fs`, `node:child_process`): reached only through the
+ * C backend (`cBackend.ts`), which a host gets from `cjit.node.ts`.
  */
 
 import { createHash } from "node:crypto";
@@ -26,16 +23,7 @@ import {
 import { join } from "node:path";
 import { homedir } from "node:os";
 import type { NativeBridge } from "../../workspace/types.js";
-import {
-  setCompileAndLoadCImpl,
-  setReadCachedCSourceImpl,
-  type CompiledC,
-  type KoffiLib,
-} from "./compileC.js";
-import { setCSnippets } from "../../jit/codegen/runtime.js";
-import { C_SNIPPETS } from "../../jit/builtins/runtime/snippets.c.gen.js";
-import { registerCJitBackend } from "../plugins.js";
-import { cBackend } from "./cBackend.js";
+import type { CompiledC, KoffiLib } from "./compileC.js";
 
 const CACHE_DIR = join(homedir(), ".cache", "numbl", "c-jit");
 
@@ -121,19 +109,4 @@ export function readCachedCSource(hash: string): string | null {
   const srcPath = join(CACHE_DIR, `${hash}.c`);
   if (!existsSync(srcPath)) return null;
   return readFileSync(srcPath, "utf8");
-}
-
-/** Register both implementations with the browser-safe surface. The
- *  CLI imports this module at bootstrap to wire them in. */
-export function registerNodeCompileC(): void {
-  setCompileAndLoadCImpl(compileAndLoadC);
-  setReadCachedCSourceImpl(readCachedCSource);
-  // Feed the C runtime-snippet table to the codegen runtime. Kept here (not
-  // a static import in codegen/runtime.ts) so the ~300 KB of C source stays
-  // out of the browser worker bundle.
-  setCSnippets(C_SNIPPETS);
-  // Register the C backend so `--opt 2` engages it. Importing it here
-  // (Node-only bootstrap) keeps the C compile/codegen graph out of the
-  // browser worker bundle.
-  registerCJitBackend(cBackend);
 }

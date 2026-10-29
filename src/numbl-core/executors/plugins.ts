@@ -1,7 +1,7 @@
 /**
  * Mode-driven executor registration.
  *
- * `registerExecutorsForOpt(registry, opt)` is the single switch from an
+ * `registerExecutorsForOpt(registry, opt, host)` is the single switch from an
  * `--opt` value to a set of registered executors. Each JIT backend
  * contributes one executor per shape (top-level, loop, call); the
  * registry tries them in registration order. The AST interpreter is the
@@ -14,20 +14,7 @@ import { jsBackend } from "./jit/jsBackend.js";
 import { makeTopLevelExecutor } from "./jit/topLevelExecutor.js";
 import { makeLoopExecutor } from "./jit/loopExecutor.js";
 import { makeCallExecutor } from "./jit/callExecutor.js";
-
-/**
- * The C backend, injected at Node bootstrap rather than imported
- * statically: it shells out to `cc` + koffi and pulls in the C
- * compile/codegen graph, all Node-only. `registerNodeCompileC`
- * (`executors/jit/compileC.node.ts`) registers it. When unregistered
- * (browser), `--opt 2` collapses to `--opt 1`.
- */
-let cBackend: JitBackend | null = null;
-
-/** Register the C backend. Called once at Node bootstrap. */
-export function registerCJitBackend(backend: JitBackend): void {
-  cBackend = backend;
-}
+import type { NumblHost } from "../host.js";
 
 /** Optimization mode label.
  *
@@ -52,12 +39,16 @@ function registerBackend(registry: Registry, backend: JitBackend): void {
   registry.register(makeCallExecutor(backend));
 }
 
-/** Register the executors for a given optimization mode. */
+/** Register the executors for a given optimization mode. The C backend
+ *  comes from the run's host (`host.cjit`, Node only); without it `"2"`
+ *  behaves like `"1"`. */
 export function registerExecutorsForOpt(
   registry: Registry,
-  opt: OptLevel
+  opt: OptLevel,
+  host: NumblHost
 ): void {
   if (opt === "0") return;
-  if (opt === "2" && cBackend) registerBackend(registry, cBackend);
+  if (opt === "2" && host.cjit)
+    registerBackend(registry, host.cjit as JitBackend);
   registerBackend(registry, jsBackend);
 }

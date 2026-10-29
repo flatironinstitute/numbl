@@ -1,8 +1,9 @@
 /**
  * C backend: `compileSpecC` → `cc -shared` → koffi `dlopen`.
  *
- * Node only. Imported solely by `compileC.node.ts`, which registers it at
- * bootstrap, so the browser bundle never pulls in the C compile graph.
+ * Node only. Imported solely by `cjit.node.ts`, which hands it to a host
+ * (`NumblHost.cjit`), so the browser bundle never pulls in the C compile
+ * graph. It also needs the host's koffi bridge (`NumblHost.nativeBridge`).
  * See `valueAdapterC.ts` for the marshaling protocol.
  */
 
@@ -15,7 +16,8 @@ import {
   type Type,
 } from "../../jit/index.js";
 import { getOrCreateSession } from "./session.js";
-import { compileAndLoadC, type CompiledC } from "./compileC.js";
+import type { CompiledC } from "./compileC.js";
+import { compileAndLoadC } from "./compileC.node.js";
 import {
   buildCDeclaration,
   compilerTypeToCDecl,
@@ -64,13 +66,13 @@ export const cBackend: JitBackend<CArtifact> = {
   native: true,
   strictDisplayGate: true,
 
-  available: interp => !!interp.nativeBridge?.koffi,
+  available: interp => !!interp.rt.host.nativeBridge?.koffi,
 
   // Every type also needs a C-FFI representation.
   accepts: t => compilerTypeToCDecl(t) !== null,
 
   compile(req, interp) {
-    const bridge = interp.nativeBridge;
+    const bridge = interp.rt.host.nativeBridge;
     if (!bridge?.koffi) return null;
     const { workspace, lowerer } = getOrCreateSession(interp);
     const {
@@ -116,7 +118,7 @@ export const cBackend: JitBackend<CArtifact> = {
   streamsOutput: art => art.streamsOutput,
 
   invoke(art, args, interp) {
-    const koffi = interp.nativeBridge?.koffi as Koffi;
+    const koffi = interp.rt.host.nativeBridge?.koffi as Koffi;
     if (!koffi) return null;
     const { ctx, signature: sig } = art;
     // A `.so`'s raise guard and allocator list are file-scope state, so it

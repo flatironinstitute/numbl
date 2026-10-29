@@ -17,7 +17,6 @@ import {
   getIBuiltinHelp,
 } from "./numbl-core/interpreter/builtins/index.js";
 import { setBridgeLog } from "./numbl-core/native/lapack-bridge.js";
-import { loadQhullNodeBackend } from "./numbl-core/native/qhull-node.js";
 import {
   diagnoseErrors,
   formatDiagnostics,
@@ -40,7 +39,8 @@ import { cmdShowProfile, writeProfile } from "./cli-profile.js";
 import { executeCode } from "./numbl-core/executeCode.js";
 import { encodeStreamMessage, type StreamMessage } from "./streamProtocol.js";
 import { parseMFile } from "./numbl-core/parser/index.js";
-import { WorkspaceFile, NativeBridge } from "./numbl-core/workspace/types.js";
+import { WorkspaceFile } from "./numbl-core/workspace/types.js";
+import type { NumblHost } from "./numbl-core/host.js";
 import { scanMFiles } from "./cli-scan.js";
 import {
   initNodePlatform,
@@ -49,22 +49,6 @@ import {
 } from "./node-platform.js";
 
 const addonBuildPath = join(packageDir, "build", "Release", "numbl_addon.node");
-
-// ── Try to load the qhull WASM Delaunay backend ──────────────────────────────
-
-let qhullLoaded = false;
-async function loadQhullBackend(): Promise<void> {
-  if (qhullLoaded || process.env.NUMBL_NO_QHULL) return;
-  qhullLoaded = true;
-  try {
-    await loadQhullNodeBackend();
-  } catch (e) {
-    console.error(
-      `Warning: failed to load qhull WASM backend: ${(e as Error).message}. ` +
-        `delaunay/delaunayn will be unavailable.`
-    );
-  }
-}
 
 // ── Help ─────────────────────────────────────────────────────────────────────
 
@@ -145,14 +129,14 @@ Environment variables:
 
 // ── Command handlers ─────────────────────────────────────────────────────────
 
-/** Set up the Node platform (native addon, C-JIT, koffi, and the mip core
- *  package, installed or refreshed first) and collect the search paths: the
+/** Set up the Node platform (native addon, qhull, C-JIT, koffi, and the mip
+ *  core package, installed or refreshed first) in the process-default host and collect the search paths: the
  *  extra --path / NUMBL_PATH directories plus the mip core package, with the
  *  workspace files found in them. */
 async function preparePlatform(opts: RunOptions): Promise<{
   searchPaths: string[];
   workspaceFiles: WorkspaceFile[];
-  nativeBridge: NativeBridge | undefined;
+  host: NumblHost;
 }> {
   const platform = await initNodePlatform({
     native: !opts.noNative,
@@ -163,7 +147,7 @@ async function preparePlatform(opts: RunOptions): Promise<{
   return {
     searchPaths,
     workspaceFiles: searchPaths.flatMap(d => scanMFiles(d)),
-    nativeBridge: platform.nativeBridge,
+    host: platform.host,
   };
 }
 
@@ -197,15 +181,14 @@ async function cmdRun(args: string[]) {
   // first-priority implicit search path via the cwd-as-search-path feature.
   process.chdir(dirname(filepath));
 
-  const { searchPaths, workspaceFiles, nativeBridge } =
-    await preparePlatform(opts);
+  const { searchPaths, workspaceFiles, host } = await preparePlatform(opts);
   await executeWithOptions(
     code,
     filepath,
     workspaceFiles,
     opts,
     searchPaths,
-    nativeBridge
+    host
   );
 }
 
@@ -244,15 +227,14 @@ async function cmdParse(args: string[]) {
 async function cmdEval(args: string[]) {
   const opts = parseRunOptions(args);
   const code = singlePositional(opts.positional, "eval", "code");
-  const { searchPaths, workspaceFiles, nativeBridge } =
-    await preparePlatform(opts);
+  const { searchPaths, workspaceFiles, host } = await preparePlatform(opts);
   await executeWithOptions(
     code,
     "eval.m",
     workspaceFiles,
     opts,
     searchPaths,
-    nativeBridge
+    host
   );
 }
 
@@ -289,9 +271,8 @@ async function executeWithOptions(
   workspaceFiles: WorkspaceFile[],
   opts: RunOptions,
   searchPaths: string[],
-  nativeBridge: NativeBridge | undefined
+  host: NumblHost
 ) {
-  await loadQhullBackend();
   const totalStart = performance.now();
 
   // If --dump-ast is used alone (without running), just dump and exit
@@ -422,11 +403,11 @@ async function executeWithOptions(
         system,
         onInput,
         optimization: opts.optimization,
+        host,
       },
       workspaceFiles,
       mainFileName,
-      searchPaths,
-      nativeBridge
+      searchPaths
     );
     if (opts.profileOutput && result.profileData) {
       writeProfile(
@@ -572,13 +553,12 @@ function cmdListBuiltins(args: string[]) {
 
 async function cmdRepl(args: string[]) {
   const opts = parseRunOptions(args);
-  const { searchPaths, workspaceFiles, nativeBridge } =
-    await preparePlatform(opts);
+  const { searchPaths, workspaceFiles, host } = await preparePlatform(opts);
   await runRepl(
     workspaceFiles,
     plotHandlerFor(opts).onDrawnow,
     searchPaths,
-    nativeBridge,
+    host,
     opts.optimization
   );
 }
@@ -650,15 +630,14 @@ async function main() {
       break;
     case "run-tests": {
       const opts = parseRunOptions(rest);
-      const { nativeBridge } = await initNodePlatform({
+      const { host } = await initNodePlatform({
         native: !opts.noNative,
         fastMath: opts.fastMath,
       });
-      await loadQhullBackend();
       runTests(
         opts.positional[0] ?? join(packageDir, "numbl_test_scripts"),
         opts.optimization,
-        nativeBridge
+        host
       );
       break;
     }

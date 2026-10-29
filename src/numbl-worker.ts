@@ -20,8 +20,7 @@ import { formatExecuteError } from "./workerErrorFormat.js";
 import { ensureQhullBackend } from "./numbl-core/native/qhull-browser.js";
 import { ensureWasmLapackBridge } from "./numbl-core/native/wasm-lapack-browser.js";
 import { IdbWasmCache } from "./utils/wasmByteCache.js";
-import { startGpuHelper } from "./gpuHelper.js";
-import { setJsGpuHelper } from "./numbl-core/jsUserFunctions.js";
+import { bootBrowserHost, deferUntilReady } from "./browserHost.js";
 import type {
   FromNumblWorker,
   RunMessage,
@@ -35,16 +34,11 @@ function post(msg: FromNumblWorker): void {
   self.postMessage(msg);
 }
 
-// Start loading the qhull Delaunay backend as soon as the worker spins up, so
-// it is installed well before any user-triggered run. Fire-and-forget: it
-// resolves on its own, so the synchronous message handler below never needs to
-// await it. A delaunay/delaunayn call issued before it finishes loading (or if
-// loading fails) throws "backend not initialized".
-void ensureQhullBackend();
-
-// Spawn the WebGPU helper now: a worker created during a (synchronous) run
-// would not start until the run ends. See gpuHelper.ts.
-setJsGpuHelper(startGpuHelper());
+// The worker's capabilities: the WebGPU helper and qhull, loaded now; the
+// optional wasm LAPACK accelerator is added on `set_wasm_bridge`. Messages
+// wait for `host.ready` (see the handler at the end), so no run sees a
+// capability still loading.
+const host = bootBrowserHost({ geometry: ensureQhullBackend });
 
 // Byte cache for the optional WASM LAPACK accelerator. The accelerator itself
 // is loaded lazily when the main thread sends `set_wasm_bridge` with the
@@ -59,7 +53,7 @@ const MIP_SEARCH_PATH = "/system/mip/packages/gh/mip-org/core/mip/mip";
 // handles are updated after every run too: the IDE clears its figures at the
 // start of each script run, so runs start from none, while REPL commands
 // continue from here, so a bare `figure` opens a new figure.
-const session = new ExecSession();
+const session = new ExecSession({ host });
 session.extraSearchPaths = [MIP_SEARCH_PATH];
 let optimizationLevel: OptLevel = "1";
 let vfs: VirtualFileSystem | null = null;
@@ -226,6 +220,7 @@ function handleRun(msg: RunMessage): void {
           maxIterations: options?.maxIterations ?? 10000000,
           optimization: options?.optimization ?? optimizationLevel,
           session: runState,
+          host,
           fileIO: adapter,
           system: sysAdapter,
           onInput,
@@ -281,6 +276,7 @@ function handleRun(msg: RunMessage): void {
         maxIterations: options?.maxIterations ?? 10000000,
         optimization: options?.optimization ?? optimizationLevel,
         session: runState,
+        host,
         initialHoldState: useHoldState,
         fileIO: adapter,
         system: sysAdapter,
@@ -387,8 +383,7 @@ function handleExecute(code: string, cancelSAB?: SharedArrayBuffer): void {
 
 // ── Worker message handler ──────────────────────────────────────────────
 
-self.onmessage = (e: MessageEvent<ToNumblWorker>) => {
-  const msg = e.data;
+function handleMessage(msg: ToNumblWorker): void {
   switch (msg.type) {
     case "clear":
       session.clearWorkspace();
@@ -429,7 +424,12 @@ self.onmessage = (e: MessageEvent<ToNumblWorker>) => {
     case "set_wasm_bridge":
       // Best-effort: loads/instantiates off the message loop and installs the
       // accelerator when ready. A null/empty url uninstalls it.
-      void ensureWasmLapackBridge(msg.url ?? null, { cache: wasmBridgeCache });
+      // Runs do not wait for it: until it is installed, products use the
+      // other providers.
+      void ensureWasmLapackBridge(msg.url ?? null, {
+        cache: wasmBridgeCache,
+        stack: host.numeric,
+      });
       return;
 
     case "update_workspace":
@@ -450,4 +450,6 @@ self.onmessage = (e: MessageEvent<ToNumblWorker>) => {
       handleExecute(msg.code, msg.cancelSAB);
       return;
   }
-};
+}
+
+self.onmessage = deferUntilReady(host, handleMessage);

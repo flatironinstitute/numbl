@@ -60,11 +60,11 @@ export class SessionState {
   /** The most recent JIT decline (for `%!numbl:assert_jit` messages). */
   lastJitDecline: JitDecline | null = null;
 
-  // Host capabilities that belong to the session rather than to a run (for
-  // example a compute device context) belong here too, so that every run
-  // of the session sees the same instance. State owned by a module that
-  // imports the interpreter (event listeners, see sessionEventRegistry)
-  // is kept by that module, keyed by session, to keep this file a leaf.
+  // Platform capabilities (numeric providers, a compute device, ...) are not
+  // kept here: they are the session's host (host.ts, `rt.host`). State owned
+  // by a module that imports the interpreter (event listeners, see
+  // sessionEventRegistry) is kept by that module, keyed by session, to keep
+  // this file a leaf.
 
   /** `clear global`: remove every global, or the named ones. */
   clearGlobals(names?: string[]): void {

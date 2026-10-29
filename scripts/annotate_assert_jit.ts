@@ -30,7 +30,7 @@ import { initNodePlatform } from "../src/node-platform.js";
 const PLAIN = "%!numbl:assert_jit";
 const CVAR = "%!numbl:assert_jit c";
 
-const { nativeBridge } = await initNodePlatform({ native: false });
+const { host, nativeBridge } = await initNodePlatform({ native: false });
 if (!nativeBridge) {
   console.error("koffi not available — cannot verify --opt 2; aborting.");
   process.exit(1);
@@ -69,7 +69,7 @@ function passes(filepath: string, source: string, opt: "1" | "2"): boolean {
   try {
     const { lastLine } = runTestScript(filepath, source, {
       optimization: opt,
-      nativeBridge,
+      host,
     });
     return lastLine === "SUCCESS";
   } catch {

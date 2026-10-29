@@ -16,9 +16,9 @@ The `numbl` command-line entry point is a small orchestration layer over `execut
 
 ## Source layout
 
-`src/cli.ts` is the entry point: qhull setup, `--help`, and the command dispatch for `run`, `eval`, `parse`, the REPL and the smaller commands. Larger pieces live in sibling modules:
+`src/cli.ts` is the entry point: `--help`, and the command dispatch for `run`, `eval`, `parse`, the REPL and the smaller commands. Larger pieces live in sibling modules:
 
-- `node-platform.ts`: `initNodePlatform`: native addon loading, C-JIT registration, the koffi bridge and the mip core package install. Also exported from `numbl/node` for library hosts (mip install is opt-in there).
+- `node-platform.ts`: `initNodePlatform`: fills the process-default host (native addon, qhull, the koffi bridge, the C backend) and installs the mip core package. Also exported from `numbl/node` for library hosts (mip install is opt-in there).
 - `cli-args.ts`: option parsing on `node:util` `parseArgs` (shared run/eval/REPL options, `NUMBL_PATH`).
 - `cli-repl.ts`: the interactive REPL.
 - `cli-run-tests.ts`: `run-tests`; its `runTestScript` is also used by the vitest wrapper (`src/__tests__/test-scripts.test.ts`) and `scripts/annotate_assert_jit.ts`.

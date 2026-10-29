@@ -89,6 +89,7 @@ import {
   multiOutputCellAssign as _multiOutputCellAssign,
 } from "./runtimeIndexing.js";
 import { SessionState } from "../sessionState.js";
+import { defaultHost, type NumblHost } from "../host.js";
 import {
   getMember as _getMember,
   getMemberDynamic as _getMemberDynamic,
@@ -397,7 +398,10 @@ export class Runtime {
     private options: ExecOptions,
     /** State that outlives the run: globals, persistents, warning state,
      *  PRNG, ... (see SessionState). */
-    readonly session: SessionState = new SessionState()
+    readonly session: SessionState = new SessionState(),
+    /** The platform's capabilities (numeric providers, geometry, C-JIT,
+     *  gpu, ...; see host.ts). */
+    readonly host: NumblHost = defaultHost()
   ) {
     this.$g = session.globals;
     this.persistentStore = session.persistents;

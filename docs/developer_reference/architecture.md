@@ -5,7 +5,7 @@
 Numbl is organized as a platform-agnostic language core surrounded by thin platform adapters.
 
 - **numbl-core**: lexer, parser, interpreter, JIT, runtime, built-ins, and the stdlib bundle. Pure TypeScript with no Node- or browser-specific imports. Every platform drives it through the same entry point.
-- **Platform surfaces**: the CLI, the browser web app (running inside a Web Worker), and the optional HTTP execution server. Each provides a `FileIOAdapter` and `SystemAdapter` plus output callbacks, then calls the core's `executeCode` function.
+- **Platform surfaces**: the CLI, the browser web app (running inside a Web Worker), and the optional HTTP execution server. Each provides a host (`NumblHost`, see [Host capabilities](#host-capabilities)), a `FileIOAdapter` and `SystemAdapter` plus output callbacks, then calls the core's `executeCode` function.
 - **Native addon (optional)**: a Node-API C++ module wrapping LAPACK/OpenBLAS, FFTW, and selected element-wise kernels. Numbl detects it at runtime and falls back to pure-JS implementations when absent.
 
 ## Execution pipeline
@@ -35,14 +35,40 @@ Numbl is organized as a platform-agnostic language core surrounded by thin platf
 | Stdlib bundle    | `.m` files loaded into every run's workspace.                                                                              |
 | FileTable        | MATLAB fid semantics (fopen modes, positions, EOF, encodings, write-back) over the adapter's byte primitives.              |
 | Platform adapter | Implements file I/O, system info, and output/plot callbacks for one environment.                                           |
+| Host             | A session's platform capabilities: numeric providers, geometry, C-JIT, native libraries, gpu (`numbl-core/host.ts`).       |
 
 ## Sessions
 
-Each `executeCode` call builds a fresh `Runtime` and `Interpreter`. What MATLAB keeps between commands at the prompt lives in a `SessionState` (`numbl-core/sessionState.ts`), passed as `ExecOptions.session` and held by the runtime as `rt.session`: the base workspace `Environment` (reused as every run's base frame, so variables and the base workspace's `global` links carry over, also past an error), globals (`rt.$g`), persistents (`rt.persistentStore`), the warning on/off state, the PRNG state, the `tic` time, `spparms`, appdata, event listeners and the last JIT decline reason. An `ExecSession` owns one; a one-shot run (CLI `run`/`eval`) gets a fresh one, so two sessions in one process share none of it. Helpers without a runtime handle (the PRNG, `emitWarning`, the JIT decline log) reach it through `currentSession()`, which reads the active runtime and falls back to a detached session outside any run (unit tests). Host capabilities that belong to the session rather than a run, such as a device context, belong there too.
+Each `executeCode` call builds a fresh `Runtime` and `Interpreter`. What MATLAB keeps between commands at the prompt lives in a `SessionState` (`numbl-core/sessionState.ts`), passed as `ExecOptions.session` and held by the runtime as `rt.session`: the base workspace `Environment` (reused as every run's base frame, so variables and the base workspace's `global` links carry over, also past an error), globals (`rt.$g`), persistents (`rt.persistentStore`), the warning on/off state, the PRNG state, the `tic` time, `spparms`, appdata, event listeners and the last JIT decline reason. An `ExecSession` owns one; a one-shot run (CLI `run`/`eval`) gets a fresh one, so two sessions in one process share none of it. Helpers without a runtime handle (the PRNG, `emitWarning`, the JIT decline log) reach it through `currentSession()`, which reads the active runtime and falls back to a detached session outside any run (unit tests). Platform capabilities are not session state: they are the session's host (below).
 
 `clear` follows MATLAB: `clear` and `clear variables` remove the calling scope's variables and global links (globals keep their values), `clear global` the globals, `clear functions` (or `clear name` for a function file) the persistents, and `clear all` all three. Persistents of a function whose file changed since they were made are cleared at the start of the next run. The PRNG stream, warning state and appdata survive `clear all`, as in MATLAB.
 
 The JIT's compile caches stay per run: each run parses its files afresh and a compiled unit binds the run's `Runtime`. A unit that raises an error in a run whose base workspace persists is re-run by the interpreter (`Interpreter.baseWorkspacePersists`), so the assignments it made before the error are kept, as at opt 0.
+
+## Host capabilities
+
+What the platform provides lives in one object, a `NumblHost` (`numbl-core/host.ts`), rather than in module globals:
+
+| Field              | What                                                                                | Read by                                              |
+| ------------------ | ----------------------------------------------------------------------------------- | ---------------------------------------------------- |
+| `numeric`          | the LAPACK/BLAS provider stack ([native-addon.md](runtime/native-addon.md))         | `getLapackBridge()`, `providerFor()`                 |
+| `geometry`         | qhull Delaunay and convex-hull backends                                             | `getDelaunayBackend()`, `getConvexHullBackend()`     |
+| `cjit`             | the C backend for `--opt 2` (opaque; a `JitBackend`)                                | `registerExecutorsForOpt`                            |
+| `nativeBridge`     | the koffi bridge (native libraries for `.numbl.js`, and the C-JIT)                  | `cBackend` (`interp.rt.host`), `loadJsUserFunctions` |
+| `gpu`              | the `gpu` object given to `.numbl.js` files (`src/gpuHelper.ts`)                    | `loadJsUserFunctions`                                |
+| `fileIO`, `system` | defaults for runs that do not pass `ExecOptions.fileIO` / `system`                  | `executeCode`                                        |
+| `ready`            | a promise that resolves once the capabilities that load asynchronously are in place | the browser workers, before their first run          |
+
+A run gets its host from `ExecOptions.host`; an `ExecSession` is constructed with one (`new ExecSession({ host })`) and passes it to every run. A run given none uses the process-default host (`defaultHost()`). The runtime holds it as `rt.host`; helpers without a runtime handle use `currentHost()`, which reads the active runtime's host and falls back to the default, as `currentSession()` does for session state. So two sessions in one process with different hosts do not share any capability (`src/__tests__/host.test.ts`). `createHost(init)` makes a host; fields it is not given are capabilities it does not have (its `numeric` stack starts with only the inline provider), nothing is inherited from the default.
+
+Hosts are built at platform boot:
+
+- **Node**: `initNodePlatform` (`src/node-platform.ts`, also in `numbl/node`) fills a host, by default the process-default one: the native addon provider, qhull, the koffi bridge, the C backend (`nodeCJitBackend()` in `executors/jit/cjit.node.ts`, imported only here so the browser bundle never sees the C compile graph), and, with `adapters: true`, the Node file and system adapters. The CLI uses the default host and passes it explicitly.
+- **Browser workers**: both workers build theirs with `bootBrowserHost` (`src/browserHost.ts`), which also documents which capabilities each worker has. The IDE worker gets the WebGPU helper, qhull and (when the settings name one) the wasm LAPACK provider; the `numbl/browser` session worker gets the WebGPU helper only. The IDE worker queues messages until `host.ready` resolves (`deferUntilReady`), and the session worker awaits it in `boot`, so no run sees a capability that is still loading. The wasm accelerator is not part of `ready`: until it is installed, products use the other providers.
+
+The process-wide setters remain for code that does not pass a host, and edit the default host: `registerProvider`/`unregisterProvider`, `setDelaunayBackend`/`setConvexHullBackend`, `setJsGpuHelper` and `registerNodeCompileC` (the last three deprecated). Per-run wiring stays on `ExecOptions` (`onInput`, `cancelSAB`, `onHtmlSourceEvent`, output callbacks), since it belongs to one run's caller rather than to the platform. Two things stay process-wide by design: the C runtime-snippet table (static C source, installed by `nodeCJitBackend`) and the `setBridgeLog` diagnostic sink.
+
+To add a capability (for example a compute device): add an optional field to `NumblHost` (and `NumblHostInit`), typed structurally or as `object`/`unknown` if its real type would make `host.ts` import beyond the leaf modules it uses now (`check:cycles` counts type imports); fill it in `initNodePlatform` and/or `bootBrowserHost`, adding its load to `ready` with `addPending` if it is asynchronous; and read it where it is used from `ctx.rt.host` (builtins) or `currentHost()` (helpers). Nothing else needs to change: sessions, runs and the workers already carry the host.
 
 ## File I/O
 

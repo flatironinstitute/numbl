@@ -3,7 +3,8 @@
  * kernels, satisfied both by the native addon and by the pure-TypeScript
  * implementation (ts-lapack-bridge.ts).
  *
- * Implementations are layered as a provider stack (`registerProvider`): the
+ * Implementations are layered as a provider stack (`ProviderStack`, one per
+ * host; `registerProvider` edits the process default's): the
  * native addon under Node, optionally a wasm accelerator in the browser, and
  * the inline provider for small products (`inline-matmul.ts`), with the
  * TypeScript implementation underneath. `getLapackBridge()` always returns a
@@ -14,6 +15,7 @@
  */
 
 import { getTsLapackBridge } from "./ts-lapack-bridge.js";
+import { getCurrentRuntime } from "../runtime/refcount.js";
 import {
   matmulComplexLoop,
   matmulIsInline,
@@ -816,65 +818,11 @@ interface Layer {
   readonly accepts?: AnyFn;
 }
 
-let _providers: LapackProvider[] = [inlineProvider];
-let _chains: Map<string, Layer[]> | null = null;
-let _bridge: LapackBridge | null = null;
 let _log: ((message: string) => void) | null = null;
 
 /** Set (or clear) the sink for the one-time "bridge in use" diagnostic. */
 export function setBridgeLog(log: ((message: string) => void) | null): void {
   _log = log;
-}
-
-/** Add a provider, or replace the registered one with the same name. */
-export function registerProvider(provider: LapackProvider): void {
-  _providers = _providers
-    .filter(p => p.name !== provider.name)
-    .concat(provider)
-    .sort((a, b) => b.priority - a.priority);
-  _chains = null;
-  _bridge = null;
-}
-
-/** Remove the provider with this name, if registered. */
-export function unregisterProvider(name: string): void {
-  _providers = _providers.filter(p => p.name !== name);
-  _chains = null;
-  _bridge = null;
-}
-
-/** Registered provider names, highest priority first (ts-lapack, always
- *  last, is implied). */
-export function providerNames(): string[] {
-  return _providers.map(p => p.name);
-}
-
-/** Per entry, the layers that have it in call order, ending at the first
- *  that takes every call (the TypeScript entry when there is one). */
-function chains(): Map<string, Layer[]> {
-  if (_chains) return _chains;
-  const ts = getTsLapackBridge() as unknown as Record<string, unknown>;
-  const ops = new Set(Object.keys(ts));
-  for (const p of _providers)
-    for (const k of Object.keys(p.entries)) ops.add(k);
-  _chains = new Map();
-  for (const op of ops) {
-    const chain: Layer[] = [];
-    for (const p of _providers) {
-      const fn = (p.entries as Record<string, unknown>)[op];
-      if (typeof fn !== "function") continue;
-      const accepts = (p.accepts as Record<string, AnyFn> | undefined)?.[op];
-      chain.push({ name: p.name, fn: fn as AnyFn, accepts });
-      if (!accepts) break;
-    }
-    if (
-      (chain.length === 0 || chain[chain.length - 1].accepts) &&
-      typeof ts[op] === "function"
-    )
-      chain.push({ name: "ts-lapack", fn: ts[op] as AnyFn });
-    if (chain.length > 0) _chains.set(op, chain);
-  }
-  return _chains;
 }
 
 function select(chain: Layer[], args: unknown[]): AnyFn | null {
@@ -883,44 +831,149 @@ function select(chain: Layer[], args: unknown[]): AnyFn | null {
 }
 
 /**
- * The function that serves `op` for these arguments, or undefined when no
- * provider has it or all of them decline, which can happen only for the
- * native-only entries (FFTW, `fillRandn`) that have no TypeScript fallback.
+ * A set of providers over the TypeScript implementation. Each host
+ * (`NumblHost.numeric`) has one; the process-default host uses
+ * `defaultProviderStack`. The inline provider is always present.
+ */
+export class ProviderStack {
+  private providers: LapackProvider[] = [inlineProvider];
+  private _chains: Map<string, Layer[]> | null = null;
+  private _bridge: LapackBridge | null = null;
+
+  /** Add a provider, or replace the registered one with the same name. */
+  register(provider: LapackProvider): void {
+    this.providers = this.providers
+      .filter(p => p.name !== provider.name)
+      .concat(provider)
+      .sort((a, b) => b.priority - a.priority);
+    this._chains = null;
+    this._bridge = null;
+  }
+
+  /** Remove the provider with this name, if registered. */
+  unregister(name: string): void {
+    this.providers = this.providers.filter(p => p.name !== name);
+    this._chains = null;
+    this._bridge = null;
+  }
+
+  /** Registered provider names, highest priority first (ts-lapack, always
+   *  last, is implied). */
+  names(): string[] {
+    return this.providers.map(p => p.name);
+  }
+
+  /** Per entry, the layers that have it in call order, ending at the first
+   *  that takes every call (the TypeScript entry when there is one). */
+  private chains(): Map<string, Layer[]> {
+    if (this._chains) return this._chains;
+    const ts = getTsLapackBridge() as unknown as Record<string, unknown>;
+    const ops = new Set(Object.keys(ts));
+    for (const p of this.providers)
+      for (const k of Object.keys(p.entries)) ops.add(k);
+    const chains = new Map<string, Layer[]>();
+    for (const op of ops) {
+      const chain: Layer[] = [];
+      for (const p of this.providers) {
+        const fn = (p.entries as Record<string, unknown>)[op];
+        if (typeof fn !== "function") continue;
+        const accepts = (p.accepts as Record<string, AnyFn> | undefined)?.[op];
+        chain.push({ name: p.name, fn: fn as AnyFn, accepts });
+        if (!accepts) break;
+      }
+      if (
+        (chain.length === 0 || chain[chain.length - 1].accepts) &&
+        typeof ts[op] === "function"
+      )
+        chain.push({ name: "ts-lapack", fn: ts[op] as AnyFn });
+      if (chain.length > 0) chains.set(op, chain);
+    }
+    this._chains = chains;
+    return chains;
+  }
+
+  /** See the module-level `providerFor`. */
+  providerFor<K extends LapackOp>(
+    op: K,
+    args: Parameters<LapackEntry<K>>
+  ): LapackEntry<K> | undefined {
+    const chain = this.chains().get(op);
+    const fn = chain ? select(chain, args) : null;
+    return (fn ?? undefined) as LapackEntry<K> | undefined;
+  }
+
+  /** The complete bridge. Each entry resolves through the stack: it is the
+   *  first provider's function when that provider takes every call, and
+   *  otherwise a dispatcher that picks a provider per call. */
+  bridge(): LapackBridge {
+    if (this._bridge) return this._bridge;
+    const bridge: Record<string, AnyFn> = {};
+    const tsOnly: string[] = [];
+    for (const [op, chain] of this.chains()) {
+      bridge[op] = chain[0].accepts
+        ? (...args: unknown[]) => {
+            const fn = select(chain, args);
+            if (!fn) throw new Error(`${op}: every provider declined the call`);
+            return fn(...args);
+          }
+        : chain[0].fn;
+      if (chain.every(l => l.name === "ts-lapack" || l.name === "inline"))
+        tsOnly.push(op);
+    }
+    const names = this.names().filter(n => n !== "inline");
+    _log?.(
+      names.length === 0
+        ? "LAPACK providers: ts-lapack (TypeScript)"
+        : `LAPACK providers: ${names.join(", ")}` +
+            (tsOnly.length ? `; ts-lapack for ${tsOnly.join(", ")}` : "")
+    );
+    this._bridge = bridge as unknown as LapackBridge;
+    return this._bridge;
+  }
+}
+
+/** The process-default host's stack (see host.ts). */
+export const defaultProviderStack = new ProviderStack();
+
+/** The stack of the running code: the active runtime's host's, else the
+ *  process default. Read structurally so this module stays a leaf. */
+export function activeProviderStack(): ProviderStack {
+  const rt = getCurrentRuntime() as {
+    host?: { numeric?: ProviderStack };
+  } | null;
+  return rt?.host?.numeric ?? defaultProviderStack;
+}
+
+/** Add a provider to the process-default stack, or replace the one there
+ *  with the same name. A host with its own stack is not affected. */
+export function registerProvider(provider: LapackProvider): void {
+  defaultProviderStack.register(provider);
+}
+
+/** Remove the provider with this name from the process-default stack. */
+export function unregisterProvider(name: string): void {
+  defaultProviderStack.unregister(name);
+}
+
+/** Provider names of the active stack, highest priority first. */
+export function providerNames(): string[] {
+  return activeProviderStack().names();
+}
+
+/**
+ * The function that serves `op` for these arguments in the active stack, or
+ * undefined when no provider has it or all of them decline, which can happen
+ * only for the native-only entries (FFTW, `fillRandn`) that have no
+ * TypeScript fallback.
  */
 export function providerFor<K extends LapackOp>(
   op: K,
   args: Parameters<LapackEntry<K>>
 ): LapackEntry<K> | undefined {
-  const chain = chains().get(op);
-  const fn = chain ? select(chain, args) : null;
-  return (fn ?? undefined) as LapackEntry<K> | undefined;
+  return activeProviderStack().providerFor(op, args);
 }
 
-/** The complete bridge. Each entry resolves through the provider stack: it
- *  is the first provider's function when that provider takes every call,
- *  and otherwise a dispatcher that picks a provider per call. */
+/** The complete bridge of the active stack (see `ProviderStack.bridge`). */
 export function getLapackBridge(): LapackBridge {
-  if (_bridge) return _bridge;
-  const bridge: Record<string, AnyFn> = {};
-  const tsOnly: string[] = [];
-  for (const [op, chain] of chains()) {
-    bridge[op] = chain[0].accepts
-      ? (...args: unknown[]) => {
-          const fn = select(chain, args);
-          if (!fn) throw new Error(`${op}: every provider declined the call`);
-          return fn(...args);
-        }
-      : chain[0].fn;
-    if (chain.every(l => l.name === "ts-lapack" || l.name === "inline"))
-      tsOnly.push(op);
-  }
-  const names = providerNames().filter(n => n !== "inline");
-  _log?.(
-    names.length === 0
-      ? "LAPACK providers: ts-lapack (TypeScript)"
-      : `LAPACK providers: ${names.join(", ")}` +
-          (tsOnly.length ? `; ts-lapack for ${tsOnly.join(", ")}` : "")
-  );
-  _bridge = bridge as unknown as LapackBridge;
-  return _bridge;
+  return activeProviderStack().bridge();
 }

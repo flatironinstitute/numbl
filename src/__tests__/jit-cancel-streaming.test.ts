@@ -6,7 +6,7 @@ import { Worker } from "node:worker_threads";
 import { executeCode } from "../numbl-core/executeCode.js";
 import { CancellationError } from "../numbl-core/runtime/index.js";
 import { Runtime } from "../numbl-core/runtime/runtime.js";
-import { registerNodeCompileC } from "../numbl-core/executors/jit/compileC.node.js";
+import { registerNodeCompileC } from "../numbl-core/executors/jit/cjit.node.js";
 import type { OptLevel } from "../numbl-core/executors/plugins.js";
 import type { NativeBridge } from "../numbl-core/workspace/types.js";
 

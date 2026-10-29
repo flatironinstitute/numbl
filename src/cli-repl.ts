@@ -10,7 +10,8 @@ import {
 import { join } from "path";
 import { homedir } from "os";
 import { diagnoseErrors, formatDiagnostics } from "./numbl-core/diagnostics";
-import { WorkspaceFile, NativeBridge } from "./numbl-core/workspace/types.js";
+import { WorkspaceFile } from "./numbl-core/workspace/types.js";
+import type { NumblHost } from "./numbl-core/host.js";
 import type { PlotInstruction } from "./numbl-core/plotting/types.js";
 import { ExecSession } from "./numbl-core/execSession.js";
 import { NodeFileIOAdapter } from "./cli-fileio.js";
@@ -67,13 +68,13 @@ export async function runRepl(
   initialWorkspaceFiles: WorkspaceFile[],
   onDrawnow?: (instructions: PlotInstruction[]) => void,
   initialSearchPaths?: string[],
-  nativeBridge?: NativeBridge,
+  host?: NumblHost,
   optimization?: import("./numbl-core/executors/plugins.js").OptLevel
 ): Promise<void> {
   const session = new ExecSession({
     workspaceFiles: [...initialWorkspaceFiles],
     searchPaths: [...(initialSearchPaths ?? [])],
-    nativeBridge,
+    host,
   });
   const fileIO = new NodeFileIOAdapter();
   const system = new NodeSystemAdapter();
