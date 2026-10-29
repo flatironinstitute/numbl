@@ -587,13 +587,8 @@ function catAlongDim(values: RuntimeValue[], dimIdx: number): RuntimeValue {
   let tensors: RuntimeTensor[] = values.map(v => {
     if (isRuntimeNumber(v))
       return RTV.tensor(allocFloat64Array([v]), [1, 1]) as RuntimeTensor;
-    if (isRuntimeLogical(v)) {
-      const t = RTV.logicalTensor(
-        allocFloat64Array([v ? 1 : 0]),
-        [1, 1]
-      ) as RuntimeTensor;
-      return t;
-    }
+    if (isRuntimeLogical(v))
+      return RTV.logicalTensor(allocFloat64Array([v ? 1 : 0]), [1, 1]);
     if (isRuntimeComplexNumber(v))
       return RTV.tensor(
         allocFloat64Array([v.re]),
