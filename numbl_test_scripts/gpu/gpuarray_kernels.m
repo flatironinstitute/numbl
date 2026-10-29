@@ -231,6 +231,56 @@ same(GA / GA(2, 2), A / A(2, 2), 1e-6);
 same(4 \ GA, 4 \ A, 1e-6);
 same(GZ / (1 + 2i), Z / (1 + 2i), 1e-6);
 
+% logical masks, find and nnz on the device
+M = A > 0.3;
+GM = GA > 0.3;
+same(GA(GM), A(M), 0);
+same(GA(GA < -1), A(A < -1), 0);
+r = A(1, :);
+gr = GA(1, :);
+same(gr(gr > 0), r(r > 0), 0);
+same(GA(GA > 100), A(A > 100), 0);
+same(GZ(GM), Z(M), 0);
+same(GT(GT > 0), T(T > 0), 0);
+Mt = reshape(M, 53, 37);
+same(GA(gpuArray(Mt)), A(Mt), 0);
+U = A; U(M) = 0;
+GU = GA; GU(GM) = 0;
+same(GU, U, 0);
+U(M) = B(M);
+GU(GM) = GB(GM);
+same(GU, U, 0);
+U(~M) = single(2);
+GU(~GM) = gpuArray(single(2));
+same(GU, U, 0);
+LL = M; LL(A < -1) = true;
+GLL = GM; GLL(GA < -1) = true;
+same(GLL, LL, 0);
+threw = false;
+try
+  GU(GM) = GB(1:3);
+catch
+  threw = true;
+end
+assert(threw, 'mask assignment with a wrong element count must fail');
+N = A; N(2, 3) = NaN;
+same(find(gpuArray(N)), find(N), 0);
+same(find(GM), find(M), 0);
+same(find(GA(1, :) > 0), find(A(1, :) > 0), 0);
+same(find(GM, 5), find(M, 5), 0);
+same(find(GM, 3, 'first'), find(M, 3, 'first'), 0);
+[gr, gc] = find(GM);
+[hr, hc] = find(M);
+same(gr, hr, 0);
+same(gc, hc, 0);
+[gr, gc] = find(GT > 1);
+[hr, hc] = find(T > 1);
+same(gr, hr, 0);
+same(gc, hc, 0);
+same(find(GA > 100), find(A > 100), 0);
+same(nnz(GM), nnz(M), 0);
+same(nnz(gpuArray(N)), nnz(N), 0);
+
 disp('SUCCESS')
 
 function same(g, h, tol)

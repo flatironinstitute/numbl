@@ -47,7 +47,12 @@ import {
   isGpuArray,
   outputToGpu,
 } from "./gpu/gpuArray.js";
-import { indexKernel, storeKernel } from "./gpu/kernels.js";
+import {
+  indexKernel,
+  maskIndexKernel,
+  maskStoreKernel,
+  storeKernel,
+} from "./gpu/kernels.js";
 import { matlabNumToString } from "./utils.js";
 import {
   COLON_INDEX,
@@ -1389,8 +1394,12 @@ export function indexIntoRTValue(
   base: RuntimeValue,
   indices: RuntimeValue[]
 ): RuntimeValue {
-  if (firstGpuArg(indices))
+  if (firstGpuArg(indices)) {
+    // A logical gpuArray mask selects on the device.
+    const m = isGpuArray(base) ? maskIndexKernel(base, indices) : null;
+    if (m) return m;
     indices = indices.map(v => gatherIfGpu(v, "gpu index"));
+  }
   if (typeof base === "number" || typeof base === "boolean")
     return indexIntoScalar(base, indices);
   if (typeof base === "string") return indexIntoStringArray(base, indices);
@@ -1450,8 +1459,14 @@ export function storeIntoRTValueIndex(
   storeBack = false,
   nullAssign?: boolean
 ): RuntimeValue {
-  if (firstGpuArg(indices))
+  if (firstGpuArg(indices)) {
+    const m =
+      isGpuArray(base) && !(nullAssign ?? isDeletionRhs(rhs))
+        ? maskStoreKernel(base, indices, rhs)
+        : null;
+    if (m) return m;
     indices = indices.map(v => gatherIfGpu(v, "gpu index"));
+  }
   // A gpuArray target, or a numeric target given a gpuArray, gives a
   // gpuArray (stored on the host, then uploaded).
   if (

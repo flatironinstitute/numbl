@@ -37,6 +37,8 @@ import {
   dotKernel,
   elementwiseKernel,
   fftKernel,
+  findKernel,
+  nnzKernel,
   normKernel,
   repmatKernel,
   reshapeKernel,
@@ -515,6 +517,8 @@ for (const cls of ["single", "logical"] as const)
   kernelMethod(cls, (args, nargout) =>
     nargout <= 1 ? castKernel(cls, args) : null
   );
+kernelMethod("find", (args, nargout) => findKernel(args, nargout));
+kernelMethod("nnz", (args, nargout) => (nargout <= 1 ? nnzKernel(args) : null));
 kernelMethod("reshape", (args, nargout) =>
   nargout <= 1 ? reshapeKernel(args) : null
 );

@@ -364,6 +364,58 @@ export class WebGpuDevice implements GpuDevice, GpuKernels {
     return out;
   }
 
+  readAt(buffer: unknown, index: number): number {
+    return this.helper.call(MODULE, "readAt", {
+      id: (buffer as DeviceBuffer).id,
+      index,
+    }) as number;
+  }
+
+  compact(
+    src: unknown | null,
+    mask: unknown,
+    pos: unknown,
+    n: number,
+    count: number,
+    m?: number
+  ): DeviceBuffer | [DeviceBuffer, DeviceBuffer] {
+    const out = this.result(count);
+    const out2 = m ? this.result(count) : null;
+    this.helper.post(MODULE, "compact", {
+      out: out.id,
+      out2: out2 ? out2.id : 0,
+      src: src ? (src as DeviceBuffer).id : 0,
+      mask: (mask as DeviceBuffer).id,
+      pos: (pos as DeviceBuffer).id,
+      n,
+      count,
+      m: m ?? 0,
+    });
+    return out2 ? [out, out2] : out;
+  }
+
+  expand(
+    src: unknown,
+    mask: unknown,
+    pos: unknown | null,
+    n: number,
+    rhs: KernelOperand
+  ): DeviceBuffer {
+    const out = this.result(n);
+    this.helper.post(MODULE, "expand", {
+      out: out.id,
+      src: (src as DeviceBuffer).id,
+      mask: (mask as DeviceBuffer).id,
+      pos: pos ? (pos as DeviceBuffer).id : 0,
+      n,
+      rhs:
+        "scalar" in rhs
+          ? { scalar: rhs.scalar }
+          : { id: (rhs.buffer as DeviceBuffer).id, n: rhs.n },
+    });
+    return out;
+  }
+
   concat(
     total: number,
     outer: number,
