@@ -33,6 +33,9 @@ export interface CompileRequest {
   readonly synthetic: boolean;
   /** Suffix for the `onJitCompile` label, e.g. `(double[1×1]:positive) -> nargout=1`. */
   readonly describe: string;
+  /** The spec only reads its parameters and returns none of them, so a
+   *  backend may pass tensor inputs without copying them. */
+  readonly borrowsInputs?: boolean;
 }
 
 export interface JitBackend<A = unknown> {
@@ -68,6 +71,8 @@ export interface JitBackend<A = unknown> {
   recursive(art: A): boolean;
   /** Whether the unit's output may stream (`Executor.streamsOutput`). */
   streamsOutput(art: A): boolean;
+  /** Element-wise kernels in the compiled entry (see `stmtExecutor.ts`). */
+  kernels(art: A): number;
 }
 
 /** Whether the output of a compiled module is reproduced exactly by the

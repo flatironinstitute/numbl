@@ -1,10 +1,10 @@
 # Executor Registry
 
-The interpreter delegates three kinds of unit to a registry of _executors_: a whole script body, a `for`/`while` loop, and a user-function call. Each executor handles one of these _shapes_ with one JIT backend (JS-JIT at `--opt 1`; C-JIT, then JS-JIT, at `--opt 2`). The AST-walking interpreter is the registry's hardcoded last-resort fallback; it is not a registered executor.
+The interpreter delegates four kinds of unit to a registry of _executors_: a whole script body, a `for`/`while` loop, a user-function call, and a single large element-wise assignment. Each executor handles one of these _shapes_ with one JIT backend (JS-JIT at `--opt 1`; C-JIT, then JS-JIT, at `--opt 2`). The AST-walking interpreter is the registry's hardcoded last-resort fallback; it is not a registered executor.
 
 ## Concepts
 
-- **Shape**: the kind of unit, one of `top-level`, `loop`, or `call`. The registry lowers a unit once (`executors/lowering.ts`) into a `LoweredStmt` tagged with its shape and hands it to the executors registered for that shape.
+- **Shape**: the kind of unit, one of `top-level`, `loop`, `call`, or `stmt`. The registry lowers a unit once (`executors/lowering.ts`) into a `LoweredStmt` tagged with its shape and hands it to the executors registered for that shape.
 - **Executor**: one strategy for one shape. Implements the `Executor` interface below.
 - **Registry**: holds an ordered list of executors per shape, dispatches at runtime, and owns the compile cache.
 - **Backend**: what differs between JS-JIT and C-JIT (`executors/jit/backend.ts`). The three shape executors are written once against a `JitBackend` and instantiated per backend.
@@ -15,7 +15,7 @@ The interpreter delegates three kinds of unit to a registry of _executors_: a wh
 ```ts
 interface Executor<K extends ShapeKind, D, C> {
   readonly name: string; // e.g. "cjit-loop"
-  readonly kind: K; // "top-level" | "loop" | "call"
+  readonly kind: K; // "top-level" | "loop" | "call" | "stmt"
 
   // Cheap; runs on every dispatch. Returns data for compile/run, or null
   // to decline.
@@ -24,8 +24,8 @@ interface Executor<K extends ShapeKind, D, C> {
   cacheKey(data: D): string;
 
   // Called only on cache miss. Cached under (executor.name, owner,
-  // cacheKey), where owner is the head Stmt (top-level, loop) or the
-  // FunctionDef (call).
+  // cacheKey), where owner is the head Stmt (top-level, loop, stmt) or
+  // the FunctionDef (call).
   compile(data: D, interp: Interpreter): C;
 
   // { result } on success (the return value for a call; undefined
@@ -67,7 +67,7 @@ runFirst(executors, lowered, owner):
 ```
 
 - `tryRunWholeScope(siblings, interp)`: called once at script start with the script body. On null, the interpreter runs the body statement by statement.
-- `dispatch(siblings, i, interp)`: per statement. A `for`/`while` stmt is lowered and offered to the loop executors; any other stmt (and a loop no executor took) runs on the interpreter.
+- `dispatch(siblings, i, interp)`: per statement. A `for`/`while` stmt is lowered and offered to the loop executors, an assignment that passes the statement prefilter to the stmt executors (see [The statement shape](#the-statement-shape)); any other stmt (and one no executor took) runs on the interpreter.
 - `dispatchCall(fn, args, nargout, interp)`: from `callBody` (`interpreter/callConvention.ts`). On null the interpreter's call path runs.
 
 There is no cost model: the order is fixed by registration (`executors/plugins.ts`), C-JIT before JS-JIT. A C executor declines what it cannot marshal across the koffi ABI, so JS-JIT picks that up, and the interpreter takes whatever both decline.
@@ -89,6 +89,7 @@ The shape executors (`executors/jit/topLevelExecutor.ts`, `loopExecutor.ts`, `ca
 - **top-level** wraps the script body in a synthetic function (params = variables read from the env, outputs = variables assigned), and writes the outputs back to the env. It declines scripts with a top-level `return` and scripts with unsuppressed assignments, whose "x = 10" display the emitted code does not reproduce. A backend with `strictDisplayGate` (C) applies a stricter display gate (unsuppressed bare expressions decline too) unless the script carries `%!numbl:assert_jit c`.
 - **loop** wraps a single `for`/`while` stmt the same way; outputs are filtered to those live after the loop.
 - **call** compiles the user function itself, specialized on argument types and nargout, and returns its outputs. It declines `nargout === 0`, since the interpreter still binds the first output to `ans`.
+- **stmt** wraps one `y = <expr>;` statement the same way (JS backend only; see below).
 
 A `JitBackend` supplies:
 
@@ -101,6 +102,7 @@ A `JitBackend` supplies:
 | raise channel       | tagged `JitRaise` thrown by the emitted code   | `longjmp` to the host-entry guard; status read with `bindRaise`          |
 | `native`            | false                                          | true: satisfies `%!numbl:assert_jit c`                                   |
 | `strictDisplayGate` | false                                          | true: unsuppressed bare expressions decline the top-level shape          |
+| `kernels`           | element-wise kernels in the compiled entry     | the same                                                                 |
 
 Shared policy lives in `backend.ts`: `compileUnit` (the single place compiler rejections are caught and recorded for `NUMBL_JIT_LOG` and `%!numbl:assert_jit`), `declinedByAssertC` (at `--opt 2` a non-`native` backend declines units marked `%!numbl:assert_jit c`, so they either C-JIT or reach the interpreter, which raises), and `insideCompiledLoop` (the loop-depth gate below).
 
@@ -109,6 +111,20 @@ Shared policy lives in `backend.ts`: `compileUnit` (the single place compiler re
 The loop and call executors decline while `interp.loopDepth > 0`: an enclosing loop is the natural JIT entry point, since compiling it captures everything nested inside, and bidding per-iteration underneath it would pay propose and cache-lookup overhead for no gain.
 
 That reasoning holds only while the enclosing loop is going to be compiled. When it is _declined_, the interpreter walks its body statement by statement and nothing above will capture what is nested inside, so the gate lifts. `Registry.interpretFallback` bumps `Interpreter.jitDeclinedLoopDepth` around the interpreter's execution of a declined loop stmt, and the executors gate on `loopDepth > 0 && jitDeclinedLoopDepth === 0`. A nested loop or an expensive callee under a declined loop then gets its own chance; declines are cached, so a nested unit that also declines costs one cache lookup per iteration rather than a repeated compile.
+
+## The statement shape
+
+Most script bodies, and some function bodies, are not compiled as a whole (a single unsupported construct declines the unit), so their statements run on the interpreter one at a time. An element-wise statement such as `y = a.*b + c.*d - e` then makes one pass over memory and allocates one temporary per operation. The `stmt` shape (`executors/jit/stmtExecutor.ts`) compiles such a statement on its own, so that it runs as one fused kernel (see [fusion.md](jit/fusion.md)).
+
+Since `dispatch` sees every interpreted statement, the gate must cost next to nothing for the common case:
+
+1. **Prefilter** (`stmtPrefilter.ts`): a suppressed `y = <expr>` whose RHS is an element-wise tree (literals, variables, `+ - .* ./`, `*` and `/`, unary minus, the exact element-wise calls the JS kernels take, optionally under a full `sum` / `prod` / `mean`) with at least two operations. The verdict depends only on the AST, so it is computed once per statement node and cached in a `WeakMap`; a statement that is not a candidate costs one type check and one map lookup per execution.
+2. **Hotness**: a candidate is offered from its third execution on (`STMT_MIN_RUNS`), so a statement that runs once or twice is never compiled. Compiling a statement and the first runs of its freshly compiled (cold) code cost more than one fused run saves.
+3. **Size** (`classifyStmt`): at least one tensor input of 65536 elements or more (`STMT_MIN_NUMEL`). It also declines when a variable shadows one of the RHS's call names (the call would be an index) or a name the JIT takes for a constant (`pi`, `i`, ...).
+4. **Kernel check**: a compiled unit that holds no element-wise kernel (the operand shapes did not fuse) is cached as a decline, so such a statement is not compiled or invoked again.
+5. **Back-off** (`stmtDeclined`): after a decline at step 3 or 4 (or a run that bails or re-runs), the statement skips its next 1, 3, 7, ... up to 1023 dispatches, so a hot statement that keeps declining costs a counter decrement. A successful run resets it.
+
+The unit's inputs are the variables the RHS reads, its output is `y`, and it borrows its tensor inputs instead of copying them across the boundary (`CompileRequest.borrowsInputs`): it only reads them and assigns a freshly allocated result. The shape is registered for the JS backend only, also at `--opt 2`, since a C compile costs far more than a single statement saves.
 
 ## Runtime errors and bails
 
@@ -143,11 +159,11 @@ Streaming means user output callbacks (`onOutput`) run while compiled code is on
 
 `registerExecutorsForOpt(registry, opt)` in `executors/plugins.ts` is the single switch from an `--opt` level to the registered executors.
 
-| `--opt` | Executors, in order                                                                      |
-| ------- | ---------------------------------------------------------------------------------------- |
-| 0       | none                                                                                     |
-| 1       | jit-top-level, jit-loop, jit-call                                                        |
-| 2       | cjit-top-level, cjit-loop, cjit-call, then jit-top-level, jit-loop, jit-call (Node only) |
+| `--opt` | Executors, in order                                                                                |
+| ------- | -------------------------------------------------------------------------------------------------- |
+| 0       | none                                                                                               |
+| 1       | jit-top-level, jit-loop, jit-call, jit-stmt                                                        |
+| 2       | cjit-top-level, cjit-loop, cjit-call, then jit-top-level, jit-loop, jit-call, jit-stmt (Node only) |
 
 The C backend is not imported by `plugins.ts`: `registerExecutorsForOpt(registry, opt, host)` takes it from the run's host (`host.cjit`, see [architecture.md](architecture.md#host-capabilities)). `initNodePlatform` (`src/node-platform.ts`, used by the CLI and exported from `numbl/node`) puts it there with `nodeCJitBackend()` (`executors/jit/cjit.node.ts`), together with the koffi bridge (`host.nativeBridge`). Only that module imports `cBackend.ts` and, through it, `compileC.node.ts` (`cc` + koffi compile/load), so the Node modules and the C compile graph stay out of the web build; there, and whenever `koffi` is unavailable, `--opt 2` behaves like `--opt 1`.
 
@@ -160,8 +176,9 @@ executors/
   types.ts          Executor / RunResult / ShapeKind
   registry.ts       Registry: tryRunWholeScope, dispatch, dispatchCall
   cache.ts          ExecutorCache (WeakMap with BAILED sentinel)
-  lowering.ts       tryLowerTopLevel / tryLowerLoop / tryLowerCall + WideningState
-  classification.ts top-level / loop / call classification (backend-independent)
+  lowering.ts       tryLowerTopLevel / tryLowerLoop / tryLowerCall / tryLowerStmt + WideningState
+  classification.ts top-level / loop / call / stmt classification (backend-independent)
+  stmtPrefilter.ts  per-AST-node gate for the stmt shape
   inputTypes.ts     runtime value → compiler Type, widening, cache-key strings
   handleInline.ts   inlines capture-free function-handle inputs into loop bodies
   plugins.ts        registerExecutorsForOpt (the --opt → executors switch)
@@ -171,6 +188,7 @@ executors/
     topLevelExecutor.ts  makeTopLevelExecutor(backend)
     loopExecutor.ts      makeLoopExecutor(backend)
     callExecutor.ts      makeCallExecutor(backend)
+    stmtExecutor.ts      makeStmtExecutor(backend) (registered for JS only)
     jsBackend.ts         JS backend (compileSpec + new Function)
     cBackend.ts          C backend (compileSpecC + cc + koffi; Node only)
     session.ts           per-context Workspace + Lowerer (the spec cache)

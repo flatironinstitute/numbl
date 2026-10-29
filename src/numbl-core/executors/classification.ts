@@ -10,7 +10,11 @@
 import type { Interpreter } from "../interpreter/interpreter.js";
 import type { FunctionDef } from "../interpreter/types.js";
 import type { Stmt, Expr } from "../parser/types.js";
-import { isRuntimeFunction, type RuntimeValue } from "../runtime/types.js";
+import {
+  isRuntimeFunction,
+  isRuntimeTensor,
+  type RuntimeValue,
+} from "../runtime/types.js";
 import type { Type } from "../jit/index.js";
 import { inlinableHandleExpr } from "./handleInline.js";
 import { typeKey, typeOfValue, widenAgainst } from "./inputTypes.js";
@@ -131,6 +135,54 @@ export function classifyTopLevel(
     hasReturn: analysis.hasReturn,
     assertsCJit: containsAssertJitC(stmts),
     cacheKey,
+  };
+}
+
+// ── Statement classification ────────────────────────────────────────────
+
+export interface StmtClassification {
+  /** A `y = <expr>;` statement that passed `stmtCandidate`. */
+  readonly stmt: Stmt & { type: "Assign" };
+  readonly inputs: readonly string[];
+  readonly inputTypes: readonly Type[];
+  readonly outputs: readonly string[];
+  readonly currentFile: string;
+  readonly cacheKey: string;
+}
+
+/** Classify a candidate statement whose largest tensor input has at least
+ *  `minNumel` elements; null when it has none that large, or when the env
+ *  defines a variable named like one of its `calls` (the call is an index)
+ *  or like a name the JIT takes for a constant (`pi`, `i`, ...). The
+ *  inputs are the names the RHS reads that the env holds (the rest are
+ *  functions); the output is the assigned name. */
+export function classifyStmt(
+  interp: Interpreter,
+  stmt: Stmt & { type: "Assign" },
+  reads: readonly string[],
+  calls: readonly string[],
+  minNumel: number,
+  prevInputTypes: readonly Type[] | undefined
+): StmtClassification | null {
+  const env = interp.frame.env;
+  for (const name of calls) if (env.get(name) !== undefined) return null;
+  let large = false;
+  for (const name of reads) {
+    const v = env.get(name);
+    if (v === undefined) continue;
+    if (KNOWN_CONSTANTS.has(name)) return null;
+    if (isRuntimeTensor(v) && v.data.length >= minNumel) large = true;
+  }
+  if (!large) return null;
+  const { inputs, inputTypes } = gatherTypedEnvInputs(interp, reads);
+  widenAgainst(inputTypes, prevInputTypes);
+  return {
+    stmt,
+    inputs,
+    inputTypes,
+    outputs: [stmt.name],
+    currentFile: interp.frame.file,
+    cacheKey: `$stmt:${interp.frame.file}|${inputsKey(inputs, inputTypes)}`,
   };
 }
 

@@ -28,6 +28,8 @@ interface JsArtifact {
   readonly locFiles: ReadonlyArray<string>;
   readonly recursive: boolean;
   readonly streamsOutput: boolean;
+  readonly kernels: number;
+  readonly borrowsInputs: boolean;
   readonly where: string;
 }
 
@@ -48,6 +50,7 @@ export const jsBackend: JitBackend<JsArtifact> = {
       outputTypes,
       locFiles,
       recursive,
+      kernels,
       activatedSnippets,
     } = compileSpec({
       workspace,
@@ -79,6 +82,8 @@ export const jsBackend: JitBackend<JsArtifact> = {
       locFiles,
       recursive,
       streamsOutput: outputIsReproducible(activatedSnippets),
+      kernels,
+      borrowsInputs: req.borrowsInputs === true,
       where: req.where,
     };
   },
@@ -87,9 +92,13 @@ export const jsBackend: JitBackend<JsArtifact> = {
 
   streamsOutput: art => art.streamsOutput,
 
+  kernels: art => art.kernels,
+
   invoke(art, args) {
     const jsArgs = args.map((v, i) =>
-      v === undefined ? undefined : numblToJit(v, art.argTypes[i])
+      v === undefined
+        ? undefined
+        : numblToJit(v, art.argTypes[i], art.borrowsInputs)
     );
     let ret: unknown;
     try {

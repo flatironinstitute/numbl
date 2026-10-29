@@ -56,6 +56,7 @@ interface CArtifact {
   readonly locFiles: ReadonlyArray<string>;
   readonly recursive: boolean;
   readonly streamsOutput: boolean;
+  readonly kernels: number;
 }
 
 /** `.so`s with a call in progress (see `invoke`). */
@@ -82,6 +83,7 @@ export const cBackend: JitBackend<CArtifact> = {
       assignedFlags,
       locFiles,
       recursive,
+      kernels,
       activatedSnippets,
     } = compileSpecC({
       workspace,
@@ -110,12 +112,15 @@ export const cBackend: JitBackend<CArtifact> = {
       locFiles,
       recursive,
       streamsOutput: outputIsReproducible(activatedSnippets),
+      kernels,
     };
   },
 
   recursive: art => art.recursive,
 
   streamsOutput: art => art.streamsOutput,
+
+  kernels: art => art.kernels,
 
   invoke(art, args, interp) {
     const koffi = interp.rt.host.nativeBridge?.koffi as Koffi;

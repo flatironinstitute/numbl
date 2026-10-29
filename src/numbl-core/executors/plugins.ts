@@ -15,6 +15,7 @@ import { makeTopLevelExecutor } from "./jit/topLevelExecutor.js";
 import { makeLoopExecutor } from "./jit/loopExecutor.js";
 import { makeCallExecutor } from "./jit/callExecutor.js";
 import type { NumblHost } from "../host.js";
+import { makeStmtExecutor } from "./jit/stmtExecutor.js";
 
 /** Optimization mode label.
  *
@@ -51,4 +52,6 @@ export function registerExecutorsForOpt(
   if (opt === "2" && host.cjit)
     registerBackend(registry, host.cjit as JitBackend);
   registerBackend(registry, jsBackend);
+  // Statements: JS only (see `stmtExecutor.ts`).
+  registry.register(makeStmtExecutor(jsBackend));
 }
