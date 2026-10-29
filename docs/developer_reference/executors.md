@@ -126,7 +126,17 @@ Since `dispatch` sees every interpreted statement, the gate must cost next to no
 4. **Kernel check**: a compiled unit that holds no element-wise kernel (the operand shapes did not fuse) is cached as a decline, so such a statement is not compiled or invoked again.
 5. **Back-off** (`stmtDeclined`): after a decline at step 3 or 4 (or a run that bails or re-runs), the statement skips its next 1, 3, 7, ... up to 1023 dispatches, so a hot statement that keeps declining costs a counter decrement. A successful run resets it.
 
-The unit's inputs are the variables the RHS reads, its output is `y`, and it borrows its tensor inputs instead of copying them across the boundary (`CompileRequest.borrowsInputs`): it only reads them and assigns a freshly allocated result. The shape is registered for the JS backend only, also at `--opt 2`, since a C compile costs far more than a single statement saves.
+The unit's inputs are the variables the RHS reads and its output is `y`; since it only reads its inputs, it borrows them (see below). The shape is registered for the JS backend only, also at `--opt 2`, since a C compile costs far more than a single statement saves.
+
+## Borrowed inputs
+
+MATLAB passes arguments by value, so a call into compiled code copies its tensor arguments: at the boundary (every shape's inputs) and, in emitted JS, at each call between specs (`jit_deep_clone`; C copies with `_copy`). A spec that only reads a parameter can use the caller's buffer instead, which for a large array called often saves most of the call's cost. `jit/lowering/paramUse.ts` decides this per parameter from the emitted IR. A tensor parameter is _mutated_ when it is the base of an indexed, slice, member or cell store, or is placed uncopied into a struct, cell or function handle; it is also noted whether it is reassigned and whether it is an output. Then:
+
+- **JS, at the boundary** (`jsEntryBorrows`): a parameter that is not mutated is passed uncopied. It may still be returned unchanged (`function x = f(x)`), so `jsBackend.invoke` copies an output whose buffer is one of the borrowed ones.
+- **JS, between specs** (`jsCallBorrows`): a parameter that is neither mutated nor an output is passed without `jit_deep_clone`. A callee that returns a parameter gets a copy, so a result never shares the caller's buffer.
+- **C, at the boundary** (`cEntryBorrows`): the C entry owns and frees its parameters, and the host frees its returned buffers, so the parameter must also be neither reassigned nor an output, and the entry must not be recursive. The emitter leaves such a parameter out of the entry's frees, and the host passes it as a pointer into the tensor's own buffer when it has at least 1024 elements (koffi passes a typed array's backing store; a smaller array may live in the V8 heap, where a collection during a host callback could move it). C calls between specs still copy.
+
+A host helper that keeps a value beyond the call copies it: the JS plot dispatch copies its tensor arguments.
 
 ## Runtime errors and bails
 

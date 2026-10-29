@@ -58,6 +58,7 @@ import {
 import { emitTensorConcatJs } from "./emitTensorConcatJs.js";
 import { maybeUnassignedReads } from "../lowering/definiteAssign.js";
 import { emitKernelJs } from "./emitKernelJs.js";
+import { jsCallBorrows, jsEntryBorrows } from "../lowering/paramUse.js";
 import { callsSpec } from "../lowering/callGraph.js";
 import {
   STRIP_CHUNK,
@@ -83,6 +84,9 @@ export interface EmitJsResult {
   activatedSnippets: ReadonlyArray<string>;
   /** Files named by statement locations, by index (see `locCode`). */
   locFiles: string[];
+  /** Per entry parameter: the host may pass it without copying
+   *  (`jsEntryBorrows`). */
+  borrows: boolean[];
 }
 
 // ── Entry ────────────────────────────────────────────────────────────────
@@ -101,8 +105,10 @@ export function emitJsProgram(
   // The raise channel (`JitRaise`), shared by every runtime error site.
   useRuntimeByName(state, "jit_raise");
   state.maybeUnbound = new Set();
+  state.callBorrows = new Map();
   for (const fn of prog.functions.values()) {
     for (const read of maybeUnassignedReads(fn)) state.maybeUnbound.add(read);
+    state.callBorrows.set(fn.cName, jsCallBorrows(fn));
   }
 
   const userParts: string[] = [];
@@ -138,6 +144,7 @@ export function emitJsProgram(
     source: out.join("\n"),
     activatedSnippets: Array.from(state.active),
     locFiles: state.locFiles,
+    borrows: jsEntryBorrows(prog.functions.get(opts.exposeSpec)!),
   };
 }
 
@@ -263,6 +270,22 @@ function emitOwnedRhsJs(e: IRExpr, state: RuntimeState): string {
     return `jit_deep_clone(${emitExpr(e, state)})`;
   }
   return emitExpr(e, state);
+}
+
+/** The arguments of a call to the user spec `cName`: an owned argument is
+ *  deep-cloned unless the spec only reads that parameter
+ *  (`jsCallBorrows`). */
+function emitUserCallArgs(
+  cName: string,
+  args: ReadonlyArray<IRExpr>,
+  state: RuntimeState
+): string[] {
+  const borrows = state.callBorrows?.get(cName);
+  return args.map((a, i) =>
+    isOwned(a.ty) && borrows?.[i] !== true
+      ? emitOwnedRhsJs(a, state)
+      : emitExpr(a, state)
+  );
 }
 
 /** A non-owned (scalar) `value` stored to `s`'s variable. An output whose
@@ -834,11 +857,9 @@ function emitMultiAssignCall(
   // multi-return naturally. Owned-typed args route through the
   // deep-clone wrapper for the same pass-by-value reason single-
   // output user-function calls do.
-  const args = s.args.map(a =>
-    isOwned(a.ty) && !s.isBuiltin
-      ? emitOwnedRhsJs(a, state)
-      : emitExpr(a, state)
-  );
+  const args = s.isBuiltin
+    ? s.args.map(a => emitExpr(a, state))
+    : emitUserCallArgs(s.cName, s.args, state);
   // Slot targets: each declared output's cName, or a synthesized
   // discard slot name (matched by `collectAssignedLocals`).
   const targets: string[] = s.outputs.map((slot, i) =>
@@ -938,13 +959,9 @@ function emitExpr(e: IRExpr, state: RuntimeState): string {
       // wrapper at the call site: MATLAB pass-by-value requires
       // that a callee's indexed write into its parameter not bleed
       // back to the caller. JS GC takes care of lifetime, but not
-      // value-semantics — the deep_clone helper provides those.
-      const args = e.args
-        .map(a =>
-          isOwned(a.ty) ? emitOwnedRhsJs(a, state) : emitExpr(a, state)
-        )
-        .join(", ");
-      return `${e.cName}(${args})`;
+      // value-semantics — the deep_clone helper provides those. A
+      // parameter the callee only reads is passed as is.
+      return `${e.cName}(${emitUserCallArgs(e.cName, e.args, state).join(", ")})`;
     }
 
     case "ElemwiseKernel":

@@ -75,6 +75,9 @@ export interface CompileSpecCResult {
   recursive: boolean;
   /** Element-wise kernels in the entry spec (`ElemwiseKernel`). */
   kernels: number;
+  /** Per parameter: the host passes this tensor as a pointer into its
+   *  own buffer, which the entry neither writes, frees nor returns. */
+  borrows: ReadonlyArray<boolean>;
 }
 
 /** C predeclares every local (no unassigned state) and fuses element-wise
@@ -97,6 +100,7 @@ export function compileSpecC(args: CompileSpecArgs): CompileSpecCResult {
     locFiles: emitted.locFiles,
     recursive,
     kernels,
+    borrows: emitted.borrows,
   };
 }
 

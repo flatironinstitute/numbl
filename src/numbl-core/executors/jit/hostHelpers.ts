@@ -210,11 +210,13 @@ export function buildHostHelpers(rt: Runtime): JitHostHelpers {
     elemwise: elemwiseHost,
     numeric: numericHost,
     cancel: rt.cancelFlag ?? new Int32Array(1),
+    // The plot keeps its data, so it gets copies: the arguments may be
+    // buffers the compiled code writes later, or borrowed from the caller.
     plotDispatch: (name: string, args: unknown[]) => {
       runPlotBuiltin(
         rt,
         name,
-        args.map(a => jitToNumbl(a))
+        args.map(a => jitToNumbl(copiedTensor(a)))
       );
     },
   };
@@ -306,4 +308,11 @@ export function cOutputSink(rt: Runtime): {
     pending = null;
   };
   return { write, flush };
+}
+
+/** `v` with its data copied when it is a tensor. */
+function copiedTensor(v: unknown): unknown {
+  const t = v as { jitTag?: string; data?: Float64Array; imag?: Float64Array };
+  if (t === null || typeof t !== "object" || t.jitTag !== "tensor") return v;
+  return { ...t, data: t.data?.slice(), imag: t.imag?.slice() };
 }

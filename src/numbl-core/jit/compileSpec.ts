@@ -37,6 +37,10 @@ export interface CompileSpecResult {
   recursive: boolean;
   /** Element-wise kernels in the entry spec (`ElemwiseKernel`). */
   kernels: number;
+  /** Per parameter: the host may pass this tensor without copying it.
+   *  An output may be such a parameter, unchanged, so the host copies an
+   *  output that shares a borrowed buffer. */
+  borrows: ReadonlyArray<boolean>;
 }
 
 /** JS models an unassigned variable as `undefined` and checks reads at
@@ -60,5 +64,6 @@ export function compileSpec(args: CompileSpecArgs): CompileSpecResult {
     locFiles: emitted.locFiles,
     recursive,
     kernels,
+    borrows: emitted.borrows,
   };
 }

@@ -63,8 +63,6 @@ export function makeStmtExecutor<A>(
           argTypes: [...c.inputTypes],
           nargout: c.outputs.length,
           synthetic: true,
-          // `y = <expr>` reads its inputs and assigns a fresh result.
-          borrowsInputs: true,
           describe: `${describeTypes(c.inputTypes)} -> outputs=${c.outputs.length}`,
         },
         interp
