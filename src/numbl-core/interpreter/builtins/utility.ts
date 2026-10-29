@@ -219,6 +219,7 @@ export const MATLAB_ID_RE = /^[A-Za-z]\w*(:[A-Za-z]\w*)+$/;
 
 builtin({
   name: "assert",
+  accepts: { sparse: true },
   nargin: [1, Infinity],
   nargout: 0,
   apply: args => {

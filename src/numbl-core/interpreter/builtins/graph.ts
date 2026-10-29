@@ -305,6 +305,7 @@ function argString(v: RuntimeValue): string | null {
 
 builtin({
   name: "graph",
+  accepts: { sparse: true },
   help: {
     signatures: [
       "G = graph(A)",

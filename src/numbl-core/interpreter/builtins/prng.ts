@@ -6,7 +6,6 @@ import {
   isRuntimeString,
   isRuntimeChar,
   isRuntimeComplexNumber,
-  isRuntimeSparseMatrix,
   isRuntimeTensor,
   isRuntimeStruct,
 } from "../../runtime/types.js";
@@ -63,12 +62,7 @@ function sizeArgs(name: string, args: RuntimeValue[]): number[] {
         "Size inputs must be real."
       );
     if (
-      !(
-        typeof a === "number" ||
-        typeof a === "boolean" ||
-        isRuntimeTensor(a) ||
-        isRuntimeSparseMatrix(a)
-      )
+      !(typeof a === "number" || typeof a === "boolean" || isRuntimeTensor(a))
     )
       throw builtinError(
         `MATLAB:${name}:inputType`,

@@ -1,10 +1,12 @@
 /**
  * `builtin()`: the way to define an interpreter builtin.
  *
- * A builtin is an `apply` function plus explicit arity metadata. There are
- * no argument-type rules: `apply` receives runtime values and is
- * responsible for rejecting what it cannot handle (see args.ts). Arity is
- * checked before `apply` runs, with MATLAB's messages and identifiers.
+ * A builtin is an `apply` function plus explicit arity metadata. `apply`
+ * receives runtime values and is responsible for rejecting what it cannot
+ * handle (see args.ts). Arity is checked before `apply` runs, with
+ * MATLAB's messages and identifiers; then the argument-kind policy
+ * (`accepts`, runtime/argKinds.ts) converts or rejects the non-dense kinds
+ * (sparse) the builtin does not declare.
  *
  *   builtin({
  *     name: "hypot",
@@ -28,6 +30,11 @@ import {
   type IBuiltin,
 } from "../../runtime/builtinRegistry.js";
 import type { CallerScope } from "../callerScope.js";
+import {
+  applyArgPolicy,
+  resolveArgPolicy,
+  type ArgKindPolicy,
+} from "../../runtime/argKinds.js";
 import { checkNargin, checkNargout } from "./args.js";
 
 /** An argument count: exactly `n`, or an inclusive range `[min, max]`
@@ -70,6 +77,12 @@ interface BuiltinSpecBase {
    *  inputs/outputs as MATLAB:TooManyInputs / MATLAB:TooManyOutputs rather
    *  than MATLAB:maxrhs / MATLAB:maxlhs. */
   mfile?: boolean;
+  /** How the builtin takes the non-dense value kinds (see
+   *  runtime/argKinds.ts). By default a sparse argument is converted to a
+   *  dense tensor before `apply` runs; `accepts: { sparse: true }` passes
+   *  it through for a builtin that handles sparse itself, and
+   *  `sparse: "error"` (or `{ identifier, message }`) rejects it. */
+  accepts?: ArgKindPolicy;
 }
 
 export interface PlainBuiltinSpec extends BuiltinSpecBase {
@@ -145,6 +158,7 @@ export function makeBuiltin(spec: BuiltinSpec): IBuiltin {
       })
     : plain;
   const apply = spec.apply as BuiltinApply;
+  const policy = resolveArgPolicy(name, spec.accepts);
 
   return {
     name,
@@ -154,7 +168,7 @@ export function makeBuiltin(spec: BuiltinSpec): IBuiltin {
     call: (args, n) => {
       checkNargin(args.length, inMin, inMax, mfile);
       checkNargout(n, outMin, outMax, mfile);
-      const result = apply(args, n, ctx);
+      const result = apply(applyArgPolicy(policy, args), n, ctx);
       return isVoid ? undefined : (result as RuntimeValue | RuntimeValue[]);
     },
   };

@@ -84,6 +84,7 @@ builtin({
 
 builtin({
   name: "amd",
+  accepts: { sparse: true },
   help: {
     signatures: ["p = amd(A)"],
     description:
@@ -96,6 +97,7 @@ builtin({
 
 builtin({
   name: "colamd",
+  accepts: { sparse: true },
   help: {
     signatures: ["p = colamd(A)"],
     description:
@@ -166,6 +168,8 @@ function sparseFromLinearIndices(
 function registerSprand(name: string, gen: () => number): void {
   builtin({
     name,
+    // sprand(S) keeps the sparsity pattern of S.
+    accepts: { sparse: true },
     help: {
       signatures: [`R = ${name}(m, n, density)`, `R = ${name}(S)`],
       description:
@@ -211,6 +215,7 @@ registerSprand("sprandn", boxMullerRandom);
 
 builtin({
   name: "sprandsym",
+  accepts: { sparse: true },
   help: {
     signatures: ["R = sprandsym(n, density)", "R = sprandsym(S)"],
     description:
@@ -379,6 +384,7 @@ function denseIsTriangular(
 
 builtin({
   name: "decomposition",
+  accepts: { sparse: true },
   help: {
     signatures: [
       "dA = decomposition(A)",
@@ -657,13 +663,6 @@ function rhsData(v: RuntimeValue): {
   m: number;
   n: number;
 } {
-  if (isRuntimeSparseMatrix(v)) {
-    if (v.pi)
-      throw new RuntimeError(
-        "decomposition: complex operands are not supported"
-      );
-    return { data: sparseToDense(v).data, m: v.m, n: v.n };
-  }
   if (isRuntimeTensor(v)) {
     if (v.imag)
       throw new RuntimeError(

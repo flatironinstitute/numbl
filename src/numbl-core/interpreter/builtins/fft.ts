@@ -489,6 +489,8 @@ function applyFFTShift(args: RuntimeValue[], inverse: boolean): RuntimeValue {
 builtin({
   name: "fft",
   nargin: [1, 3],
+  // MATLAB rejects only sparse data (fftDataArg); a sparse n is a number.
+  accepts: { sparse: true },
   apply: args => withScratch(() => applyFFT(args, false)),
 });
 
@@ -496,6 +498,7 @@ builtin({
   name: "ifft",
   // ifft(Y, n, dim, symflag); only 'nonsymmetric' (the default) is supported
   nargin: [1, 4],
+  accepts: { sparse: true },
   apply: args => {
     let rest = args;
     const last = args[args.length - 1];
@@ -511,6 +514,7 @@ builtin({
 
 builtin({
   name: "fftshift",
+  accepts: { sparse: true },
   nargin: [1, 2],
   mfile: true,
   apply: args => withScratch(() => applyFFTShift(args, false)),
@@ -518,6 +522,7 @@ builtin({
 
 builtin({
   name: "ifftshift",
+  accepts: { sparse: true },
   nargin: [1, 2],
   mfile: true,
   apply: args => withScratch(() => applyFFTShift(args, true)),

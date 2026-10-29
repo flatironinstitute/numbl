@@ -91,6 +91,7 @@ builtin({
 
 builtin({
   name: "assignin",
+  accepts: { sparse: true },
   nargin: 3,
   nargout: 0,
   scope: true,

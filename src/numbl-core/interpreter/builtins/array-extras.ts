@@ -159,12 +159,14 @@ function triPart(
 
 builtin({
   name: "triu",
+  accepts: { sparse: true },
   nargin: [1, 2],
   apply: args => triPart(args, (i, j, k) => j - i >= k, "triu"),
 });
 
 builtin({
   name: "tril",
+  accepts: { sparse: true },
   nargin: [1, 2],
   apply: args => triPart(args, (i, j, k) => i - j >= -k, "tril"),
 });
@@ -173,6 +175,7 @@ builtin({
 
 builtin({
   name: "toeplitz",
+  accepts: { sparse: true },
   nargin: [1, 2],
   mfile: true,
   apply: args => {
@@ -507,6 +510,15 @@ function bitwiseOp(
   return RTV.tensor(result, [...at.shape]);
 }
 
+/** MATLAB's error for sparse input to a bit operation. */
+function bitSparseError(name: string) {
+  const id = name === "bitand" ? "Bitand" : name === "bitor" ? "Bitor" : name;
+  return {
+    identifier: `MATLAB:${id}:sparseArgs`,
+    message: "Inputs must be full.",
+  };
+}
+
 function defineBitBinary(
   name: string,
   op: (a: number, b: number) => number
@@ -514,6 +526,7 @@ function defineBitBinary(
   builtin({
     name,
     nargin: [2, 3],
+    accepts: { sparse: bitSparseError(name) },
     apply: args => {
       if (args.length === 3) rejectAssumedType(args[2], name);
       return bitwiseOp(args[0], args[1], op, name);
@@ -542,6 +555,7 @@ defineBitBinary("bitget", (a, b) => {
 builtin({
   name: "bitset",
   nargin: [2, 4],
+  accepts: { sparse: bitSparseError("bitset") },
   apply: args => {
     if (args.length === 4) rejectAssumedType(args[3], "bitset");
     let v = 1;
@@ -668,6 +682,8 @@ function coordTransform(
     nargin: passZ ? [nIn, nIn + 1] : nIn,
     nargout: 3,
     mfile: true,
+    // cart2pol and cart2sph take the default (densify).
+    accepts: name.endsWith("2cart") ? { sparse: true } : undefined,
     apply: (args, nargout) => {
       const ins = args.slice(0, nIn).map(coordOperand);
       const outs = broadcastMap(ins, nOut, fn);
@@ -740,6 +756,7 @@ function forEachCombination(
 
 builtin({
   name: "nchoosek",
+  accepts: { sparse: true },
   nargin: 2,
   mfile: true,
   apply: args => {

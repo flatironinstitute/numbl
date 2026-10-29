@@ -36,6 +36,7 @@ import { toF64 } from "../../helpers/check-helpers.js";
 
 builtin({
   name: "gmres",
+  accepts: { sparse: true },
   nargout: 5,
   mfile: true,
   apply: (args, nargout, ctx) => _gmresImpl(ctx.rt, nargout, args),

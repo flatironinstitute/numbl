@@ -36,6 +36,7 @@ Type-guard predicates follow the pattern `isRuntimeTensor(v)`, `isRuntimeChar(v)
 2. Add its entry to `KINDS`. The table is a mapped type over every kind, so the build fails until the entry exists.
 3. Handle it in the switches that end in `assertNever` (indexing in `indexIntoRTValue`, `valuesAreEqual`) and in `displayValue`, whose return type makes it exhaustive. The build fails for these too.
 4. Still per kind, with no compile-time check: indexed assignment (`storeIntoRTValueIndex`), concatenation (`tensor-construction.ts`), `isequal` (`builtins/utility.ts`), the conversions in `convert.ts`, `whos` byte counts, refcounting of the values it holds (see [refcount.md](refcount.md)), and JIT input typing (`typeOfValue` in `executors/inputTypes.ts`), which types an unhandled kind as unknown.
+5. If the kind is a storage variant of an array that most builtins have no code for (as sparse is), give it a rule in `runtime/argKinds.ts`, so builtins receive it converted (or rejected) unless they declare `accepts` for it. See [builtins.md](../builtins.md#argument-kinds-sparse-and-other-non-dense-values).
 
 ## `RTV` constructors
 

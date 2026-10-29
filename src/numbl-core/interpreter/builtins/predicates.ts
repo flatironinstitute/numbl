@@ -41,6 +41,7 @@ builtin({
 
 builtin({
   name: "isreal",
+  accepts: { sparse: true },
   nargin: 1,
   apply: args => isRealValue(args[0]),
 });
