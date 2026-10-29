@@ -445,6 +445,71 @@ ${decls.join("\n")}
       return { bad };
     },
 
+    /** A fused element-wise expression (see runtime/gpu/fusion.ts): each
+     *  node applies an `ELEMWISE` template to inputs, scalars or earlier
+     *  nodes, in one kernel. */
+    async fused(
+      device: GPUDevice,
+      args: {
+        out: number;
+        n: number;
+        inputs: { id: number; n: number }[];
+        scalars: number[];
+        nodes: {
+          op: string;
+          args: ({ in: number } | { s: number } | { t: number })[];
+        }[];
+      }
+    ) {
+      const out = create(device, args.out, args.n);
+      if (args.n === 0) return;
+      if (args.scalars.length > 16)
+        throw new Error("gpuArray: too many scalars");
+      const ref = (r: { in: number } | { s: number } | { t: number }) =>
+        "in" in r
+          ? "x" + r.in
+          : "s" in r
+            ? `p.s[${r.s >> 2}][${r.s & 3}]`
+            : "t" + r.t;
+      const lines = args.nodes.map((node, j) => {
+        const tpl = ELEMWISE[node.op];
+        if (!tpl) throw new Error("gpuArray: no kernel for " + node.op);
+        const a = node.args[0] ? ref(node.args[0]) : "";
+        const b = node.args[1] ? ref(node.args[1]) : "";
+        return `let t${j} = ${tpl.replace(/\b[ab]\b/g, v => (v === "a" ? a : b))};`;
+      });
+      const decls = args.inputs.map(
+        (_x, k) =>
+          `@group(0) @binding(${k + 2}) var<storage, read> in${k}: array<f32>;`
+      );
+      const reads = args.inputs.map(
+        (x, k) => `let x${k} = in${k}[${x.n === 1 ? "0u" : "i"}];`
+      );
+      const code = `
+struct P { n: u32, w: u32, p0: u32, p1: u32, s: array<vec4f, 4> }
+@group(0) @binding(0) var<uniform> p: P;
+@group(0) @binding(1) var<storage, read_write> out: array<f32>;
+${decls.join("\n")}
+@compute @workgroup_size(256) fn main(@builtin(global_invocation_id) g: vec3u) {
+  let i = g.x + g.y * p.w;
+  if (i >= p.n) { return; }
+  ${reads.join("\n  ")}
+  ${lines.join("\n  ")}
+  out[i] = t${args.nodes.length - 1};
+}`;
+      const { groups, width } = grid(args.n);
+      const words = new ArrayBuffer(80);
+      new Uint32Array(words, 0, 2).set([args.n, width]);
+      new Float32Array(words, 16, args.scalars.length).set(args.scalars);
+      await run(
+        device,
+        code,
+        words,
+        [out, ...args.inputs.map(x => buffer(x.id))],
+        groups
+      );
+    },
+
     /** out[k] = src[off(k)] for the selection's offsets: `start + k*step`,
      *  or `offsets[k]`. */
     async take(

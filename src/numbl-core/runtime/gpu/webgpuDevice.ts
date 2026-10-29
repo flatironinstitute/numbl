@@ -19,6 +19,7 @@ import type {
   KernelOperand,
   KernelSelection,
 } from "./device.js";
+import type { FusedExpr } from "./deviceTypes.js";
 import { gpuArrayModule } from "./webgpuModule.js";
 
 /** What the device needs of a GPU helper (`GpuHelper` in src/gpuHelper.ts). */
@@ -135,6 +136,21 @@ export class WebGpuDevice implements GpuDevice, GpuKernels {
       "elementwise",
       this.ewArgs(out, op, inputs, n, dims)
     );
+    return out;
+  }
+
+  fused(expr: FusedExpr): DeviceBuffer {
+    const out = this.result(expr.n);
+    this.helper.post(MODULE, "fused", {
+      out: out.id,
+      n: expr.n,
+      inputs: expr.inputs.map(x => ({
+        id: (x.buffer as DeviceBuffer).id,
+        n: x.n,
+      })),
+      scalars: expr.scalars,
+      nodes: expr.nodes,
+    });
     return out;
   }
 
