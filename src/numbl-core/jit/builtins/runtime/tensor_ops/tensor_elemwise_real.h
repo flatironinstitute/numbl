@@ -19,7 +19,7 @@
  * picked whenever the emitter can't statically prove the shapes match
  * (unknown dims), so it re-checks at runtime and defers a mismatch to
  * the bcast kernel; the bcast kernel validates each axis pair (equal or
- * one side is 1) and raises "Matrix dimensions must agree" otherwise.
+ * one side is 1) and raises MATLAB's size-mismatch error otherwise.
  * Both checks mirror the JS twin (tensor_elemwise_real.js); without
  * them a runtime mismatch read past an operand and silently produced
  * garbage (the C analog of the JS NaN bug).
@@ -96,8 +96,7 @@
        * Mirrors the JS bcast_kernel guard; without it an incompatible     \
        * pair reads past an operand instead of raising. */                  \
       if (adim[i] != bdim[i] && adim[i] != 1 && bdim[i] != 1) {            \
-        jit_raise_dims_mismatch("Matrix dimensions must agree", a.ndim,       \
-                                a.dims, b.ndim, b.dims);                    \
+        jit_raise_size_mismatch();                                          \
       }                                                                     \
       rdim[i] = (adim[i] == 1) ? bdim[i] : adim[i];                         \
       astride[i] = (adim[i] == 1) ? 0 : aacc;                               \

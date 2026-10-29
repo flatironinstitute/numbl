@@ -5,7 +5,7 @@
  * Caller-allocated input/output buffers; never copies.
  */
 
-import { OpRealBin } from "./opCodes.js";
+import { OpBin } from "./opCodes.js";
 
 export function tsRealBinaryElemwise(
   op: number,
@@ -15,16 +15,16 @@ export function tsRealBinaryElemwise(
   out: Float64Array
 ): void {
   switch (op) {
-    case OpRealBin.ADD:
+    case OpBin.ADD:
       for (let i = 0; i < n; i++) out[i] = a[i] + b[i];
       return;
-    case OpRealBin.SUB:
+    case OpBin.SUB:
       for (let i = 0; i < n; i++) out[i] = a[i] - b[i];
       return;
-    case OpRealBin.MUL:
+    case OpBin.MUL:
       for (let i = 0; i < n; i++) out[i] = a[i] * b[i];
       return;
-    case OpRealBin.DIV:
+    case OpBin.DIV:
       for (let i = 0; i < n; i++) out[i] = a[i] / b[i];
       return;
     default:
@@ -42,16 +42,16 @@ export function tsRealScalarBinaryElemwise(
 ): void {
   if (scalarOnLeft) {
     switch (op) {
-      case OpRealBin.ADD:
+      case OpBin.ADD:
         for (let i = 0; i < n; i++) out[i] = scalar + arr[i];
         return;
-      case OpRealBin.SUB:
+      case OpBin.SUB:
         for (let i = 0; i < n; i++) out[i] = scalar - arr[i];
         return;
-      case OpRealBin.MUL:
+      case OpBin.MUL:
         for (let i = 0; i < n; i++) out[i] = scalar * arr[i];
         return;
-      case OpRealBin.DIV:
+      case OpBin.DIV:
         for (let i = 0; i < n; i++) out[i] = scalar / arr[i];
         return;
       default:
@@ -59,16 +59,16 @@ export function tsRealScalarBinaryElemwise(
     }
   } else {
     switch (op) {
-      case OpRealBin.ADD:
+      case OpBin.ADD:
         for (let i = 0; i < n; i++) out[i] = arr[i] + scalar;
         return;
-      case OpRealBin.SUB:
+      case OpBin.SUB:
         for (let i = 0; i < n; i++) out[i] = arr[i] - scalar;
         return;
-      case OpRealBin.MUL:
+      case OpBin.MUL:
         for (let i = 0; i < n; i++) out[i] = arr[i] * scalar;
         return;
-      case OpRealBin.DIV:
+      case OpBin.DIV:
         for (let i = 0; i < n; i++) out[i] = arr[i] / scalar;
         return;
       default:

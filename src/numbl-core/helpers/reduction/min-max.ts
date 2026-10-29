@@ -16,7 +16,6 @@ import {
   type RuntimeTensor,
   type RuntimeValue,
 } from "../../runtime/types.js";
-import { getBroadcastShape, broadcastIterate } from "../arithmetic.js";
 import { sparseToDense } from "../sparse-arithmetic.js";
 import { rstr } from "../../runtime/runtime.js";
 import {
@@ -24,7 +23,14 @@ import {
   firstReduceDim,
   copyTensor,
 } from "../reduction-helpers.js";
-import { tensorOps, OpReduce } from "../../ops/index.js";
+import {
+  tensorOps,
+  OpReduce,
+  OpBin,
+  binaryScalar,
+  elementwiseBinary,
+  type Operand,
+} from "../../ops/index.js";
 import { allocFloat64Array } from "../../runtime/alloc.js";
 import { stripZeroImagValue } from "../effectively-real.js";
 
@@ -192,113 +198,52 @@ function minMaxAlongDim(
 
 // ── Element-wise min/max of two arguments ──────────────────────────────
 
-function scalarToTensor(v: RuntimeValue): RuntimeTensor {
+function minMaxOperand(v: RuntimeValue): Operand {
   if (isRuntimeTensor(v)) return v;
-  if (isRuntimeComplexNumber(v)) {
-    const t = RTV.tensor(allocFloat64Array([v.re]), [1, 1]) as RuntimeTensor;
-    t.imag = allocFloat64Array([v.im]);
-    return t;
-  }
-  return RTV.tensor(allocFloat64Array([toNumber(v)]), [1, 1]) as RuntimeTensor;
+  if (isRuntimeComplexNumber(v))
+    return {
+      data: Float64Array.of(v.re),
+      imag: Float64Array.of(v.im),
+      shape: [1, 1],
+    };
+  return toNumber(v);
 }
 
+/** min(a, b) / max(a, b): NaN-skipping; complex values compare by
+ *  magnitude, then angle. Two logical operands give a logical result. */
 function minMaxElementwise(
   a: RuntimeValue,
   b: RuntimeValue,
-  name: string,
-  twoArgFn: (a: number, b: number) => number,
-  complexIsBetter: (
-    reA: number,
-    imA: number,
-    reB: number,
-    imB: number
-  ) => boolean
+  name: string
 ): RuntimeValue {
-  const aIsScalar =
-    isRuntimeNumber(a) || isRuntimeLogical(a) || isRuntimeComplexNumber(a);
-  const bIsScalar =
-    isRuntimeNumber(b) || isRuntimeLogical(b) || isRuntimeComplexNumber(b);
-  const anyComplex =
-    isRuntimeComplexNumber(a) ||
-    isRuntimeComplexNumber(b) ||
-    (isRuntimeTensor(a) && a.imag != null) ||
-    (isRuntimeTensor(b) && b.imag != null);
-  // MATLAB: min/max on two logical operands stays logical; a mixed
-  // logical + double promotes to double.
-  const aIsLogical =
-    isRuntimeLogical(a) || (isRuntimeTensor(a) && a.cls === "logical");
-  const bIsLogical =
-    isRuntimeLogical(b) || (isRuntimeTensor(b) && b.cls === "logical");
-  const bothLogical = aIsLogical && bIsLogical;
-
-  // Both scalars, no complex
-  if (aIsScalar && bIsScalar && !anyComplex) {
-    const aVal = toNumber(a),
-      bVal = toNumber(b);
-    const r = isNaN(aVal) ? bVal : isNaN(bVal) ? aVal : twoArgFn(aVal, bVal);
-    return bothLogical ? RTV.logical(r !== 0) : RTV.num(r);
-  }
-
-  // Both scalars, at least one complex
-  if (aIsScalar && bIsScalar) {
-    const aRe = isRuntimeComplexNumber(a) ? a.re : toNumber(a);
-    const aIm = isRuntimeComplexNumber(a) ? a.im : 0;
-    const bRe = isRuntimeComplexNumber(b) ? b.re : toNumber(b);
-    const bIm = isRuntimeComplexNumber(b) ? b.im : 0;
-    const pickA = complexIsBetter(aRe, aIm, bRe, bIm);
-    const re = pickA ? aRe : bRe;
-    const im = pickA ? aIm : bIm;
-    return im === 0 ? RTV.num(re) : RTV.complex(re, im);
-  }
-
-  // At least one tensor — promote scalars (including complex) to 1x1 tensors
-  const aT = scalarToTensor(a);
-  const bT = scalarToTensor(b);
-  const outShape = getBroadcastShape(aT.shape, bT.shape);
-  if (!outShape)
-    throw new RuntimeError(`${name}: non-singleton dimensions must match`);
-  const n = outShape.reduce((acc, d) => acc * d, 1);
-  const result = allocFloat64Array(n);
-
-  if (!anyComplex) {
-    // Real-only fast path
-    broadcastIterate(aT.shape, bT.shape, outShape, (aIdx, bIdx, i) => {
-      const aVal = aT.data[aIdx],
-        bVal = bT.data[bIdx];
-      result[i] = isNaN(aVal)
-        ? bVal
-        : isNaN(bVal)
-          ? aVal
-          : twoArgFn(aVal, bVal);
-    });
-    const t = RTV.tensor(
-      result,
-      outShape,
-      undefined,
-      bothLogical ? "logical" : "double"
+  const op = name === "min" ? OpBin.MIN : OpBin.MAX;
+  const isLogical = (v: RuntimeValue) =>
+    isRuntimeLogical(v) || (isRuntimeTensor(v) && v.cls === "logical");
+  const bothLogical = isLogical(a) && isLogical(b);
+  const isScalar = (v: RuntimeValue) =>
+    isRuntimeNumber(v) || isRuntimeLogical(v) || isRuntimeComplexNumber(v);
+  if (isScalar(a) && isScalar(b)) {
+    const ac = isRuntimeComplexNumber(a);
+    const bc = isRuntimeComplexNumber(b);
+    const r = binaryScalar(
+      op,
+      ac ? a.re : toNumber(a),
+      ac ? a.im : 0,
+      ac,
+      bc ? b.re : toNumber(b),
+      bc ? b.im : 0,
+      bc
     );
-    return t;
+    if (ac || bc) return r.im === 0 ? RTV.num(r.re) : RTV.complex(r.re, r.im);
+    return bothLogical ? RTV.logical(r.re !== 0) : RTV.num(r.re);
   }
-
-  // Complex element-wise path
-  const aIm = aT.imag;
-  const bIm = bT.imag;
-  const resultImag = allocFloat64Array(n);
-  let hasImag = false;
-  broadcastIterate(aT.shape, bT.shape, outShape, (aIdx, bIdx, i) => {
-    const aRe = aT.data[aIdx],
-      aI = aIm ? aIm[aIdx] : 0;
-    const bRe = bT.data[bIdx],
-      bI = bIm ? bIm[bIdx] : 0;
-    const pickA = complexIsBetter(aRe, aI, bRe, bI);
-    result[i] = pickA ? aRe : bRe;
-    const im = pickA ? aI : bI;
-    resultImag[i] = im;
-    if (im !== 0) hasImag = true;
-  });
-  const t = RTV.tensor(result, outShape) as RuntimeTensor;
-  if (hasImag) t.imag = resultImag;
-  return t;
+  const r = elementwiseBinary(op, minMaxOperand(a), minMaxOperand(b));
+  return RTV.tensor(
+    r.data,
+    r.shape,
+    r.imag,
+    bothLogical ? "logical" : "double"
+  );
 }
 
 // ── Main min/max dispatch ──────────────────────────────────────────────
@@ -308,8 +253,7 @@ export function minMaxImpl(
   args: RuntimeValue[],
   nargout: number,
   initial: number,
-  isBetter: (candidate: number, current: number) => boolean,
-  twoArgFn: (a: number, b: number) => number
+  isBetter: (candidate: number, current: number) => boolean
 ): RuntimeValue | RuntimeValue[] {
   // Complex comparison: by magnitude, ties broken by angle
   const complexIsBetter = (
@@ -388,7 +332,7 @@ export function minMaxImpl(
 
   // --- 2-arg: element-wise ---
   if (args.length === 2) {
-    return minMaxElementwise(args[0], args[1], name, twoArgFn, complexIsBetter);
+    return minMaxElementwise(args[0], args[1], name);
   }
 
   // --- 3-arg: reduce along specified dim ---
@@ -412,8 +356,7 @@ export function minMaxImpl(
         ],
         nargout,
         initial,
-        isBetter,
-        twoArgFn
+        isBetter
       );
     }
     // Handle vector of dimensions
@@ -427,8 +370,7 @@ export function minMaxImpl(
           [result, RTV.num(0), RTV.num(d)],
           1,
           initial,
-          isBetter,
-          twoArgFn
+          isBetter
         );
         result = Array.isArray(r) ? r[0] : r;
       }

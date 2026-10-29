@@ -53,7 +53,11 @@ export function jit_bound(v) {
   return v;
 }
 
-/** numbl's shape spelling in error messages: "[2,3]". */
-export function jit_fmt_shape(shape) {
-  return `[${shape.join(",")}]`;
+/** Operands whose sizes do not broadcast (the interpreter's
+ *  `sizeMismatchError`, ops/broadcast.ts). */
+export function jit_raise_size_mismatch() {
+  jit_raise_error(
+    "MATLAB:sizeDimensionsMustMatch",
+    "Arrays have incompatible sizes for this operation."
+  );
 }

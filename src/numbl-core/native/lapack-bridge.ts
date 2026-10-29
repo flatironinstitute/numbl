@@ -531,7 +531,7 @@ export interface LapackBridge {
 
   // ── New tensor-ops layer (caller-allocates output, no return value) ──────
 
-  /** Real binary elemwise: out[i] = a[i] OP b[i]. op codes per OpRealBin. */
+  /** Real binary elemwise: out[i] = a[i] OP b[i]. op codes per OpBin. */
   tensorOpRealBinary(
     op: number,
     n: number,

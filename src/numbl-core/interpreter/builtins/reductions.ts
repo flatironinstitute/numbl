@@ -29,11 +29,8 @@ import {
   type ReductionKernel,
 } from "../../helpers/reduction-helpers.js";
 import { cumOp, diffOnce } from "../../helpers/reduction/cumulative.js";
-import {
-  getBroadcastShape,
-  broadcastIterate,
-} from "../../helpers/arithmetic.js";
-import { OpReduce } from "../../ops/index.js";
+import { mLogical } from "../../helpers/arithmetic.js";
+import { OpReduce, OpCmp } from "../../ops/index.js";
 import { allocFloat64Array } from "../../runtime/alloc.js";
 import { builtin } from "./builtin.js";
 import {
@@ -611,36 +608,6 @@ builtin({
   apply: (args): RuntimeValue => {
     const a = realDenseArg(args[0], mustBeRealError);
     const b = realDenseArg(args[1], mustBeRealError);
-    if (typeof a === "number" && typeof b === "number")
-      return RTV.logical((a !== 0) !== (b !== 0));
-    if (isRuntimeTensor(a) && isRuntimeTensor(b)) {
-      if (a.data.length !== b.data.length) {
-        const outShape = getBroadcastShape(a.shape, b.shape);
-        if (!outShape) throw new RuntimeError("xor: incompatible array sizes");
-        const n = outShape.reduce((p, c) => p * c, 1);
-        const out = allocFloat64Array(n);
-        broadcastIterate(a.shape, b.shape, outShape, (ai, bi, oi) => {
-          out[oi] = (a.data[ai] !== 0) !== (b.data[bi] !== 0) ? 1 : 0;
-        });
-        const result = RTV.logicalTensor(out, outShape);
-        return result;
-      }
-      const n = a.data.length;
-      const out = allocFloat64Array(n);
-      for (let i = 0; i < n; i++) {
-        out[i] = (a.data[i] !== 0) !== (b.data[i] !== 0) ? 1 : 0;
-      }
-      const result = RTV.logicalTensor(out, a.shape);
-      return result;
-    }
-    const t = (isRuntimeTensor(a) ? a : b) as RuntimeTensor;
-    const s = ((isRuntimeTensor(a) ? b : a) as number) !== 0;
-    const n = t.data.length;
-    const out = allocFloat64Array(n);
-    for (let i = 0; i < n; i++) {
-      out[i] = (t.data[i] !== 0) !== s ? 1 : 0;
-    }
-    const result = RTV.logicalTensor(out, t.shape);
-    return result;
+    return mLogical(OpCmp.XOR, a, b);
   },
 });

@@ -73,14 +73,14 @@ import {
   linsolveComplexLapack,
 } from "../../numbl-core/helpers/linsolve.js";
 import { sparseToDense as sparseToDenseFn } from "../../numbl-core/helpers/sparse-arithmetic.js";
-import { mLeftDiv } from "../../numbl-core/helpers/arithmetic.js";
+import { mLeftDiv, mLogical } from "../../numbl-core/helpers/arithmetic.js";
+import { OpCmp } from "../ops/opCodes.js";
 import {
   type DeferredRange,
   type DeferredHorzcat,
   isDeferredRange,
   ensureRuntimeValue,
   isNumericKind,
-  elementWiseLogicalOp,
   switchValuesMatch,
 } from "./runtimeHelpers.js";
 import { allocFloat64Array } from "./alloc.js";
@@ -388,9 +388,7 @@ export function binop(op: string, a: unknown, b: unknown): unknown {
         isNumericKind(la) &&
         isNumericKind(lb)
       ) {
-        result = elementWiseLogicalOp(la, lb, (x, y) =>
-          x !== 0 && y !== 0 ? 1 : 0
-        );
+        result = mLogical(OpCmp.AND, la, lb);
       } else {
         result = RTV.logical(toBool(la) && toBool(lb));
       }
@@ -404,9 +402,7 @@ export function binop(op: string, a: unknown, b: unknown): unknown {
         isNumericKind(la) &&
         isNumericKind(lb)
       ) {
-        result = elementWiseLogicalOp(la, lb, (x, y) =>
-          x !== 0 || y !== 0 ? 1 : 0
-        );
+        result = mLogical(OpCmp.OR, la, lb);
       } else {
         result = RTV.logical(toBool(la) || toBool(lb));
       }
