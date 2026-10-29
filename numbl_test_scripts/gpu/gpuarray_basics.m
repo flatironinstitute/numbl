@@ -2,6 +2,15 @@
 % device, indexing and concatenation. Written from MATLAB's documented
 % gpuArray behavior; runs in numbl on the CPU reference device.
 
+% Use a device with double precision (in numbl, device 1 may be a WebGPU
+% device, which computes only in single).
+for k = 1:gpuDeviceCount
+  dk = gpuDevice(k);
+  if dk.SupportsDouble
+    break
+  end
+end
+
 G = gpuArray([1 2 3]);
 assert(strcmp(class(G), 'gpuArray') && isgpuarray(G) && ~isgpuarray([1 2 3]));
 assert(strcmp(underlyingType(G), 'double') && strcmp(underlyingType(1), 'double'));

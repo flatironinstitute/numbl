@@ -26,12 +26,19 @@ import {
   channelServerSource,
   type ChannelServer,
   type ChannelServerHandlers,
+  type ChannelTarget,
 } from "./numbl-core/runtime/blockingChannel.js";
 import { getCurrentRuntime } from "./numbl-core/runtime/refcount.js";
 
 export interface GpuHelper {
   load(name: string, factory: (() => unknown) | string): void;
   call(name: string, method: string, args?: unknown): unknown;
+  /** Call a method without waiting for it. Calls run in the order they are
+   *  made, posted or not; an error from a posted call is raised by the next
+   *  `call`. */
+  post(name: string, method: string, args?: unknown): void;
+  /** Release the GPU device, waiting until it is gone. */
+  shutdown(): void;
   /** Resolves when the helper worker has started (or failed to). A run
    *  before then would find it unstarted, so hosts await this first (it is
    *  part of the host's `ready`). */
@@ -96,22 +103,65 @@ function helperMain(
       throw new Error("gpu: '" + m.name + "' has no method " + m.method);
     return await fn(await device(), m.args);
   }
+  // Calls run one at a time, in the order they arrive, so a posted call
+  // (an upload, a kernel) is done before a later request reads its result.
+  let queue: Promise<unknown> = Promise.resolve();
+  function enqueue<T>(f: () => Promise<T>): Promise<T> {
+    const p = queue.then(f);
+    queue = p.catch(() => undefined);
+    return p;
+  }
+  // The first error of a posted call, raised by the next request.
+  let postError: string | null = null;
+  const message = (err: unknown) =>
+    String((err as Error)?.stack || (err as Error)?.message || err);
   const server = createChannelServer({
     post(cmd, body) {
-      const b = body as { name: string; source: string };
-      if (cmd === "load") load(b.name, b.source);
+      if (cmd === "load") {
+        const b = body as { name: string; source: string };
+        enqueue(async () => load(b.name, b.source));
+      } else if (cmd === "call") {
+        enqueue(() => call(body as CallBody)).catch(err => {
+          if (postError === null) postError = message(err);
+        });
+      }
     },
     request(cmd, body, reply) {
+      if (cmd === "shutdown") {
+        // Release the modules' resources and the device, and wait until
+        // the device is gone.
+        enqueue(async () => {
+          for (const entry of modules.values()) {
+            const dispose = entry.mod?.dispose;
+            if (typeof dispose === "function") dispose();
+          }
+          if (devP) {
+            const d = await devP.catch(() => null);
+            if (d) {
+              d.destroy();
+              await d.lost;
+            }
+          }
+        }).then(
+          () => reply.ok(null),
+          err => reply.error(message(err))
+        );
+        return;
+      }
       if (cmd !== "call") {
         reply.error("gpu: unknown request " + cmd);
         return;
       }
-      call(body as CallBody).then(
+      enqueue(() => {
+        if (postError !== null) {
+          const e = postError;
+          postError = null;
+          throw new Error(e);
+        }
+        return call(body as CallBody);
+      }).then(
         result => reply.ok(result),
-        err =>
-          reply.error(
-            String((err as Error)?.stack || (err as Error)?.message || err)
-          )
+        err => reply.error(message(err))
       );
     },
   });
@@ -128,7 +178,10 @@ function helperMain(
   };
 }
 
-function helperSource(): string {
+/** The helper's source: `helperMain` started with the channel server.
+ *  Runs where `self` receives messages and `navigator.gpu` is WebGPU (a
+ *  browser worker, or a Node worker that provides both). */
+export function helperSource(): string {
   return `(${helperMain.toString()})(${channelServerSource()});\n`;
 }
 
@@ -157,7 +210,16 @@ export function startGpuHelper(): GpuHelper | null {
     worker.addEventListener("error", () => resolve());
   });
   worker.postMessage({ type: "init", ready: ready.buffer });
+  return gpuHelperClient(worker, ready, started);
+}
 
+/** The client side of a helper started with `helperSource()` and sent
+ *  `{ type: "init", ready }`: `ready[0]` becomes 1 once it runs. */
+export function gpuHelperClient(
+  worker: ChannelTarget,
+  ready: Int32Array,
+  started: Promise<void>
+): GpuHelper {
   // The running code's channel, so Stop interrupts a call; a private one
   // outside a run.
   let fallback: BlockingChannel | null = null;
@@ -182,6 +244,12 @@ export function startGpuHelper(): GpuHelper | null {
         );
       }
       return channel().request(worker, "call", { name, method, args });
+    },
+    post(name, method, args) {
+      channel().post(worker, "call", { name, method, args });
+    },
+    shutdown() {
+      if (Atomics.load(ready, 0) === 1) channel().request(worker, "shutdown");
     },
   };
 }

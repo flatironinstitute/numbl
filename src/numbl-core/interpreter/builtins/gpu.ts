@@ -26,6 +26,12 @@ import {
   isGpuArray,
   toGpuArray,
 } from "../../runtime/gpu/gpuArray.js";
+import {
+  elementwiseKernel,
+  mtimesKernel,
+  reduceKernel,
+  transposeKernel,
+} from "../../runtime/gpu/kernels.js";
 import { builtin, classMethod } from "./builtin.js";
 import { builtinError } from "./args.js";
 import { getIBuiltin } from "../../runtime/builtinRegistry.js";
@@ -294,3 +300,70 @@ classMethod(DEVICE_CLASS, {
     deviceOf(args[0]).synchronize?.();
   },
 });
+
+// ── Kernels ─────────────────────────────────────────────────────────────
+// Operations a device may run natively (`GpuDevice.kernels`). Each method
+// tries the device's kernel and otherwise calls the builtin, which runs the
+// operation on the host.
+
+/** Register a gpuArray method `name` that tries `kernel` first. */
+function kernelMethod(
+  name: string,
+  kernel: (args: RuntimeValue[], nargout: number) => RuntimeValue | null
+): void {
+  classMethod("gpuArray", {
+    name,
+    nargout: [0, Infinity],
+    accepts: GPU,
+    apply: (args, nargout) =>
+      kernel(args, nargout) ?? getIBuiltin(name)!.call(args, nargout),
+  });
+}
+
+for (const op of [
+  "plus",
+  "minus",
+  "times",
+  "rdivide",
+  "ldivide",
+  "lt",
+  "gt",
+  "le",
+  "ge",
+  "eq",
+  "ne",
+  "and",
+  "or",
+  "uminus",
+  "not",
+  "abs",
+  "exp",
+  "sin",
+  "cos",
+  "tan",
+  "sinh",
+  "cosh",
+  "tanh",
+  "floor",
+  "ceil",
+  "fix",
+  "round",
+  "sign",
+])
+  kernelMethod(op, (args, nargout) =>
+    nargout <= 1 ? elementwiseKernel(op, args) : null
+  );
+
+for (const op of ["max", "min"] as const)
+  kernelMethod(op, (args, nargout) =>
+    args.length === 2 && nargout <= 1
+      ? elementwiseKernel(op, args)
+      : reduceKernel(op, args, nargout)
+  );
+
+for (const op of ["sum", "prod", "mean"] as const)
+  kernelMethod(op, (args, nargout) => reduceKernel(op, args, nargout));
+
+kernelMethod("mtimes", args => mtimesKernel(args));
+kernelMethod("transpose", args => transposeKernel(args));
+kernelMethod("ctranspose", args => transposeKernel(args));

@@ -7,6 +7,10 @@
  * package.
  */
 
+import { startNodeGpuHelper } from "./nodeGpuHelper.js";
+import { GpuDeviceSet } from "./numbl-core/runtime/gpu/device.js";
+import { defaultGpuDevices } from "./numbl-core/runtime/gpu/cpuDevice.js";
+import { WebGpuDevice } from "./numbl-core/runtime/gpu/webgpuDevice.js";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
 import { homedir } from "os";
@@ -172,6 +176,12 @@ export interface NodePlatformOptions {
   /** Install or refresh the mip core package under ~/.numbl/mip and return
    *  its directory in `searchPaths` (default false; downloads from GitHub). */
   mip?: boolean;
+  /** Give gpuArray a WebGPU device when the optional `webgpu` package
+   *  (Dawn) is installed and finds an adapter (default true). The device is
+   *  device 1, before the CPU reference devices; the helper starts on first
+   *  gpuArray use. The NUMBL_NO_WEBGPU environment variable also disables
+   *  it. */
+  webgpu?: boolean;
   /** Receives warnings and progress messages (default console.error). */
   onMessage?: (msg: string) => void;
 }
@@ -220,6 +230,14 @@ export async function initNodePlatform(
   // Importing the C backend only here (Node-only) keeps the C compile and
   // codegen graph out of the browser bundle.
   host.cjit = opts.cjit !== false ? nodeCJitBackend() : undefined;
+  host.gpuDevices = new GpuDeviceSet(() => {
+    const helper =
+      opts.webgpu !== false && !process.env.NUMBL_NO_WEBGPU
+        ? startNodeGpuHelper()
+        : null;
+    const d = helper && WebGpuDevice.probe(helper);
+    return d ? [d, ...defaultGpuDevices()] : defaultGpuDevices();
+  });
   if (opts.adapters) {
     host.fileIO ??= new NodeFileIOAdapter();
     host.system ??= new NodeSystemAdapter();
