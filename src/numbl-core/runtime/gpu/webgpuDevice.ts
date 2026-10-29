@@ -13,7 +13,12 @@
 
 import { RuntimeTensor, type ElementClass } from "../types.js";
 import { allocFloat64Array } from "../alloc.js";
-import type { GpuDevice, GpuKernels, KernelOperand } from "./device.js";
+import type {
+  GpuDevice,
+  GpuKernels,
+  KernelOperand,
+  KernelSelection,
+} from "./device.js";
 import { gpuArrayModule } from "./webgpuModule.js";
 
 /** What the device needs of a GPU helper (`GpuHelper` in src/gpuHelper.ts). */
@@ -107,17 +112,81 @@ export class WebGpuDevice implements GpuDevice, GpuKernels {
     return !("host" in (buffer as WebGpuBuffer));
   }
 
-  elementwise(op: string, inputs: KernelOperand[], n: number): DeviceBuffer {
+  elementwise(
+    op: string,
+    inputs: KernelOperand[],
+    n: number,
+    dims?: number[]
+  ): DeviceBuffer {
     const out = this.result(n);
-    this.helper.post(MODULE, "elementwise", {
+    this.helper.post(
+      MODULE,
+      "elementwise",
+      this.ewArgs(out, op, inputs, n, dims)
+    );
+    return out;
+  }
+
+  elementwiseChecked(
+    op: string,
+    inputs: KernelOperand[],
+    n: number,
+    dims?: number[]
+  ): { buffer: DeviceBuffer; bad: boolean } {
+    const out = this.result(n);
+    const r = this.helper.call(MODULE, "elementwise", {
+      ...this.ewArgs(out, op, inputs, n, dims),
+      check: true,
+    }) as { bad: boolean };
+    return { buffer: out, bad: r.bad };
+  }
+
+  private ewArgs(
+    out: DeviceBuffer,
+    op: string,
+    inputs: KernelOperand[],
+    n: number,
+    dims?: number[]
+  ) {
+    return {
       out: out.id,
       op,
       n,
+      dims,
       inputs: inputs.map(x =>
         "scalar" in x
           ? { scalar: x.scalar }
-          : { id: (x.buffer as DeviceBuffer).id, n: x.n }
+          : { id: (x.buffer as DeviceBuffer).id, n: x.n, strides: x.strides }
       ),
+    };
+  }
+
+  take(src: unknown, sel: KernelSelection): DeviceBuffer {
+    const out = this.result(sel.n);
+    this.helper.post(MODULE, "take", {
+      out: out.id,
+      src: (src as DeviceBuffer).id,
+      ...sel,
+    });
+    return out;
+  }
+
+  put(
+    src: unknown,
+    total: number,
+    sel: KernelSelection,
+    rhs: KernelOperand
+  ): DeviceBuffer {
+    const out = this.result(total);
+    this.helper.post(MODULE, "put", {
+      out: out.id,
+      src: (src as DeviceBuffer).id,
+      total,
+      ...sel,
+      rhs:
+        "scalar" in rhs
+          ? { scalar: rhs.scalar }
+          : { id: (rhs.buffer as DeviceBuffer).id, n: rhs.n },
     });
     return out;
   }

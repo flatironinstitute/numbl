@@ -63,6 +63,62 @@ same(sum(gpuArray(v)), sum(v), 1e-5);
 same(GA * GC, A * C, 1e-5);
 same(GA' * GA, A' * A, 1e-5);
 
+% functions with a real domain, inside it
+P = gpuArray(abs(A) + single(0.1));
+Ph = abs(A) + single(0.1);
+same(sqrt(P), sqrt(Ph), 1e-6);
+same(log(P), log(Ph), 1e-6);
+same(log2(P), log2(Ph), 1e-6);
+same(log10(P), log10(Ph), 1e-6);
+same(log1p(P), log1p(Ph), 1e-6);
+same(P .^ 2, Ph .^ 2, 0);
+same(P .^ 0.5, Ph .^ 0.5, 1e-6);
+same((-P) .^ 3, (-Ph) .^ 3, 1e-6);
+same(P .^ 0, Ph .^ 0, 0);
+same(asin(P / 4), asin(Ph / 4), 1e-3);
+same(acos(P / 4), acos(Ph / 4), 1e-3);
+same(atanh(P / 4), atanh(Ph / 4), 1e-3);
+same(acosh(P + 1), acosh(Ph + 1), 1e-5);
+
+% outside the domain: an error, as on every device
+for f = {@() sqrt(-P), @() log(-P), @() (-P) .^ 0.5, @() acosh(P - 2)}
+  try
+    f{1}();
+    error('expected an error');
+  catch e
+    assert(contains(e.message, 'needs to return a complex result'), e.message);
+  end
+end
+
+% implicit expansion
+r = single(randn(1, 53));
+c = single(randn(37, 1));
+same(GA + gpuArray(r), A + r, 0);
+same(GA .* gpuArray(c), A .* c, 0);
+same(gpuArray(c) - gpuArray(r), c - r, 0);
+same(gpuArray(c) < gpuArray(r), c < r, 0);
+
+% indexing and assignment
+same(GA(:, 2), A(:, 2), 0);
+same(GA(3, :), A(3, :), 0);
+same(GA(GA > 0.5), A(A > 0.5), 0);
+same(GA([1 3], [2 4]), A([1 3], [2 4]), 0);
+same(GA(:), A(:), 0);
+same(GA(end), A(end), 0);
+same(GA(end:-1:1, 1), A(end:-1:1, 1), 0);
+G2 = GA;
+G2(2, :) = 0;
+H2 = A;
+H2(2, :) = 0;
+same(G2, H2, 0);
+G2(G2 > 0.5) = -1;
+H2(H2 > 0.5) = -1;
+same(G2, H2, 0);
+G2(:, 1) = gpuArray(single(1:37)');
+H2(:, 1) = single(1:37)';
+same(G2, H2, 0);
+same(GA, A, 0);
+
 % classes and shapes of results
 assert(strcmp(underlyingType(GA + 1), 'single') && strcmp(underlyingType(GA < 1), 'logical'));
 assert(isequal(size(sum(GA)), [1 53]) && isequal(size(sum(GA, 2)), [37 1]));
