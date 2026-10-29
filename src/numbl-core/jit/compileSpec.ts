@@ -15,6 +15,7 @@ import {
   type CompileTarget,
 } from "./compile.js";
 import type { Type } from "./lowering/types.js";
+import { JS_FUSION } from "./lowering/elemwiseKernels.js";
 
 export type { CompileSpecArgs } from "./compile.js";
 
@@ -34,18 +35,23 @@ export interface CompileSpecResult {
   locFiles: ReadonlyArray<string>;
   /** The entry spec can call itself (directly or through its callees). */
   recursive: boolean;
+  /** Element-wise kernels in the entry spec (`ElemwiseKernel`). */
+  kernels: number;
 }
 
 /** JS models an unassigned variable as `undefined` and checks reads at
- *  run time, and routes tensor ops through per-op helpers (no fusion). */
+ *  run time, and fuses only exact element-wise operations (`JS_FUSION`). */
 export const jsTarget: CompileTarget<EmitJsResult> = {
   definiteAssignment: false,
-  fusesElementwise: false,
+  fusion: JS_FUSION,
   emit: (prog, exposeSpec) => emitJsProgram(prog, { exposeSpec }),
 };
 
 export function compileSpec(args: CompileSpecArgs): CompileSpecResult {
-  const { cName, entry, recursive, emitted } = compileWith(jsTarget, args);
+  const { cName, entry, recursive, kernels, emitted } = compileWith(
+    jsTarget,
+    args
+  );
   return {
     cName,
     source: emitted.source,
@@ -53,5 +59,6 @@ export function compileSpec(args: CompileSpecArgs): CompileSpecResult {
     outputTypes: entry.outputTypes,
     locFiles: emitted.locFiles,
     recursive,
+    kernels,
   };
 }

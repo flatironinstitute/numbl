@@ -180,6 +180,10 @@ function irExprToString(e: IRExpr): string {
           : `${irExprToString(e.step)}:`;
       return `${irExprToString(e.start)}:${stepPart}${irExprToString(e.end)}`;
     }
+    case "ElemwiseKernel":
+      return irExprToString(e.tree);
+    case "KernelElem":
+      return `$in${e.input}`;
   }
 }
 

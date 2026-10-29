@@ -39,11 +39,7 @@ import {
   exitLoop,
   isConstantTimeLoop,
 } from "./cancelPoll.js";
-import {
-  emitTensorAssignFused,
-  fusedAssignNeedsShapeGuard,
-  isFusableAssign,
-} from "./emitTensorFused.js";
+import { emitElemwiseKernelAssign, emitReduceKernel } from "./emitKernelC.js";
 import { emitIndexSliceStore, emitNdScalarOffset } from "./emitIndex.js";
 import { emitCondToBoolExpr, emitExpr, emitOwnedRhs } from "./emitExpr.js";
 import { activateOwnedRuntime, activatedOwnedHelpers } from "./emit.js";
@@ -369,13 +365,15 @@ export function emitBody(
   return out.join("\n");
 }
 
-/** Bcast-aware helper-path statement for a fused Assign whose runtime
- *  shape guard failed. The RHS may be a nested element-wise tree
- *  (after `inlinePass`); each tensor-valued interior node goes into a
- *  block-local temp that is freed after the final assign, since the
- *  runtime helpers borrow their operands and return fresh tensors. */
-function emitFusedFallback(
-  s: Extract<IRStmt, { kind: "Assign" }>,
+/** The statement a guarded kernel runs when its operand shapes differ:
+ *  the kernel's source expression through the broadcasting helpers, which
+ *  broadcast compatible shapes and raise on incompatible ones. Each
+ *  tensor-valued interior node goes into a block-local temp freed after
+ *  the store, since the helpers borrow their operands and return fresh
+ *  tensors. `store` turns the root's C expression into the statement. */
+function emitKernelFallback(
+  tree: IRExpr,
+  store: (rootC: string) => string,
   state: RuntimeState
 ): string {
   const decls: string[] = [];
@@ -400,11 +398,42 @@ function emitFusedFallback(
     frees.push(`${h.free}(&${name});`);
     return { kind: "Var", name, cName: name, ty: r.ty, span: r.span };
   };
-  const root = hoist(s.expr, true);
-  const hf = activatedOwnedHelpers(s.ty, state);
-  const assign = `${hf.assign}(&${s.cName}, ${emitOwnedRhs(root, state)});`;
-  if (decls.length === 0) return assign;
-  return `{ ${[...decls, assign, ...frees].join(" ")} }`;
+  const root = hoist(tree, true);
+  const stmt = store(
+    isOwned(root.ty) ? emitOwnedRhs(root, state) : emitExpr(root, state)
+  );
+  if (decls.length === 0) return stmt;
+  return `{ ${[...decls, stmt, ...frees].join(" ")} }`;
+}
+
+/** A scalar `value` stored to `s`'s variable. A variable whose (merged) C
+ *  type is a tensor, e.g. a recursive function's scalar base case when the
+ *  recursive result widened the output to a tensor, gets a 1x1 tensor. */
+function scalarStore(
+  s: Extract<IRStmt, { kind: "Assign" }>,
+  value: string,
+  ownedTypes: ReadonlyMap<string, Type>,
+  state: RuntimeState
+): string {
+  const slotTy = ownedTypes.get(s.cName);
+  if (slotTy === undefined) return `${s.cName} = ${value};`;
+  if (
+    !isNumeric(slotTy) ||
+    !isNumeric(s.ty) ||
+    slotTy.isComplex ||
+    s.ty.isComplex
+  ) {
+    throw new UnsupportedConstruct(
+      `scalar assigned to the ${typeToString(slotTy)} variable '${s.name}'`,
+      s.span
+    );
+  }
+  useRuntimeByName(state, "jit_tensor_alloc");
+  const h = activatedOwnedHelpers(slotTy, state);
+  return (
+    `{ jit_tensor_t _jit_s1 = jit_tensor_alloc(1, 1); ` +
+    `_jit_s1.real[0] = ${value}; ${h.assign}(&${s.cName}, _jit_s1); }`
+  );
 }
 
 function emitStmt(
@@ -419,56 +448,32 @@ function emitStmt(
     case "ExprStmt":
       return `${indent}${emitExpr(s.expr, state)};`;
     case "Assign": {
-      if (isOwned(s.ty)) {
-        // Pure-elementwise same-shape tensor RHS goes through the
-        // fused inline-loop emitter — same generated work as the
-        // helper-call path for a depth-1 expression, but lets the
-        // inliner (`inlinePass.ts`) produce deeper expressions that share a
-        // single iter loop. See `emitTensorFused.ts`.
-        if (s.kind === "Assign" && isFusableAssign(s)) {
-          activateOwnedRuntime(s.ty, state);
-          // When operand shapes aren't statically proven equal (dynamic
-          // dims, 2+ distinct operands), guard the fast loop with a
-          // runtime shape check that falls back to the bcast-aware helper
-          // path on mismatch — the helper broadcasts compatible shapes
-          // and errors on incompatible ones (the JS twin always takes
-          // this path via the `_tt` helpers). Without it a runtime mismatch read
-          // past an operand and silently produced garbage.
-          if (fusedAssignNeedsShapeGuard(s)) {
-            const fb = emitFusedFallback(s, state);
-            return emitTensorAssignFused(s, indent, state, fb);
-          }
-          return emitTensorAssignFused(s, indent, state);
+      const k = s.expr;
+      if (k.kind === "ElemwiseKernel") {
+        if (k.reduce !== undefined) {
+          const store = (v: string) => scalarStore(s, v, ownedTypes, state);
+          const fb = k.guard
+            ? emitKernelFallback(k.tree, store, state)
+            : undefined;
+          return emitReduceKernel(k, store, indent, state, fb);
         }
+        activateOwnedRuntime(s.ty, state);
+        const fb = k.guard
+          ? emitKernelFallback(
+              k.tree,
+              rhs =>
+                `${activatedOwnedHelpers(s.ty, state).assign}(&${s.cName}, ${rhs});`,
+              state
+            )
+          : undefined;
+        return emitElemwiseKernelAssign(k, s.cName, indent, state, fb);
+      }
+      if (isOwned(s.ty)) {
         const h = activatedOwnedHelpers(s.ty, state);
         const rhs = emitOwnedRhs(s.expr, state);
         return `${indent}${h.assign}(&${s.cName}, ${rhs});`;
       }
-      const rhs = emitExpr(s.expr, state);
-      const slotTy = ownedTypes.get(s.cName);
-      if (slotTy !== undefined) {
-        // A scalar stored to a variable whose (merged) C type is a tensor,
-        // e.g. a recursive function's scalar base case when the recursive
-        // result widened the output to a tensor: store a 1x1 tensor.
-        if (
-          !isNumeric(slotTy) ||
-          !isNumeric(s.ty) ||
-          slotTy.isComplex ||
-          s.ty.isComplex
-        ) {
-          throw new UnsupportedConstruct(
-            `scalar assigned to the ${typeToString(slotTy)} variable '${s.name}'`,
-            s.span
-          );
-        }
-        useRuntimeByName(state, "jit_tensor_alloc");
-        const h = activatedOwnedHelpers(slotTy, state);
-        return (
-          `${indent}{ jit_tensor_t _jit_s1 = jit_tensor_alloc(1, 1); ` +
-          `_jit_s1.real[0] = ${rhs}; ${h.assign}(&${s.cName}, _jit_s1); }`
-        );
-      }
-      return `${indent}${s.cName} = ${rhs};`;
+      return `${indent}${scalarStore(s, emitExpr(s.expr, state), ownedTypes, state)}`;
     }
     case "MemberStore": {
       const slot = [s.base.cName, ...s.fieldPath].join(".");

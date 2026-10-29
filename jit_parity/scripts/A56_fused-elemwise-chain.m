@@ -1,5 +1,5 @@
 % TEST: element-wise chains that the C-JIT inline pass folds into one
-% fused loop (codegen/inlinePass.ts). Covers: a loop-body def that is
+% fused loop (the kernel pass, lowering/elemwiseKernels.ts). Covers: a loop-body def that is
 % also read after the loop (must not be dropped), a consumer that
 % overwrites an operand of the folded temps, element-wise builtins in the
 % chain, and dynamic-extent operands whose runtime shapes differ (the

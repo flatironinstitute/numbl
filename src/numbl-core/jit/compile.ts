@@ -33,7 +33,7 @@ import {
   addAssignedFlags,
   type AssignedFlag,
 } from "./lowering/assignedFlags.js";
-import { inlinePass } from "./codegen/inlinePass.js";
+import { kernelPass, type FusionPolicy } from "./lowering/elemwiseKernels.js";
 
 type FuncStmt = Extract<Stmt, { type: "Function" }>;
 
@@ -77,9 +77,10 @@ export interface CompileTarget<E extends EmitOutput> {
    *  stay unassigned (`assignedFlags.ts`). The JS backend models
    *  unassigned as `undefined` and checks reads at run time. */
   readonly definiteAssignment: boolean;
-  /** Fold single-use element-wise temps into their consumers before emit,
-   *  so chains fuse into one loop (`inlinePass.ts`). */
-  readonly fusesElementwise: boolean;
+  /** What the target's element-wise kernels may contain: the kernel pass
+   *  (`elemwiseKernels.ts`) folds element-wise chains into kernels the
+   *  emitter renders as single loops. */
+  readonly fusion: FusionPolicy;
   /** Emit `prog`, exposing the spec named `exposeSpec`. */
   emit(prog: IRProgram, exposeSpec: string): E;
 }
@@ -95,6 +96,8 @@ export interface CompiledSpec<E extends EmitOutput> {
   assignedFlags: ReadonlyArray<AssignedFlag>;
   /** The entry spec can call itself (directly or through its callees). */
   recursive: boolean;
+  /** Element-wise kernels in the emitted entry spec. */
+  kernels: number;
   emitted: E;
 }
 
@@ -132,12 +135,18 @@ export function compileWith<E extends EmitOutput>(
       ));
       prog.functions.set(entry.cName, entry);
     }
-    // `inlinePass` returns a copy; the cached specs are untouched.
-    const emitted = target.emit(
-      target.fusesElementwise ? inlinePass(prog) : prog,
-      spec.cName
-    );
-    return { cName: spec.cName, entry, assignedFlags, recursive, emitted };
+    // `kernelPass` returns a copy; the cached specs are untouched.
+    const fused = kernelPass(prog, target.fusion);
+    const kernels = countKernels(fused.functions.get(spec.cName)!.body);
+    const emitted = target.emit(fused, spec.cName);
+    return {
+      cName: spec.cName,
+      entry,
+      assignedFlags,
+      recursive,
+      kernels,
+      emitted,
+    };
   } catch (err) {
     for (const key of lowerer.specializations.keys()) {
       if (!before.has(key)) lowerer.specializations.delete(key);
@@ -187,6 +196,19 @@ function checkDefiniteAssignment(
   );
   const { fn, flags } = addAssignedFlags(spec, maybe);
   return { entry: fn, assignedFlags: flags };
+}
+
+function countKernels(stmts: IRStmt[]): number {
+  let n = 0;
+  for (const s of stmts) {
+    if (s.kind === "Assign" && s.expr.kind === "ElemwiseKernel") n++;
+    else if (s.kind === "If") {
+      n += countKernels(s.thenBody) + countKernels(s.elseBody);
+    } else if (s.kind === "While" || s.kind === "For") {
+      n += countKernels(s.body);
+    }
+  }
+  return n;
 }
 
 function containsReturn(stmts: IRStmt[]): boolean {

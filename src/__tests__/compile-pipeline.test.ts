@@ -14,9 +14,12 @@ import { setCSnippets } from "../numbl-core/jit/codegen/runtime.js";
 import { C_SNIPPETS } from "../numbl-core/jit/builtins/runtime/snippets.c.gen.js";
 
 // On a matrix of unknown size, `mask` lowers to a compare that C fuses
-// into a loop and the JS emitter rejects. `inc` and `twice` are unrelated.
+// into one kernel loop. JS fuses only part of it (not the power), so its
+// kernel needs a shape guard whose broadcasting fallback evaluates the
+// compare on tensors, which the JS emitter rejects. `inc` and `twice` are
+// unrelated.
 const SOURCE = `function r = mask(v)
-  m = v > 0;
+  m = (v .^ 2 + (v > 0)) > 1;
   r = v(m);
 end
 function y = inc(x)

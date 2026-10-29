@@ -763,6 +763,10 @@ export class Lowerer {
           step: this.anfRequireScalarOrVar(e.step, hoists),
           end: this.anfRequireScalarOrVar(e.end, hoists),
         };
+      case "ElemwiseKernel":
+      case "KernelElem":
+        // Built after lowering (`elemwiseKernels.ts`).
+        return e;
     }
   }
 

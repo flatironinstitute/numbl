@@ -57,6 +57,7 @@ import {
 } from "./runtime.js";
 import { emitTensorConcatJs } from "./emitTensorConcatJs.js";
 import { maybeUnassignedReads } from "../lowering/definiteAssign.js";
+import { emitKernelJs } from "./emitKernelJs.js";
 import { callsSpec } from "../lowering/callGraph.js";
 import {
   STRIP_CHUNK,
@@ -264,34 +265,54 @@ function emitOwnedRhsJs(e: IRExpr, state: RuntimeState): string {
   return emitExpr(e, state);
 }
 
+/** A non-owned (scalar) `value` stored to `s`'s variable. An output whose
+ *  (merged) type is a tensor, e.g. a recursive function's scalar base case
+ *  when the recursive result widened the output, gets a 1x1 tensor (as the
+ *  C emitter). */
+function assignScalarJs(
+  s: Extract<IRStmt, { kind: "Assign" }>,
+  value: string,
+  state: RuntimeState
+): string {
+  const outTy = state.currentFnOutputTypes?.get(s.cName);
+  if (outTy === undefined || !isOwned(outTy)) return `${s.cName} = ${value};`;
+  if (
+    outTy.kind !== "Numeric" ||
+    s.ty.kind !== "Numeric" ||
+    outTy.isComplex ||
+    s.ty.isComplex
+  ) {
+    throw new UnsupportedConstruct(
+      `scalar assigned to the tensor output '${s.name}'`,
+      s.span
+    );
+  }
+  useRuntimeByName(state, "jit_tensor_alloc_nd");
+  return `${s.cName} = jit_tensor_alloc_nd(2, [1, 1]); ${s.cName}.data[0] = ${value};`;
+}
+
 function emitStmt(s: IRStmt, indent: string, state: RuntimeState): string {
   switch (s.kind) {
     case "ExprStmt":
       return `${indent}${emitExpr(s.expr, state)};`;
 
     case "Assign": {
+      if (s.expr.kind === "ElemwiseKernel") {
+        return emitKernelJs(
+          s.expr,
+          s.cName,
+          indent,
+          {
+            emitExpr: e => emitExpr(e, state),
+            useRuntime: makeJsUseRuntime(state),
+          },
+          value => assignScalarJs(s, value, state)
+        );
+      }
       const rhs = isOwned(s.ty)
         ? emitOwnedRhsJs(s.expr, state)
         : emitExpr(s.expr, state);
-      const outTy = state.currentFnOutputTypes?.get(s.cName);
-      if (outTy !== undefined && isOwned(outTy) && !isOwned(s.ty)) {
-        // A scalar stored to an output whose (merged) type is a tensor,
-        // e.g. a recursive function's scalar base case when the recursive
-        // result widened the output: store a 1x1 tensor (as the C emitter).
-        if (
-          outTy.kind !== "Numeric" ||
-          s.ty.kind !== "Numeric" ||
-          outTy.isComplex ||
-          s.ty.isComplex
-        ) {
-          throw new UnsupportedConstruct(
-            `scalar assigned to the tensor output '${s.name}'`,
-            s.span
-          );
-        }
-        useRuntimeByName(state, "jit_tensor_alloc_nd");
-        return `${indent}${s.cName} = jit_tensor_alloc_nd(2, [1, 1]); ${s.cName}.data[0] = ${rhs};`;
-      }
+      if (!isOwned(s.ty)) return `${indent}${assignScalarJs(s, rhs, state)}`;
       return `${indent}${s.cName} = ${rhs};`;
     }
 
@@ -925,6 +946,11 @@ function emitExpr(e: IRExpr, state: RuntimeState): string {
         .join(", ");
       return `${e.cName}(${args})`;
     }
+
+    case "ElemwiseKernel":
+    case "KernelElem":
+      // Kernels are statements (`emitStmt`'s Assign), never operands.
+      throw new Error(`emitJs internal: '${e.kind}' outside a kernel Assign`);
 
     case "MakeRange": {
       const startE = emitExpr(e.start, state);
