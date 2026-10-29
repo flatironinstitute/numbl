@@ -1371,8 +1371,8 @@ function sparseScatter(
 }
 
 /** A gpuArray's host value; any other value as it is. */
-function gatherIfGpu(v: RuntimeValue): RuntimeValue {
-  return isGpuArray(v) ? gatherValue(v) : v;
+function gatherIfGpu(v: RuntimeValue, site = "index"): RuntimeValue {
+  return isGpuArray(v) ? gatherValue(v, site) : v;
 }
 
 /** A numeric or logical scalar (a number, logical or complex number). */
@@ -1389,7 +1389,8 @@ export function indexIntoRTValue(
   base: RuntimeValue,
   indices: RuntimeValue[]
 ): RuntimeValue {
-  if (firstGpuArg(indices)) indices = indices.map(gatherIfGpu);
+  if (firstGpuArg(indices))
+    indices = indices.map(v => gatherIfGpu(v, "gpu index"));
   if (typeof base === "number" || typeof base === "boolean")
     return indexIntoScalar(base, indices);
   if (typeof base === "string") return indexIntoStringArray(base, indices);
@@ -1416,9 +1417,10 @@ export function indexIntoRTValue(
       return (
         indexKernel(base, indices) ??
         outputToGpu(
-          indexIntoRTValue(gatherValue(base), indices),
+          indexIntoRTValue(gatherValue(base, "index"), indices),
           base.device,
-          base.isComplex
+          base.isComplex,
+          "index"
         )
       );
     case "function":
@@ -1448,7 +1450,8 @@ export function storeIntoRTValueIndex(
   storeBack = false,
   nullAssign?: boolean
 ): RuntimeValue {
-  if (firstGpuArg(indices)) indices = indices.map(gatherIfGpu);
+  if (firstGpuArg(indices))
+    indices = indices.map(v => gatherIfGpu(v, "gpu index"));
   // A gpuArray target, or a numeric target given a gpuArray, gives a
   // gpuArray (stored on the host, then uploaded).
   if (
@@ -1463,9 +1466,9 @@ export function storeIntoRTValueIndex(
       ? base.device
       : (rhs as RuntimeGpuArray).device;
     const r = storeIntoRTValueIndex(
-      gatherIfGpu(base),
+      gatherIfGpu(base, "assign"),
       indices,
-      gatherIfGpu(rhs),
+      gatherIfGpu(rhs, "assign"),
       parenAssign,
       rt,
       storeBack,
@@ -1474,7 +1477,7 @@ export function storeIntoRTValueIndex(
     const complex =
       (isGpuArray(base) && base.isComplex) ||
       (isGpuArray(rhs) && rhs.isComplex);
-    return outputToGpu(r, device, complex);
+    return outputToGpu(r, device, complex, "assign");
   }
   const del = nullAssign ?? isDeletionRhs(rhs);
   if (isRuntimeSparseMatrix(base)) {

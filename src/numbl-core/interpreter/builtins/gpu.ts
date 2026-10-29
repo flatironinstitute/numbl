@@ -178,8 +178,11 @@ classMethod("gpuArray", {
     const g = args[0];
     if (!isGpuArray(g)) return getIBuiltin("double")!.call([g], 1);
     if (!g.device.supportsDouble) throw doubleNotSupportedError();
-    const v = getIBuiltin("double")!.call([gatherValue(g)], 1) as RuntimeValue;
-    return toGpuArray(v, g.device, true);
+    const v = getIBuiltin("double")!.call(
+      [gatherValue(g, "double")],
+      1
+    ) as RuntimeValue;
+    return toGpuArray(v, g.device, true, "double");
   },
 });
 
@@ -189,12 +192,12 @@ classMethod("gpuArray", {
   accepts: GPU,
   apply: args => {
     const g = args.find(isGpuArray)!;
-    const host = args.map(a => (isGpuArray(a) ? gatherValue(a) : a));
+    const host = args.map(a => (isGpuArray(a) ? gatherValue(a, "cast") : a));
     const v = getIBuiltin("cast")!.call(host, 1) as RuntimeValue;
     // cast(G, ...) stays on the device; cast(X, 'like', G) moves X there.
     if (!isGpuArray(args[0]) && !(args.length === 3 && isGpuArray(args[2])))
       return v;
-    return toGpuArray(v, g.device, true);
+    return toGpuArray(v, g.device, true, "cast");
   },
 });
 
@@ -403,7 +406,7 @@ function onHost(
 /** A real gpuArray result as a complex one with zero imaginary parts. */
 function stayComplex(v: RuntimeValue): RuntimeValue {
   if (!isGpuArray(v) || v.isComplex || v.cls === "logical") return v;
-  return outputToGpu(gatherTensor(v), v.device, true);
+  return outputToGpu(gatherTensor(v, "complex"), v.device, true, "complex");
 }
 
 for (const op of [

@@ -24,7 +24,7 @@ Every builtin runs on gpuArray arguments, through the call wrapper (`makeBuiltin
 
 Operators reach the same path: a gpuArray is an object (`isObject` in its `KINDS` entry) with registered methods, so `G + 1` dispatches to `plus`, which, having no gpuArray method, is the builtin. Indexing and indexed assignment (`indexIntoRTValue`, `storeIntoRTValueIndex`), concatenation (`Runtime.horzcat` / `vertcat` dispatch to the builtins), colon and `for` loops (`runtimeOperators.ts`), and conditions (`toBool`) gather, compute on the host and upload. Assigning a gpuArray into a host numeric array makes the result a gpuArray. The constructors take `'gpuArray'` (`withGpuOption` in `array-construction.ts`); their `'like', G` form needs nothing special, since the gathered prototype gives the class and the result goes back to the device.
 
-On the CPU reference devices this path is the whole implementation.
+On the CPU reference devices this path is the whole implementation. `NUMBL_GPU_LOG` (`runtime/gpu/gpuLog.ts`) shows where it is taken: at exit it prints the transfers between host and device, and the host time of builtins that gathered their arguments, by site (a builtin's name, `index`, `assign`, `condition`, ...) and source line.
 
 ## Kernels
 

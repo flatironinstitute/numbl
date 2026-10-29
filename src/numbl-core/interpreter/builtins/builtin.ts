@@ -37,6 +37,7 @@ import {
 } from "../../runtime/argKinds.js";
 import { checkNargin, checkNargout } from "./args.js";
 import { firstGpuArg, outputToGpu } from "../../runtime/gpu/gpuArray.js";
+import { gpuLogEnabled, logTransfer } from "../../runtime/gpu/gpuLog.js";
 import {
   hasSingleArg,
   isSingle,
@@ -218,7 +219,10 @@ export function makeBuiltin(spec: BuiltinSpec): IBuiltin {
       checkNargin(args.length, inMin, inMax, mfile);
       checkNargout(n, outMin, outMax, mfile);
       const cargs = applyArgPolicy(policy, args);
+      const t0 = gpuLogEnabled ? performance.now() : 0;
       let result = apply(cargs, n, ctx) as RuntimeValue | RuntimeValue[];
+      if (gpuLogEnabled && cargs !== args && firstGpuArg(args))
+        logTransfer("host", name, 0, performance.now() - t0);
       if (isVoid) return undefined;
       if (hasSingleArg(cargs))
         result = singleResults(
@@ -232,10 +236,12 @@ export function makeBuiltin(spec: BuiltinSpec): IBuiltin {
       const gpu = uploadsToGpu && cargs !== args ? firstGpuArg(args) : null;
       if (gpu === null) return result;
       return Array.isArray(result)
-        ? result.map(v => (v === undefined ? v : outputToGpu(v, gpu.device)))
+        ? result.map(v =>
+            v === undefined ? v : outputToGpu(v, gpu.device, false, name)
+          )
         : result === undefined
           ? result
-          : outputToGpu(result, gpu.device);
+          : outputToGpu(result, gpu.device, false, name);
     },
   };
 }

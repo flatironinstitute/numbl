@@ -76,7 +76,7 @@ export function displayValue(v: RuntimeValue): string {
     case "string_array":
       return formatStringArray(v);
     case "gpu_array":
-      return displayValue(gatherValue(v));
+      return displayValue(gatherValue(v, "display"));
   }
 }
 

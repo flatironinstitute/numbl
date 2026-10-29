@@ -174,4 +174,7 @@ Environment variables:
                           used when the optional webgpu package is installed)
   NUMBL_JIT_LOG           If set, print every JIT decline (executor, source
                           position, reason) to stderr
+  NUMBL_GPU_LOG           If set, print a summary of gpuArray transfers and
+                          host fallbacks (by site and source line) to stderr
+                          at exit
 ```
