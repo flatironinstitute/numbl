@@ -620,7 +620,7 @@ function transposeCore(v: RuntimeTensor, conjugate: boolean): RuntimeValue {
         resultIm[r * cols + c] = sign * v.imag[colMajorIndex(r, c, rows)];
       }
     }
-    return RTV.tensor(resultRe, [cols, rows], resultIm);
+    return RTV.tensor(resultRe, [cols, rows], resultIm, v.cls);
   }
   const t = RTV.tensor(resultRe, [cols, rows], undefined, v.cls);
   return t;

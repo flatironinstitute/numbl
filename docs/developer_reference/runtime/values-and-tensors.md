@@ -51,7 +51,7 @@ A `RuntimeTensor` holds:
 - `data`: a typed array for the real part.
 - `imag`: an optional typed array for the imaginary part. Absent means the tensor is real.
 - `shape`: integer dimensions, column-major (Fortran) order.
-- `cls`: the element class (`ElementClass`, today `"double"` or `"logical"`), set at construction and `readonly`. See [Element classes](#element-classes).
+- `cls`: the element class (`ElementClass`: `"double"`, `"single"` or `"logical"`), set at construction and `readonly`. See [Element classes](#element-classes).
 
 **Column-major layout.** Element `(i, j)` of an `[m, n]` matrix is at flat index `j * m + i`. All tensor code assumes this; any new operation must preserve it.
 
@@ -59,11 +59,13 @@ A `RuntimeTensor` holds:
 
 ## Element classes
 
-A tensor's MATLAB class lives in its `cls` field (`ElementClass` in `runtime/types.ts`). Every class currently stores its elements in a `Float64Array`; the class fixes their meaning (a logical tensor holds 0/1 and has no imaginary part). Scalars are not tensors: a logical scalar is a JS `boolean`, a double scalar a `number`. Char arrays are a separate kind (`RuntimeChar`), not an element class.
+A tensor's MATLAB class lives in its `cls` field (`ElementClass` in `runtime/types.ts`). Every class currently stores its elements in a `Float64Array`; the class fixes their meaning (a logical tensor holds 0/1 and has no imaginary part, a single tensor holds values exactly representable in single precision). Double and logical scalars are not tensors: a logical scalar is a JS `boolean`, a double scalar a `number`. A single scalar is a 1x1 tensor, since a JS number always means double. Char arrays are a separate kind (`RuntimeChar`), not an element class.
 
 The class is chosen when the tensor is built (`RTV.tensor(..., cls)`, `RTV.logicalTensor`, `new RuntimeTensor(..., cls)`), and `shallowClone` keeps it, so copy-on-write stores keep it too. Operations that preserve their input's class (indexing, indexed assignment and deletion, reshape, permute, transpose, repmat, squeeze, sort, ...) pass `v.cls` to the constructor of their result. A result of another class is a new tensor; the one exception is `withElementClass`, which sets the class of a fresh result that nothing else holds yet.
 
-Adding an element class (e.g. `single` or an integer class) touches:
+**Single.** `runtime/single.ts` holds the helpers. A single result is computed in double and rounded with `Math.fround` (`toSingleResult`), which gives the same bits as computing in single for `+ - * /` and `sqrt` (double has more than twice single's precision); for other functions and for matrix products the result can differ from MATLAB's in the last place. The rules, as in MATLAB: an arithmetic operator with a single operand gives single (`binop`, `uminus`), comparisons and logical operators give logical, concatenation gives single when any operand is single (empties included) unless one is char, a colon with a single endpoint gives single, and an indexed store keeps the target's class (a single target rounds the assigned values; a double target stays double). Indexing a single array, and iterating one in a `for` loop, give single 1x1 values (`tensorElement`). The JIT declines single values (`typeOfValue` gives `unknown`, and the JIT has no `single` builtin), so code that handles them runs on the interpreter.
+
+Adding an element class (e.g. an integer class) touches:
 
 1. `ElementClass` and the constructors; a class with narrower storage also changes the type of `data` and the `Float64Array` check in `RTV.tensor`.
 2. `class`, `isa`, `islogical`, `isnumeric`, `isfloat`, `isinteger`: `KINDS.tensor.className` and the category table (`CATEGORIES`) in `runtime/kinds.ts`.

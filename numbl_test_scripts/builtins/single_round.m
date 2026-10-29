@@ -1,6 +1,4 @@
-% single: rounds values to single precision. numbl has no distinct single
-% type (everything is double), but the precision rounding is observable.
-% Verified against MATLAB R2025b.
+% single: rounds values to single precision. Verified against MATLAB R2025b.
 
 % Exactly representable values are unchanged.
 assert(single(2) == 2, 'single(2) == 2');

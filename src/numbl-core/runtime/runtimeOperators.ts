@@ -84,6 +84,7 @@ import {
   switchValuesMatch,
 } from "./runtimeHelpers.js";
 import { allocFloat64Array } from "./alloc.js";
+import { isSingle, tensorElement, toSingleResult } from "./single.js";
 
 // ── Operator methods ────────────────────────────────────────────────────
 
@@ -150,7 +151,9 @@ export function uplus(v: unknown): RuntimeValue {
 
 export function uminus(v: unknown): unknown {
   if (typeof v === "number") return -v;
-  return mNeg(ensureRuntimeValue(v));
+  const mv = ensureRuntimeValue(v);
+  const r = mNeg(mv);
+  return isSingle(mv) ? toSingleResult(r, [mv]) : r;
 }
 
 export function transpose(v: unknown): unknown {
@@ -420,9 +423,25 @@ export function binop(op: string, a: unknown, b: unknown): unknown {
       throw new RuntimeError(`Unknown binary operator: ${op}`);
   }
 
-  if (isRuntimeNumber(result)) return result;
+  if ((isSingle(ma) || isSingle(mb)) && ARITHMETIC_OPS.has(op))
+    return toSingleResult(result, [ma, mb]);
   return result;
 }
+
+/** The binary operators whose result takes a single operand's class (the
+ *  others give logical). */
+const ARITHMETIC_OPS: ReadonlySet<string> = new Set([
+  BinaryOperation.Add,
+  BinaryOperation.Sub,
+  BinaryOperation.Mul,
+  BinaryOperation.Div,
+  BinaryOperation.Pow,
+  BinaryOperation.ElemMul,
+  BinaryOperation.ElemDiv,
+  BinaryOperation.ElemPow,
+  BinaryOperation.LeftDiv,
+  BinaryOperation.ElemLeftDiv,
+]);
 
 // ── Range ───────────────────────────────────────────────────────────────
 
@@ -443,6 +462,8 @@ export function range(start: unknown, step: unknown, end: unknown): unknown {
     typeof step === "number" ? step : toNumber(ensureRuntimeValue(step));
   const e = endRV !== null ? toNumber(endRV) : (end as number);
   const result = mRange(s, st, e);
+  if (isSingle(startRV) || isSingle(step) || isSingle(endRV))
+    return toSingleResult(result, []);
   if (isCharRange && isRuntimeTensor(result)) {
     return RTV.char(
       Array.from(result.data)
@@ -480,12 +501,10 @@ export function forIter(v: unknown): unknown[] {
     const shape = mv.shape;
     if (shape.length <= 1 || (shape.length === 2 && shape[0] === 1)) {
       // Row vector or 1D: iterate as scalars
-      if (mv.imag) {
+      if (mv.imag || mv.cls !== "double") {
         const result: RuntimeValue[] = [];
-        for (let i = 0; i < mv.data.length; i++) {
-          const im = mv.imag[i];
-          result.push(im === 0 ? mv.data[i] : RTV.complex(mv.data[i], im));
-        }
+        for (let i = 0; i < mv.data.length; i++)
+          result.push(tensorElement(mv, i));
         return result;
       }
       const result: number[] = [];
@@ -503,7 +522,7 @@ export function forIter(v: unknown): unknown[] {
         colImag = allocFloat64Array(rows);
         for (let r = 0; r < rows; r++) colImag[r] = mv.imag[c * rows + r];
       }
-      result.push(RTV.tensor(colData, [rows, 1], colImag));
+      result.push(RTV.tensor(colData, [rows, 1], colImag, mv.cls));
     }
     return result;
   }

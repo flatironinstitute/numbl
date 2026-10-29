@@ -124,7 +124,7 @@ export const isRuntimeStringArray = (
 /** The MATLAB class of a tensor's elements (what `class` reports). Every
  *  class stores its elements in a Float64Array; the class fixes their
  *  semantics (a logical tensor holds 0/1 and is real). */
-export type ElementClass = "double" | "logical";
+export type ElementClass = "double" | "single" | "logical";
 
 export class RuntimeTensor extends Refcounted {
   readonly kind = "tensor" as const;

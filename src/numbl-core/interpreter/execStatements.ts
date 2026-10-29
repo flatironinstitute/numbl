@@ -434,7 +434,9 @@ function execFor(
 function asScalarNumber(v: unknown): number | null {
   const rv = ensureRuntimeValue(v);
   if (typeof rv === "number") return rv;
-  if (isRuntimeTensor(rv) && rv.data.length === 1) return rv.data[0];
+  // A single endpoint makes a single range (the eager path).
+  if (isRuntimeTensor(rv) && rv.data.length === 1 && rv.cls !== "single")
+    return rv.data[0];
   return null;
 }
 
