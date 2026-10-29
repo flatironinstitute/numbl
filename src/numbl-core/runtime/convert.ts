@@ -11,6 +11,7 @@ import {
 } from "./types.js";
 import { kstr } from "./kinds.js";
 import { RuntimeError } from "./error.js";
+import { gatherValue } from "./gpu/gpuArray.js";
 
 /** Extract a JS number from an RuntimeValue (scalar num, logical, or 1x1 tensor) */
 export function toNumber(v: RuntimeValue): number {
@@ -35,6 +36,8 @@ export function toNumber(v: RuntimeValue): number {
           "Complex value cannot be converted to real number"
         );
       return v.re;
+    case "gpu_array":
+      return toNumber(gatherValue(v));
     default:
       throw new RuntimeError(`Cannot convert ${v.kind} to number`);
   }
@@ -74,6 +77,8 @@ export function toBool(v: RuntimeValue): boolean {
       return v.value.length > 0;
     case "complex_number":
       return v.re !== 0 || v.im !== 0;
+    case "gpu_array":
+      return toBool(gatherValue(v));
     default:
       return true;
   }

@@ -26,7 +26,11 @@ import {
 import { allocFloat64Array } from "../../runtime/alloc.js";
 import { builtin } from "./builtin.js";
 import { builtinError, realNumericArg, realScalarArg } from "./args.js";
-import { inRequestedClass, stripClassNameArgs } from "./array-construction.js";
+import {
+  inRequestedClass,
+  stripClassNameArgs,
+  withGpuOption,
+} from "./array-construction.js";
 
 const isText = (v: RuntimeValue) => isRuntimeChar(v) || isRuntimeString(v);
 
@@ -151,7 +155,7 @@ function registerRandBuiltin(
 ): void {
   builtin({
     name,
-    apply: rawArgs => {
+    apply: withGpuOption(rawArgs => {
       // rand('seed', v) — legacy seeding
       if (rawArgs.length === 2 && isText(rawArgs[0])) {
         const s = toString(rawArgs[0]);
@@ -176,7 +180,7 @@ function registerRandBuiltin(
         for (let i = 0; i < n; i++) data[i] = gen();
       }
       return inRequestedClass(rawArgs, RTV.tensor(data, shape));
-    },
+    }),
   });
 }
 
@@ -194,7 +198,7 @@ const randiLimitsError = (id = "MATLAB:randi:invalidLimits") =>
 builtin({
   name: "randi",
   nargin: [1, Infinity],
-  apply: args => {
+  apply: withGpuOption(args => {
     const first = args[0];
     if (
       !(
@@ -227,7 +231,7 @@ builtin({
     fillRand(data);
     for (let i = 0; i < n; i++) data[i] = Math.floor(data[i] * range) + imin;
     return inRequestedClass(rest, RTV.tensor(data, shape));
-  },
+  }),
 });
 
 // ── randperm ────────────────────────────────────────────────────────────

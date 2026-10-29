@@ -457,6 +457,7 @@ builtin({
 
 builtin({
   name: "getfield",
+  accepts: { gpu: true },
   nargin: [2, Infinity],
   mfile: true,
   apply: args => {
@@ -481,7 +482,7 @@ builtin({
 
 builtin({
   name: "setfield",
-  accepts: { sparse: true },
+  accepts: { sparse: true, gpu: true },
   nargin: [3, Infinity],
   mfile: true,
   apply: args => {

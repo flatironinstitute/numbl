@@ -2,18 +2,24 @@
  * The argument-kind policy of builtins.
  *
  * Some value kinds are storage variants of an ordinary array that most
- * builtins have no code for (a sparse matrix; later, say, an array held
- * on a device). A builtin declares the variants it handles in its spec's
+ * builtins have no code for (a sparse matrix, an array held on a GPU
+ * device). A builtin declares the variants it handles in its spec's
  * `accepts`; for any other, the kind's default is applied after the arity
  * check and before `apply` runs (in the call wrapper `builtin()` builds,
  * which `invokeBuiltin`, `invokeClassMethod` and every other caller go
- * through): a sparse matrix is converted to a dense tensor. A
+ * through): a sparse matrix is converted to a dense tensor and a gpuArray
+ * is gathered to the host. A
  * builtin can instead have the kind rejected with MATLAB's error. So a
  * builtin without a declaration never sees these kinds, and adding a kind
  * means adding a rule here, not editing every builtin.
  */
 
-import type { RuntimeSparseMatrix, RuntimeValue } from "./types.js";
+import type {
+  RuntimeGpuArray,
+  RuntimeSparseMatrix,
+  RuntimeValue,
+} from "./types.js";
+import { gatherValue } from "./gpu/gpuArray.js";
 import type { ValueKind } from "./kinds.js";
 import { RuntimeError } from "./error.js";
 import { sparseToDense } from "../helpers/sparse-arithmetic.js";
@@ -32,6 +38,10 @@ export type KindAcceptance =
 export interface ArgKindPolicy {
   /** Sparse matrices. Default: converted to dense. */
   sparse?: KindAcceptance;
+  /** gpuArrays. Default: gathered to the host; the call wrapper then
+   *  returns the numeric and logical outputs as gpuArrays (see
+   *  `builtin.ts`). */
+  gpu?: KindAcceptance;
 }
 
 type Action = null | ((v: RuntimeValue) => RuntimeValue);
@@ -53,6 +63,14 @@ interface KindRule {
 /** One rule per value kind the policy applies to, keyed by `kind`. A kind
  *  with no rule (the dense values) passes through untouched. */
 const RULES: { readonly [K in ValueKind]?: KindRule } = {
+  gpu_array: {
+    policy: "gpu",
+    convert: v => gatherValue(v as RuntimeGpuArray),
+    error: () =>
+      new RuntimeError("Function is not supported for gpuArray input.", null, {
+        identifier: "parallel:gpu:array:FunctionNotSupported",
+      }),
+  },
   sparse_matrix: {
     policy: "sparse",
     convert: v => sparseToDense(v as RuntimeSparseMatrix),

@@ -1,3 +1,4 @@
+import type { GpuDevice } from "./gpu/deviceTypes.js";
 import {
   Refcounted,
   type RefcountRuntime,
@@ -23,7 +24,8 @@ export type RuntimeValue =
   | RuntimeClassInstanceArray
   | RuntimeSparseMatrix
   | RuntimeDictionary
-  | RuntimeStringArray;
+  | RuntimeStringArray
+  | RuntimeGpuArray;
 
 export type RuntimeNumber = number;
 export type RuntimeLogical = boolean;
@@ -106,6 +108,9 @@ export const isRuntimeDictionary = (
   typeof value === "object" &&
   value !== null &&
   (value as RuntimeDictionary).kind === "dictionary";
+export const isRuntimeGpuArray = (
+  value: RuntimeValue
+): value is RuntimeGpuArray => value instanceof RuntimeGpuArray;
 export const isRuntimeStringArray = (
   value: RuntimeValue
 ): value is RuntimeStringArray =>
@@ -121,10 +126,8 @@ export const isRuntimeStringArray = (
 // enforcement comes in phase 3 when mutation methods replace direct
 // field writes.
 
-/** The MATLAB class of a tensor's elements (what `class` reports). Every
- *  class stores its elements in a Float64Array; the class fixes their
- *  semantics (a logical tensor holds 0/1 and is real). */
-export type ElementClass = "double" | "single" | "logical";
+import type { ElementClass } from "./elementClass.js";
+export type { ElementClass };
 
 export class RuntimeTensor extends Refcounted {
   readonly kind = "tensor" as const;
@@ -474,6 +477,31 @@ export class RuntimeClassInstanceArray extends Refcounted {
 
   protected _destroy(rt: RefcountRuntime): void {
     for (const el of this.elements) decref(rt, el);
+  }
+}
+
+/** An array held in a GPU device's memory (MATLAB's gpuArray). The
+ *  contents are immutable: every operation, indexed assignment included,
+ *  makes a new array. `generation` is the device's generation when the
+ *  array was made; resetting the device invalidates the array. See
+ *  runtime/gpu/. */
+export class RuntimeGpuArray extends Refcounted {
+  readonly kind = "gpu_array" as const;
+
+  constructor(
+    readonly device: GpuDevice,
+    readonly buffer: unknown,
+    readonly shape: number[],
+    /** The underlying class (`underlyingType`). */
+    readonly cls: ElementClass,
+    readonly isComplex: boolean,
+    readonly generation: number
+  ) {
+    super();
+  }
+
+  shallowClone(): RuntimeGpuArray {
+    return this;
   }
 }
 

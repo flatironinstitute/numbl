@@ -85,6 +85,8 @@ import {
 } from "./runtimeHelpers.js";
 import { allocFloat64Array } from "./alloc.js";
 import { isSingle, tensorElement, toSingleResult } from "./single.js";
+import { gatherValue, isGpuArray, outputToGpu } from "./gpu/gpuArray.js";
+import { getIBuiltin } from "./builtinRegistry.js";
 
 // ── Operator methods ────────────────────────────────────────────────────
 
@@ -449,6 +451,12 @@ export function range(start: unknown, step: unknown, end: unknown): unknown {
   if (start === END_SENTINEL || step === END_SENTINEL || end === END_SENTINEL) {
     return { _deferredRange: true, start, step, end } as DeferredRange;
   }
+  // A gpuArray endpoint: the colon builtin runs it on the device.
+  if (isGpuArray(start) || isGpuArray(step) || isGpuArray(end))
+    return getIBuiltin("colon")!.call(
+      [start, step, end].map(v => ensureRuntimeValue(v)),
+      1
+    );
   checkColonOperand(start);
   checkColonOperand(step);
   checkColonOperand(end);
@@ -495,6 +503,11 @@ function checkColonOperand(v: unknown): void {
 
 export function forIter(v: unknown): unknown[] {
   if (typeof v === "number") return [v];
+  // A gpuArray iterates gpuArray columns.
+  if (isGpuArray(v))
+    return forIter(gatherValue(v)).map(c =>
+      outputToGpu(ensureRuntimeValue(c), v.device)
+    );
   const mv = ensureRuntimeValue(v);
   if (isRuntimeNumber(mv)) return [mv];
   if (isRuntimeTensor(mv)) {

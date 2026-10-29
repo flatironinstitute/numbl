@@ -186,6 +186,7 @@ function tensorsEqual(
 
 builtin({
   name: "isequal",
+  hostOutputs: true,
   nargin: [2, Infinity],
   apply: args => {
     for (let i = 1; i < args.length; i++) {
@@ -197,6 +198,7 @@ builtin({
 
 builtin({
   name: "isequaln",
+  hostOutputs: true,
   help: {
     signatures: ["tf = isequaln(A, B)", "tf = isequaln(A1, A2, ..., An)"],
     description:

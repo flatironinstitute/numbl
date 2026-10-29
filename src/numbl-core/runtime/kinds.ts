@@ -198,6 +198,16 @@ export const KINDS: { [K in ValueKind]: KindInfo<ValueOf<K>> } = {
     isReal: () => false,
     label: () => "graphics handle",
   },
+  gpu_array: {
+    className: () => "gpuArray",
+    shape: v => v.shape,
+    numel: v => v.shape.reduce((a, b) => a * b, 1),
+    // An object, so that operators and functions dispatch on it (`builtin`
+    // runs them on the device).
+    isObject: true,
+    isReal: v => !v.isComplex,
+    label: v => `gpuArray (${v.cls})`,
+  },
   dummy_handle: {
     className: () => "dummy_handle",
     shape: scalar,
@@ -316,6 +326,10 @@ export function isaValue(
   const cls = valueClass(v);
   if (classIs(cls, name)) return true;
   const kind = kindOf(v);
+  // A gpuArray is in the categories of its underlying class
+  // (isa(gpuArray(single(1)), 'float') is true, 'single' is not).
+  if (kind === "gpu_array")
+    return CATEGORIES.get(name)?.has((v as { cls: string }).cls) ?? false;
   if (
     !ancestors ||
     (kind !== "class_instance" && kind !== "class_instance_array")
