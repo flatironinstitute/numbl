@@ -1063,6 +1063,174 @@ export function fftKernel(
   return result(g.device, buf, outShape, "single", !symmetric);
 }
 
+// ── Masks ─────────────────────────────────────────────────────────────
+// A logical index, `find` and `nnz` select the elements of a 0/1 mask. Its
+// running count (a `cumsum` scan, f32, so exact below 2^24 elements) gives
+// each selected element its position; a result whose size is the count
+// reads the count back from the device.
+
+const MASK_LIMIT = 2 ** 24;
+
+/** The 0/1 mask of real gpuArray `g`'s nonzero elements (NaN is nonzero),
+ *  and whether it is a new buffer for the caller to release. */
+function maskOf(
+  g: RuntimeGpuArray,
+  k: GpuKernels,
+  n: number
+): { mask: unknown; owned: boolean } {
+  if (g.cls === "logical") return { mask: g.buffer, owned: false };
+  const mask = k.elementwise("ne", [{ buffer: g.buffer, n }, { scalar: 0 }], n);
+  return { mask, owned: true };
+}
+
+/** The inclusive running count of `mask` and its total. */
+function maskPositions(
+  k: GpuKernels,
+  mask: unknown,
+  n: number
+): { pos: unknown; count: number } {
+  const pos = k.scan("cumsum", mask, 1, n, 1);
+  return { pos, count: k.readAt!(pos, n - 1) };
+}
+
+/** Whether `m` is a logical gpuArray mask over the `n` elements of `g`
+ *  that the mask kernels take. */
+function isMaskFor(
+  m: RuntimeValue,
+  g: RuntimeGpuArray,
+  k: GpuKernels,
+  n: number
+): m is RuntimeGpuArray {
+  return (
+    m instanceof RuntimeGpuArray &&
+    m.cls === "logical" &&
+    m.device === g.device &&
+    !m.isComplex &&
+    onDevice(m, k) &&
+    numelOf(m.shape) === n &&
+    n > 0 &&
+    n < MASK_LIMIT
+  );
+}
+
+/** `G(M)` for a logical gpuArray `M` with as many elements as `G`. */
+export function maskIndexKernel(
+  g: RuntimeGpuArray,
+  indices: RuntimeValue[]
+): RuntimeValue | null {
+  const k = g.device.kernels;
+  if (!k?.compact || indices.length !== 1 || !onDevice(g, k)) return null;
+  const n = numelOf(g.shape);
+  const m = indices[0];
+  if (!isMaskFor(m, g, k, n)) return null;
+  const mask = m.buffer;
+  const { pos, count } = maskPositions(k, mask, n);
+  // A row vector gives a row; anything else a column.
+  const row = g.shape.length === 2 && g.shape[0] === 1;
+  const shape = row ? [1, count] : [count, 1];
+  const r = perPart(
+    g,
+    k,
+    shape,
+    part => k.compact!(part, mask, pos, n, count) as unknown
+  );
+  g.device.release?.(pos);
+  return r;
+}
+
+/** `G(M) = rhs` for a logical gpuArray `M` with as many elements as real
+ *  `G`, and a real scalar or array `rhs`. */
+export function maskStoreKernel(
+  g: RuntimeGpuArray,
+  indices: RuntimeValue[],
+  rhs: RuntimeValue
+): RuntimeValue | null {
+  const k = g.device.kernels;
+  if (!k?.expand || indices.length !== 1 || !onDevice(g, k) || g.isComplex)
+    return null;
+  const n = numelOf(g.shape);
+  const m = indices[0];
+  if (!isMaskFor(m, g, k, n)) return null;
+  const r = kernelArg(rhs, g.device, k);
+  if (!r || (g.cls === "logical" && r.cls !== "logical")) return null;
+  const mask = m.buffer;
+  if (r.n === 1)
+    return result(
+      g.device,
+      k.expand(g.buffer, mask, null, n, r.op),
+      g.shape.slice(),
+      g.cls
+    );
+  // An array: one element per selected position, checked on the host.
+  const { pos, count } = maskPositions(k, mask, n);
+  const out = count === r.n ? k.expand(g.buffer, mask, pos, n, r.op) : null;
+  g.device.release?.(pos);
+  return out === null ? null : result(g.device, out, g.shape.slice(), g.cls);
+}
+
+/** `find(X)`, `find(X, k)`, `find(X, k, 'first')` and `[r, c] = find(...)`
+ *  of a real gpuArray: double indices (f32 on the device, exact below
+ *  2^24). An empty result runs on the host, which gives its shape. */
+export function findKernel(
+  args: RuntimeValue[],
+  nargout: number
+): RuntimeValue | RuntimeValue[] | null {
+  const g = args[0];
+  if (!(g instanceof RuntimeGpuArray) || nargout > 2 || args.length > 3)
+    return null;
+  const k = g.device.kernels;
+  if (!k?.compact || !onDevice(g, k) || g.isComplex) return null;
+  let limit = Infinity;
+  if (args.length >= 2) {
+    const lim = args[1];
+    if (typeof lim !== "number" || !Number.isInteger(lim) || lim < 1)
+      return null;
+    limit = lim;
+  }
+  if (args.length === 3 && textOf(args[2]).toLowerCase() !== "first")
+    return null;
+  const n = numelOf(g.shape);
+  if (n < 2 || n >= MASK_LIMIT) return null;
+  const { mask, owned } = maskOf(g, k, n);
+  const { pos, count: total } = maskPositions(k, mask, n);
+  const count = Math.min(total, limit);
+  let out: RuntimeValue | RuntimeValue[] | null = null;
+  if (count > 0) {
+    const row = g.shape.length === 2 && g.shape[0] === 1;
+    const shape = row ? [1, count] : [count, 1];
+    if (nargout <= 1) {
+      const idx = k.compact(null, mask, pos, n, count);
+      out = result(g.device, idx, shape, "double");
+    } else {
+      const [r, c] = k.compact(null, mask, pos, n, count, g.shape[0]) as [
+        unknown,
+        unknown,
+      ];
+      out = [
+        result(g.device, r, shape.slice(), "double"),
+        result(g.device, c, shape, "double"),
+      ];
+    }
+  }
+  g.device.release?.(pos);
+  if (owned) g.device.release?.(mask);
+  return out;
+}
+
+/** `nnz(X)` of a real gpuArray: a double scalar (exact below 2^24). */
+export function nnzKernel(args: RuntimeValue[]): RuntimeValue | null {
+  const g = args[0];
+  if (args.length !== 1 || !(g instanceof RuntimeGpuArray)) return null;
+  const k = g.device.kernels;
+  if (!k || !onDevice(g, k) || g.isComplex) return null;
+  const n = numelOf(g.shape);
+  if (n === 0 || n >= MASK_LIMIT) return null;
+  const { mask, owned } = maskOf(g, k, n);
+  const sum = k.reduce("sum", mask, 1, n, 1);
+  if (owned) g.device.release?.(mask);
+  return result(g.device, sum, [1, 1], "double");
+}
+
 /** `single(G)` or `logical(G)` on the device: the array itself when it
  *  has the class, and the same buffer for `single(L)` of a logical array
  *  (its 0/1 values are f32 data). Other conversions run on the host. */

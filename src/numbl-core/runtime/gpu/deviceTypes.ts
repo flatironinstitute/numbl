@@ -187,6 +187,31 @@ export interface GpuKernels {
     len: number,
     outer: number
   ): unknown;
+  /** Element `index` of `buffer`, waiting for the work that computes it. */
+  readAt?(buffer: unknown, index: number): number;
+  /** Stream compaction over a 0/1 `mask` of `n` elements, whose inclusive
+   *  running count is `pos`: for each selected i with pos[i] <= `count`,
+   *  write at pos[i] - 1 the value src[i], or without `src`, i + 1 (a
+   *  1-based index), or with `m`, i % m + 1 and (into the second buffer)
+   *  floor(i / m) + 1. */
+  compact?(
+    src: unknown | null,
+    mask: unknown,
+    pos: unknown,
+    n: number,
+    count: number,
+    m?: number
+  ): unknown | [unknown, unknown];
+  /** `src` (`n` elements) with each element selected by the 0/1 `mask`
+   *  replaced by `rhs`: a scalar, a buffer of 1, or, with `pos` (the
+   *  mask's inclusive running count), the buffer's element pos[i] - 1. */
+  expand?(
+    src: unknown,
+    mask: unknown,
+    pos: unknown | null,
+    n: number,
+    rhs: KernelOperand
+  ): unknown;
   /** Concatenation into a new buffer of `total` elements: each part puts
    *  `block` contiguous elements per slab (`outer` slabs) at `offset`
    *  within the slab of `stride` elements. */

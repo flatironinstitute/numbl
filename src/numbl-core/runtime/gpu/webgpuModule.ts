@@ -1436,6 +1436,126 @@ fn at(s: u32, k: u32) -> u32 {
       discard(totals);
     },
 
+    /** Element `index` of buffer `id`, after the work that computes it. */
+    async readAt(device: GPUDevice, args: { id: number; index: number }) {
+      await settle(device);
+      const staging = device.createBuffer({
+        size: 4,
+        usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
+      });
+      const enc = device.createCommandEncoder();
+      enc.copyBufferToBuffer(buffer(args.id), args.index * 4, staging, 0, 4);
+      device.queue.submit([enc.finish()]);
+      await staging.mapAsync(GPUMapMode.READ);
+      const v = new Float32Array(staging.getMappedRange())[0];
+      staging.unmap();
+      staging.destroy();
+      return v;
+    },
+
+    /** Stream compaction (see `GpuKernels.compact`): each selected i
+     *  (mask[i] != 0) with pos[i] <= count writes at pos[i] - 1 the value
+     *  src[i], or (no `src`) i + 1, or (`m`) i % m + 1 and, into `out2`,
+     *  floor(i / m) + 1. */
+    async compact(
+      device: GPUDevice,
+      args: {
+        out: number;
+        out2: number;
+        src: number;
+        mask: number;
+        pos: number;
+        n: number;
+        count: number;
+        m: number;
+      }
+    ) {
+      const out = create(device, args.out, args.count);
+      const out2 = args.out2 ? create(device, args.out2, args.count) : null;
+      if (args.count === 0) return;
+      const value = args.src
+        ? "src[i]"
+        : args.m
+          ? "f32(i % p.m + 1u)"
+          : "f32(i + 1u)";
+      const code = `
+struct P { n: u32, w: u32, count: u32, m: u32 }
+@group(0) @binding(0) var<uniform> p: P;
+@group(0) @binding(1) var<storage, read_write> dst: array<f32>;
+@group(0) @binding(2) var<storage, read> mask: array<f32>;
+@group(0) @binding(3) var<storage, read> pos: array<f32>;
+${args.src ? "@group(0) @binding(4) var<storage, read> src: array<f32>;" : ""}
+${out2 ? "@group(0) @binding(4) var<storage, read_write> dst2: array<f32>;" : ""}
+@compute @workgroup_size(256) fn main(@builtin(global_invocation_id) g: vec3u) {
+  let i = g.x + g.y * p.w;
+  if (i >= p.n || mask[i] == 0.0) { return; }
+  let q = u32(pos[i]);
+  if (q > p.count) { return; }
+  dst[q - 1u] = ${value};
+  ${out2 ? "dst2[q - 1u] = f32(i / p.m + 1u);" : ""}
+}`;
+      const { groups, width } = grid(args.n);
+      const bufs = [out, buffer(args.mask), buffer(args.pos)];
+      if (args.src) bufs.push(buffer(args.src));
+      if (out2) bufs.push(out2);
+      run(
+        device,
+        code,
+        uniforms([args.n, width, args.count, args.m]),
+        bufs,
+        groups
+      );
+    },
+
+    /** out = src with each element selected by `mask` replaced by `rhs`: a
+     *  scalar, a buffer of 1, or (with `pos`) rhs[pos[i] - 1]. */
+    async expand(
+      device: GPUDevice,
+      args: {
+        out: number;
+        src: number;
+        mask: number;
+        pos: number;
+        n: number;
+        rhs: Operand;
+      }
+    ) {
+      const out = create(device, args.out, args.n);
+      if (args.n === 0) return;
+      const rhs = args.rhs;
+      const scalar = "scalar" in rhs;
+      const usePos = !scalar && rhs.n !== 1 && args.pos !== 0;
+      const value = scalar
+        ? "p.s"
+        : usePos
+          ? "rhs[u32(pos[i]) - 1u]"
+          : "rhs[0]";
+      const code = `
+struct P { n: u32, w: u32, p0: u32, p1: u32, s: f32, p2: f32, p3: f32, p4: f32 }
+@group(0) @binding(0) var<uniform> p: P;
+@group(0) @binding(1) var<storage, read_write> dst: array<f32>;
+@group(0) @binding(2) var<storage, read> src: array<f32>;
+@group(0) @binding(3) var<storage, read> mask: array<f32>;
+${scalar ? "" : "@group(0) @binding(4) var<storage, read> rhs: array<f32>;"}
+${usePos ? "@group(0) @binding(5) var<storage, read> pos: array<f32>;" : ""}
+@compute @workgroup_size(256) fn main(@builtin(global_invocation_id) g: vec3u) {
+  let i = g.x + g.y * p.w;
+  if (i >= p.n) { return; }
+  dst[i] = select(src[i], ${value}, mask[i] != 0.0);
+}`;
+      const { groups, width } = grid(args.n);
+      const bufs = [out, buffer(args.src), buffer(args.mask)];
+      if (!scalar) bufs.push(buffer(rhs.id));
+      if (usePos) bufs.push(buffer(args.pos));
+      run(
+        device,
+        code,
+        uniforms([args.n, width, 0, 0], [scalar ? rhs.scalar : 0, 0, 0, 0]),
+        bufs,
+        groups
+      );
+    },
+
     /** out (m x n) = a (m x k) * b (k x n), column-major. A workgroup
      *  computes a tile of `bm` x `bn` outputs, each thread `tm` x `tn` of
      *  them (rows l.x + (bm/tm)*r, columns l.y + (bn/tn)*c), from slices of
