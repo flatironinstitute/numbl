@@ -84,6 +84,6 @@ export class GpuDeviceSet {
 
 export function noDeviceError(): RuntimeError {
   return new RuntimeError("Unable to find a supported GPU device.", null, {
-    identifier: "parallel:gpu:device:NoDevice",
+    identifier: "parallel:gpu:device:NoCUDADevice",
   });
 }
