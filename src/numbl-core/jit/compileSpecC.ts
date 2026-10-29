@@ -16,6 +16,7 @@ import {
 } from "./compile.js";
 import type { IRFunc } from "./lowering/ir.js";
 import type { Type } from "./lowering/types.js";
+import { C_FUSION } from "./lowering/elemwiseKernels.js";
 import type { AssignedFlag } from "./lowering/assignedFlags.js";
 
 export type { CompileSpecArgs as CompileSpecCArgs } from "./compile.js";
@@ -72,21 +73,21 @@ export interface CompileSpecCResult {
   locFiles: ReadonlyArray<string>;
   /** The entry spec can call itself (directly or through its callees). */
   recursive: boolean;
+  /** Element-wise kernels in the entry spec (`ElemwiseKernel`). */
+  kernels: number;
 }
 
 /** C predeclares every local (no unassigned state) and fuses element-wise
  *  chains into single loops. */
 export const cTarget: CompileTarget<EmitResult> = {
   definiteAssignment: true,
-  fusesElementwise: true,
+  fusion: C_FUSION,
   emit: (prog, exposeSpec) => emitProgram(prog, { exposeSpec }),
 };
 
 export function compileSpecC(args: CompileSpecArgs): CompileSpecCResult {
-  const { cName, entry, assignedFlags, recursive, emitted } = compileWith(
-    cTarget,
-    args
-  );
+  const { cName, entry, assignedFlags, recursive, kernels, emitted } =
+    compileWith(cTarget, args);
   return {
     cName,
     source: emitted.source,
@@ -95,6 +96,7 @@ export function compileSpecC(args: CompileSpecArgs): CompileSpecCResult {
     assignedFlags,
     locFiles: emitted.locFiles,
     recursive,
+    kernels,
   };
 }
 

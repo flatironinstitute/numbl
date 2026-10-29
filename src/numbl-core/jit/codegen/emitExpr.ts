@@ -321,6 +321,10 @@ export function emitExpr(e: IRExpr, state: RuntimeState): string {
       return `(double)${e.baseCName}.dims[${e.axis}]`;
     case "MakeRange":
       return emitMakeRange(e, state);
+    case "ElemwiseKernel":
+    case "KernelElem":
+      // Kernels are statements (`emitStmt`'s Assign), never operands.
+      throw new Error(`emit internal: '${e.kind}' outside a kernel Assign`);
   }
 }
 

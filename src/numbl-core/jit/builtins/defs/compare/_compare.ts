@@ -105,8 +105,8 @@ export function defineCompare(
       return [scalarLogical()];
     },
     emitC({ argsC, argTypes, useRuntime }) {
-      // Tensor compare goes through `emitTensorFused` (per-slot path),
-      // which calls this hook with scalar-versioned arg types. If we
+      // Tensor compare goes through an element-wise kernel (per-slot
+      // path), which calls this hook with scalar-versioned arg types. If we
       // see multi-element types here it means the fused path didn't
       // trigger (shape mismatch / broadcast / shape-unknown result
       // type) and a runtime helper would be needed. Reject explicitly

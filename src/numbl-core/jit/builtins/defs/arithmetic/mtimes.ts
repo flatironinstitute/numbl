@@ -226,9 +226,8 @@ export const mtimes: Builtin = {
       : `jit_tensor_mtimes_real(${argsJs[0]}, ${argsJs[1]})`;
   },
   // Elementwise per-slot template — only valid when at least one
-  // operand is scalar (tensor * tensor is matrix product). The
-  // `isPureElementwiseExpr` predicate in
-  // `src/codegen/emitTensorFused.ts` rejects the both-tensor case
+  // operand is scalar (tensor * tensor is matrix product). The kernel
+  // pass (`lowering/elemwiseKernels.ts`) rejects the both-tensor case
   // so this branch only fires on the elementwise call.
   elementwise: true,
 };

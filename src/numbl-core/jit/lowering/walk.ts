@@ -80,6 +80,10 @@ export function forEachSubExpr(e: IRExpr, visit: (sub: IRExpr) => void): void {
       }
       return;
     case "EndRef":
+    case "KernelElem":
+      return;
+    case "ElemwiseKernel":
+      forEachSubExpr(e.tree, visit);
       return;
     case "MakeRange":
       forEachSubExpr(e.start, visit);

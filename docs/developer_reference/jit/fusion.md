@@ -1,44 +1,58 @@
 # Element-Wise Fusion
 
-Fusion collapses an element-wise tensor assignment into a single inline per-element loop instead of a chain of runtime-helper calls, each of which would allocate an intermediate tensor. The goal is fewer allocations, fewer passes over memory, and better cache behavior.
+Fusion collapses an element-wise tensor assignment into a single per-element loop instead of a chain of runtime-helper calls, each of which would allocate an intermediate tensor and make its own pass over memory. Both backends fuse. The decision is made once, on the IR, by a shared pass that produces an explicit `ElemwiseKernel` node; each backend only renders that node.
 
-**Fusion is a C-backend (`--opt 2`) optimization only.** The JS backend never fuses: it always routes tensor ops through the per-op runtime helpers (`jit_tensor_<op>_tt` and friends in `tensor_elemwise_real.js`), which hand tensors of 1024 or more elements to the interpreter's element-wise kernels (the `$elemwise` host hook: native addon when loaded) and loop in JS below that. The pass lives in the JIT compiler's C codegen (`src/numbl-core/jit/codegen/emitTensorFused.ts`).
+## The kernel pass
 
-## What is fused
+`compileWith` (`jit/compile.ts`) runs `kernelPass` (`jit/lowering/elemwiseKernels.ts`) on the program just before emit, with the target's `FusionPolicy`. The pass returns a new program and never mutates its input: the `Lowerer`'s specialization cache is shared by both backends.
 
-`emitTensorFused` handles a single `Assign` whose right-hand side is a _pure element-wise_ expression, built only from numeric literals, variables, `Binary`/`Unary` ops, and calls to builtins marked `elementwise` (whose `emitC` also works on scalar arguments), and whose multi-element operands all share the target's shape. It emits one C loop that computes each output slot directly, allocating only the result tensor.
+Lowering puts each tensor sub-expression in its own ANF temp, so `y = a.*b + c` arrives as `_t1 = a .* b; y = _t1 + c`. The pass works in two steps per statement list:
 
-`emitTensorFused` fuses one `Assign`; it does not merge a sequence of statements. Since lowering puts each tensor sub-expression in its own ANF temp, a chain like `_t1 = a * b; c = _t1 + d` would fuse as two loops with an intermediate tensor. To avoid that, the compile pipeline runs an IR-to-IR inline pass (`codegen/inlinePass.ts`) on the program just before emit for a target with `fusesElementwise` (C), which folds the chain into a single `c = (a * b) + d`.
+1. **Inline.** A single-use producer is substituted into its consumer, so the chain becomes `y = (a .* b) + c`. The producer must itself be an element-wise kernel assignment; its variable must be read exactly once in the whole function (nested bodies included) and not be an output; the consumer must be the next statement in the same body that reads it, read it as a `Binary` / `Unary` / `Call` operand, and still be a kernel assignment after substitution; statements in between must not write the variable or any operand of the producer and must not be control flow. The consumer itself may overwrite an operand, as in `v = v + 0.01 .* (a .* v)`, since the RHS is evaluated before the store. Chains of any depth collapse in one forward sweep.
+2. **Build.** Each remaining kernel assignment gets an `ElemwiseKernel` RHS.
 
-## Inline pass
+ANF stays in lowering because a consumer that does not fuse (a matrix product, an indexed store) needs its tensor operands in named temps that codegen can free; the pass undoes it only where it fuses.
 
-The pass substitutes a producer `Assign`'s RHS into its consumer and drops the producer when all of the following hold:
+## The `ElemwiseKernel` node
 
-- the producer is itself fusable (`isFusableAssign`);
-- its variable is read exactly once in the whole function, nested bodies included, and is not a function output (function-wide counting is what keeps a def inside a loop body that is also read after the loop);
-- the consumer is the next statement in the same body that reads it, is an `Assign`, and reads it as a `Binary`/`Unary`/`Call` operand; statements in between do not write the variable or any operand of the producer and are not control flow (the consumer itself may overwrite an operand, as in `v = v + 0.01 .* (a .* v)`, since the RHS is evaluated before the store);
-- the consumer is still fusable after substitution, so a nested tensor expression never reaches the helper-call path, where its intermediates would not be freed.
+An `ElemwiseKernel` (`jit/lowering/ir.ts`) appears only as an `Assign` RHS and holds:
 
-Chains of any depth collapse in one forward sweep per body. The pass returns a new program and never mutates its input: the `Lowerer`'s specialization cache is shared with the JS backend, which keeps the ANF form. JS does not run the pass because it does not fuse; nested tensor expressions there would still allocate one array per operation.
+- `inputs`: the distinct multi-element operands, in first-appearance order. `inputs[0]` is the shape source: the output has its runtime shape.
+- `body`: the per-element expression. Every node is scalar-typed, and each read of a tensor operand is a `KernelElem` (element `i` of input `k`). This is the form the builtins' scalar `emitC` / `emitJs` hooks expect, so a backend renders the body with the same hooks it uses for scalar code.
+- `guard`: set when there are two or more distinct operands and some dimension is not exact. Their static dimension patterns match, but their runtime extents may not (`ones(1,n) + ones(1,m)`), so the emitted loop checks the shapes first and otherwise evaluates `tree` through the broadcasting helpers, which broadcast compatible shapes and raise "Matrix dimensions must agree" on incompatible ones.
+- `reduce` (optional): `sum`, `prod` or `mean` over all elements. The kernel's value is then a scalar, accumulated in linear order from `0` (or `1` for `prod`), the order of the `jit_<op>_all` helpers, so the result is bit-identical to reducing the materialized tensor.
+- `tree`: the expression the kernel replaces. IR walkers (`walk.ts`) visit it, so liveness, the definite-assignment reads and the cancel-poll classification see the same variables as before the rewrite.
 
-When a fused assign needs a runtime shape guard (dynamic extents) and the guard fails, the fallback evaluates the nested RHS through the broadcasting helpers with each interior tensor in a block-local temp that is freed after the assign (`emitFusedFallback` in `emitStmt.ts`).
+## What fuses
 
-On a `y = a.*b + c.*d - e` loop over 2M-element vectors, inlining reduces the per-statement cost at `--opt 2` by roughly 2.5×, mainly by removing the allocation and memory traffic of the intermediate tensors. The `ew_arith` case of `npm run bench` times the same statement.
+A kernel assignment is either
 
-## How it works
+- **element-wise**: a real, multi-element result whose RHS consists only of numeric literals, variables, and `Binary` / `Unary` / `Call` nodes over builtins marked `elementwise` (`mtimes` / `mrdivide` only with a scalar side; a tensor-valued call only when its tensor arguments have its own static shape), with every multi-element operand sharing the result's static dimension pattern and no complex tensor anywhere; or
+- **reducing**: `sum(x)`, `prod(x)` or `mean(x)` with a real scalar result (a reduction over all elements, which the transfer function picks for a vector or `'all'`-like shape) where `x` is a non-trivial element-wise tree of the above form. A reduction of a bare variable stays a helper call.
 
-The fused emitter walks the RHS expression and emits, for each output element, the scalar C expression for that slot (builtins contribute their `emitC` output on scalar arguments). The loop iterates over the flat element count of the freshly allocated result tensor and writes `_r.real[i] = <expr>` (plus the imaginary part for complex results).
+The `FusionPolicy` narrows this per target:
 
-There are two shape cases:
+| Target | Builtins in a kernel                                                                                                                                     | Types                         |
+| ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------- |
+| C      | every element-wise builtin                                                                                                                               | any the C emitter handles     |
+| JS     | `plus`, `minus`, `times`, `rdivide`, `mtimes` / `mrdivide` (scalar side), `uminus`, comparisons, `abs`, `floor`, `ceil`, `fix`, `sqrt`, and the reducers | real double or logical values |
 
-- **Statically-equal shapes**: emit the loop directly.
-- **Same static dim _pattern_ but dynamic extents** (e.g. `ones(1,n) + ones(1,m)`): guard the loop with a runtime shape-equality probe (`jit_fused_shape_eq`); on mismatch it falls back to the broadcasting runtime helper.
+The JS set is restricted to operations whose per-element result IEEE arithmetic fixes exactly. The JS per-op helpers hand tensors of 1024 or more elements to the interpreter's kernels (the `$elemwise` host hook: the native addon when loaded), whose `exp`, `sin`, `pow` and so on come from libm and need not agree with V8's `Math` functions in the last bit. A transcendental call therefore stays a helper call in its own temp at `--opt 1`, and the kernel starts above it: `exp(a) .* b + 1` becomes `_t1 = exp(a)` plus one kernel over `_t1` and `b`.
 
-If any multi-element operand has a statically-different shape from the target, the assignment falls back to the runtime-helper broadcast path (`jit_tensor_<op>_bcast_tt(...)`) rather than fusing.
+## Rendering
+
+- **C** (`codegen/emitKernelC.ts`): allocate the result with the shape source's dims, then one `JIT_OMP_PARFOR_N` loop writing `_r.real[_jit_i] = <body>`, with tensor reads as `<input>.real[_jit_i]`. A reducing kernel accumulates into a `double` in a sequential loop. A guarded kernel's fallback hoists each tensor-valued interior node of `tree` into a block-local temp freed after the store (`emitKernelFallback` in `emitStmt.ts`).
+- **JS** (`codegen/emitKernelJs.ts`): bind each input's `data` array once, allocate the result (tagged logical for a logical result), and run one loop. The guard calls `jit_fused_shape_eq`; the fallback is `tree` through the per-op helpers. Kernel locals use the `_jit_e` prefix, which no other emitted name uses.
+
+The C output for element-wise kernels is the same as before the kernel IR existed (the `jit_parity` corpus emits identical C).
 
 ## What breaks fusion
 
-- A right-hand side that isn't purely element-wise: indexing, `reshape`, matrix multiply, **reductions** (`sum`, `prod`, `max`, `min`, …), or any builtin call not marked `elementwise`.
-- Statically-different operand shapes (broadcasting outside the shared fast path: handled by the runtime helper instead).
-- Across statements: an intermediate that is read more than once, is a function output, or whose chain is interrupted by control flow or a write to one of its operands stays materialized (the inline pass leaves it in place).
-- The JS backend (`--opt 1`), which never fuses.
+- An RHS that is not element-wise: indexing, `reshape`, matrix multiply, a reduction other than a trailing full `sum` / `prod` / `mean` (a reduction along one dimension of a matrix, `max`, `any`, ...), or any builtin call not marked `elementwise`.
+- Statically different operand shapes (broadcasting: handled by the runtime helper instead). Tensor comparisons currently type their result with unknown dimensions, so a comparison fuses only with operands whose dimensions are unknown too.
+- Complex tensors (both targets), and at `--opt 1` the builtins outside the JS set.
+- Across statements: an intermediate that is read more than once, is a function output, or whose chain is interrupted by control flow or a write to one of its operands stays materialized.
+
+## Performance
+
+On `y = a.*b + c.*d - e` over 2M-element vectors, fusing at `--opt 2` reduces the per-statement cost by roughly 2.5x, mainly by removing the allocation and memory traffic of the intermediate tensors. At `--opt 1` the gain is smaller: V8 does not vectorize the loop and keeps a bounds check per array, so a fused JS loop runs at roughly 2 to 3 ns per element, against the host's SIMD kernels per operation. The `ew_*` and `sum_*` cases of `npm run bench` time these statements.

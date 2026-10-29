@@ -4,7 +4,7 @@ The JIT compiler is the in-tree subsystem under `src/numbl-core/jit`. It lowers 
 
 ## IR
 
-`jit/lowering/ir.ts` defines the IR: discriminated-union expression and statement nodes, each carrying its resolved `Type` (`jit/lowering/types.ts`). Expression kinds include numeric / imaginary / string literals, variables, binary/unary ops, calls (user-function specialization, builtin, runtime helper), tensor build, index load / slice, member load, and cell / struct / handle nodes. Statement kinds include assign, indexed / sliced / member / cell stores, `if` / `while` / `for`, multi-assign, and control flow. Types are fixed at lowering time: codegen never re-decides what an operation means.
+`jit/lowering/ir.ts` defines the IR: discriminated-union expression and statement nodes, each carrying its resolved `Type` (`jit/lowering/types.ts`). Expression kinds include numeric / imaginary / string literals, variables, binary/unary ops, calls (user-function specialization, builtin, runtime helper), tensor build, index load / slice, member load, and cell / struct / handle nodes, plus the `ElemwiseKernel` node the kernel pass builds after lowering (see [fusion.md](fusion.md)). Statement kinds include assign, indexed / sliced / member / cell stores, `if` / `while` / `for`, multi-assign, and control flow. Types are fixed at lowering time: codegen never re-decides what an operation means.
 
 ## Lowering
 

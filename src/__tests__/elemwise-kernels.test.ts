@@ -3,7 +3,12 @@ import { parseMFile } from "../numbl-core/parser/index.js";
 import { CodeIndex } from "../numbl-core/workspace/codeIndex.js";
 import { Workspace, Lowerer, tensorDouble } from "../numbl-core/jit/index.js";
 import { specializeUserFunction } from "../numbl-core/jit/lowering/specialize.js";
-import { inlineFunc } from "../numbl-core/jit/codegen/inlinePass.js";
+import {
+  C_FUSION,
+  JS_FUSION,
+  kernelizeFunc,
+  type FusionPolicy,
+} from "../numbl-core/jit/lowering/elemwiseKernels.js";
 import type { IRFunc, IRStmt } from "../numbl-core/jit/lowering/ir.js";
 
 /** Lower the first function in `source`, every argument a tensor of
@@ -46,7 +51,24 @@ function assignedNames(stmts: IRStmt[]): string[] {
   return out;
 }
 
-describe("inlinePass", () => {
+const inlineFunc = (fn: IRFunc, policy: FusionPolicy = C_FUSION) =>
+  kernelizeFunc(fn, policy);
+
+/** The RHS kinds of the Assign statements, nested bodies included. */
+function rhsKinds(stmts: IRStmt[]): string[] {
+  const out: string[] = [];
+  for (const s of stmts) {
+    if (s.kind === "Assign") out.push(s.expr.kind);
+    if (s.kind === "If") {
+      out.push(...rhsKinds(s.thenBody), ...rhsKinds(s.elseBody));
+    } else if (s.kind === "For" || s.kind === "While") {
+      out.push(...rhsKinds(s.body));
+    }
+  }
+  return out;
+}
+
+describe("kernel pass", () => {
   it("fuses more than 32 single-use temps into one statement", () => {
     // 40 terms: 40 `x .* k` temps plus 39 partial sums, all single-use.
     const terms = Array.from({ length: 40 }, (_, k) => `x .* ${k + 1}`);
@@ -108,5 +130,48 @@ describe("inlinePass", () => {
       "function y = f(a, b)\n  t = a .* b;\n  a = b;\n  y = t + a;\nend\n";
     const fn = lowerFn(source, [4, 1]);
     expect(assignedNames(inlineFunc(fn).body)).toEqual(["t", "a", "y"]);
+  });
+
+  it("builds one kernel for exact operations at both targets", () => {
+    const source =
+      "function y = f(a, b)\n  y = abs(a - b) + floor(a) ./ sqrt(abs(b) + 1);\nend\n";
+    const fn = lowerFn(source, [4, 1]);
+    expect(rhsKinds(inlineFunc(fn, JS_FUSION).body)).toEqual([
+      "ElemwiseKernel",
+    ]);
+    expect(rhsKinds(inlineFunc(fn, C_FUSION).body)).toEqual(["ElemwiseKernel"]);
+  });
+
+  it("fuses a trailing full reduction", () => {
+    const source = "function s = f(a, b)\n  s = sum(a .* b - 1);\nend\n";
+    const fn = lowerFn(source, [4, 1]);
+    const body = inlineFunc(fn, JS_FUSION).body;
+    expect(rhsKinds(body)).toEqual(["ElemwiseKernel"]);
+    const s = body[0];
+    expect(s.kind === "Assign" && s.expr.kind === "ElemwiseKernel").toBe(true);
+    if (s.kind === "Assign" && s.expr.kind === "ElemwiseKernel") {
+      expect(s.expr.reduce).toEqual({ op: "sum" });
+      expect(s.expr.inputs.map(v => v.name)).toEqual(["a", "b"]);
+    }
+  });
+
+  it("leaves transcendental calls out of JS kernels", () => {
+    const source = "function y = f(a, b)\n  y = exp(a) .* b + 1;\nend\n";
+    const fn = lowerFn(source, [4, 1]);
+    // JS: exp stays a helper call in its own temp; the rest fuses.
+    expect(rhsKinds(inlineFunc(fn, JS_FUSION).body)).toEqual([
+      "Call",
+      "ElemwiseKernel",
+    ]);
+    expect(rhsKinds(inlineFunc(fn, C_FUSION).body)).toEqual(["ElemwiseKernel"]);
+  });
+
+  it("does not fuse a dim reduction of a matrix", () => {
+    const source = "function s = f(a, b)\n  s = sum(a .* b);\nend\n";
+    const fn = lowerFn(source, [4, 3]);
+    expect(rhsKinds(inlineFunc(fn, C_FUSION).body)).toEqual([
+      "ElemwiseKernel",
+      "Call",
+    ]);
   });
 });

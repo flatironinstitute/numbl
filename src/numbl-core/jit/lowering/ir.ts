@@ -362,6 +362,45 @@ export interface MakeRange {
   span: Span;
 }
 
+/** A fused element-wise loop, built after lowering by the kernel pass
+ *  (`elemwiseKernels.ts`); it appears only as an `Assign` RHS. Each
+ *  output element is `body` evaluated at that element; with `reduce` the
+ *  elements are folded into a scalar instead (in linear order, as the
+ *  reduction helpers do). The output has the runtime shape of
+ *  `inputs[0]`. */
+export interface ElemwiseKernel {
+  kind: "ElemwiseKernel";
+  /** The distinct multi-element operands, in first-appearance order;
+   *  `inputs[0]` is the shape source. */
+  inputs: Var[];
+  /** Scalar-typed per-element expression over `KernelElem`, scalar
+   *  `Var`, `NumLit`, `Binary`, `Unary` and element-wise `Call` nodes. */
+  body: IRExpr;
+  /** The operands' extents are not statically proven equal: check them
+   *  at run time and evaluate `tree` (which broadcasts or raises) on a
+   *  mismatch. */
+  guard: boolean;
+  reduce?: KernelReduce;
+  /** The expression the kernel replaces. IR walkers visit this, so a
+   *  kernel reads exactly the variables its source expression did. */
+  tree: IRExpr;
+  ty: Type;
+  span: Span;
+}
+
+/** Full reduction of a kernel's elements to a scalar. */
+export interface KernelReduce {
+  op: "sum" | "prod" | "mean";
+}
+
+/** Element `i` of `ElemwiseKernel.inputs[input]` inside a kernel body. */
+export interface KernelElem {
+  kind: "KernelElem";
+  input: number;
+  ty: Type;
+  span: Span;
+}
+
 export type IRExpr =
   | NumLit
   | ImagLit
@@ -382,7 +421,9 @@ export type IRExpr =
   | IndexLoad
   | IndexSlice
   | EndRef
-  | MakeRange;
+  | MakeRange
+  | ElemwiseKernel
+  | KernelElem;
 
 // ── Statements ──────────────────────────────────────────────────────────
 
