@@ -120,7 +120,7 @@ interface CaptureFrame {
   /** The buffer the attempt's output goes to: its own (a buffering frame),
    *  an enclosing buffering frame's (a streaming frame nested in one), or
    *  null (a streaming frame whose output is emitted as it is produced). */
-  into: string[] | null;
+  into: BufferedOutput[] | null;
   /** Whether `into` is this frame's own buffer. */
   owns: boolean;
   /** Where a discard rewinds to: `into`'s length at the start, or, when
@@ -132,6 +132,9 @@ interface CaptureFrame {
   maxFigureHandle: number;
   tiledLayoutState: Runtime["tiledLayoutState"];
 }
+
+/** Buffered output text; standard-error text is wrapped. */
+type BufferedOutput = string | { stderr: string };
 
 /** Output emitted while streaming JIT attempts were active. When an
  *  attempt is discarded, `pos` rewinds to where it began, and output up to
@@ -569,22 +572,25 @@ export class Runtime {
 
   // ── Output ──────────────────────────────────────────────────────────
 
-  output(text: string): void {
+  /** Write program output; `stderr` marks standard-error text
+   *  (`fprintf(2, ...)`), which goes to `onErrorOutput` when the host
+   *  provides one and to `onOutput` otherwise. */
+  output(text: string, stderr = false): void {
     const depth = this.outputCaptureStack.length;
     const into = depth > 0 ? this.outputCaptureStack[depth - 1].into : null;
     if (into !== null) {
-      into.push(text);
+      into.push(stderr ? { stderr: text } : text);
       return;
     }
     const r = this.replay;
     if (r === null) {
-      this.emitOutput(text);
+      this.emitOutput(text, stderr);
       return;
     }
     if (r.pos === r.emitted.length) {
       r.emitted += text;
       r.pos = r.emitted.length;
-      this.emitOutput(text);
+      this.emitOutput(text, stderr);
       return;
     }
     // Replaying: skip what a discarded streaming attempt already emitted.
@@ -609,12 +615,14 @@ export class Runtime {
     const rest = text.slice(i);
     r.emitted = done + rest;
     r.pos = r.emitted.length;
-    this.emitOutput(rest);
+    this.emitOutput(rest, stderr);
   }
 
-  private emitOutput(text: string): void {
+  private emitOutput(text: string, stderr: boolean): void {
     this.outputLines.push(text);
-    this.options.onOutput?.(text);
+    const onErr = stderr ? this.options.onErrorOutput : undefined;
+    if (onErr) onErr(text);
+    else this.options.onOutput?.(text);
   }
 
   private endReplayIfDone(): void {
@@ -640,7 +648,7 @@ export class Runtime {
     const t = this.tiledLayoutState;
     const depth = this.outputCaptureStack.length;
     const outer = depth > 0 ? this.outputCaptureStack[depth - 1].into : null;
-    let into: string[] | null;
+    let into: BufferedOutput[] | null;
     let mark: number;
     if (!streaming) {
       into = [];
@@ -673,7 +681,9 @@ export class Runtime {
     const frame = this.outputCaptureStack.pop();
     if (frame === undefined) return;
     if (frame.owns) {
-      for (const text of frame.into!) this.output(text);
+      for (const t of frame.into!)
+        if (typeof t === "string") this.output(t);
+        else this.output(t.stderr, true);
     } else if (frame.into === null) {
       this.streamingDepth--;
       this.endReplayIfDone();
@@ -1330,9 +1340,18 @@ export class Runtime {
     indices: unknown[],
     rhs: unknown,
     skipSubsasgn = false,
-    storeBack = false
+    storeBack = false,
+    nullAssign?: boolean
   ): unknown {
-    return _indexStore(this, base, indices, rhs, skipSubsasgn, storeBack);
+    return _indexStore(
+      this,
+      base,
+      indices,
+      rhs,
+      skipSubsasgn,
+      storeBack,
+      nullAssign
+    );
   }
 
   /** Built-in index store for V(i).field = rhs patterns.

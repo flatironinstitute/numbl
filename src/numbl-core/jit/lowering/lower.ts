@@ -31,6 +31,7 @@ import type { Expr, LValue, Stmt, Span } from "../numbl/index.js";
 import {
   BinaryOperation,
   UnaryOperation,
+  isNullAssignRhs,
   offsetToLineCol,
   tryExtractDottedName,
   unwindMemberLvalue,
@@ -867,7 +868,7 @@ export class Lowerer {
       // against the 0-element [] either reads NaN (JS) or aborts on a size
       // mismatch (C). Decline to the interpreter, which implements MATLAB's
       // full deletion semantics.
-      if (s.expr.type === "Tensor" && s.expr.rows.length === 0) {
+      if (isNullAssignRhs(s.expr)) {
         throw new UnsupportedConstruct(
           "indexed deletion `x(idx) = []` is not JIT-compiled; resizing the " +
             "base requires the interpreter",

@@ -392,6 +392,9 @@ async function executeWithOptions(
         onOutput: stream
           ? text => stream({ type: "output", text })
           : text => process.stdout.write(text),
+        onErrorOutput: stream
+          ? text => stream({ type: "output", text, stream: "stderr" })
+          : text => process.stderr.write(text),
         onDrawnow: stream
           ? plotInstructions => stream({ type: "drawnow", plotInstructions })
           : plot?.onDrawnow,

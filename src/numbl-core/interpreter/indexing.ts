@@ -92,10 +92,13 @@ export function evalIndicesWithEnd(
 
 // ── Assignment targets ───────────────────────────────────────────────────
 
+/** Assign `value` to `lv`. `nullAssign` marks a paren store whose RHS is
+ *  literally `[]` or `''`, which deletes. */
 export function assignLValue(
   interp: Interpreter,
   lv: LValue,
-  value: RuntimeValue
+  value: RuntimeValue,
+  nullAssign = false
 ): void {
   const env = interp.frame.env;
   switch (lv.type) {
@@ -122,7 +125,9 @@ export function assignLValue(
         base,
         indices,
         value,
-        bypassesOverload(interp, base)
+        bypassesOverload(interp, base),
+        false,
+        nullAssign
       );
       writeLValueBase(interp, lv.base, ensureRuntimeValue(result));
       break;

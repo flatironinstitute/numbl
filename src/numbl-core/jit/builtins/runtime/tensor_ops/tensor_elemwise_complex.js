@@ -90,7 +90,8 @@ function cBcastKernel(a, b, fn) {
 // (and the interpreter's `mixedRealComplex`): an operand with no imag
 // lane, or an all-zero one, acts as real, and a real operand scales each
 // part of a complex one without promotion, so a result part stays 0
-// where the complex operand's part is 0 (no NaN*0 = NaN).
+// where the complex operand's part is 0 (no NaN*0 = NaN), unless the
+// element's imaginary part is 0: then it is scaled as a real number.
 function cActsReal(t) {
   if (t.imag == null) return true;
   for (let i = 0; i < t.imag.length; i++) if (t.imag[i] !== 0) return false;
@@ -100,25 +101,22 @@ function cActsReal(t) {
 function cTimesMixed(a, ar, b, br) {
   if (ar && br) return { re: a.re * b.re, im: 0 };
   if (br)
-    return {
-      re: a.re === 0 ? 0 : a.re * b.re,
-      im: a.im === 0 ? 0 : a.im * b.re,
-    };
+    return a.im === 0
+      ? { re: a.re * b.re, im: 0 }
+      : { re: a.re === 0 ? 0 : a.re * b.re, im: a.im * b.re };
   if (ar)
-    return {
-      re: b.re === 0 ? 0 : b.re * a.re,
-      im: b.im === 0 ? 0 : b.im * a.re,
-    };
+    return b.im === 0
+      ? { re: b.re * a.re, im: 0 }
+      : { re: b.re === 0 ? 0 : b.re * a.re, im: b.im * a.re };
   return jit_cmul(a, b);
 }
 
 function cRdivideMixed(a, ar, b, br) {
   if (ar && br) return { re: a.re / b.re, im: 0 };
   if (br)
-    return {
-      re: a.re === 0 ? 0 : a.re / b.re,
-      im: a.im === 0 ? 0 : a.im / b.re,
-    };
+    return a.im === 0
+      ? { re: a.re / b.re, im: 0 }
+      : { re: a.re === 0 ? 0 : a.re / b.re, im: a.im / b.re };
   if (ar && b.im === 0) return { re: a.re / b.re, im: 0 };
   return jit_cdiv(ar ? { re: a.re, im: 0 } : a, b);
 }

@@ -23,6 +23,7 @@
  *   datetime - duration -> datetime
  *   duration + duration -> duration
  *   duration - duration -> duration
+ *   datetime/duration +/- number -> the number counts as days
  *
  * `seconds(d)` returns the numeric seconds of a duration, or wraps a
  * number as a duration.
@@ -378,6 +379,15 @@ for (const unit of DURATION_UNITS) {
 
 // ── Arithmetic dispatch for datetime / duration ────────────────────────────
 
+/** A real double or logical scalar operand of datetime/duration
+ *  arithmetic (a number of days), else undefined. */
+function dayCount(v: RuntimeValue): number | undefined {
+  if (isRuntimeNumber(v)) return v;
+  if (isRuntimeLogical(v)) return v ? 1 : 0;
+  if (isRuntimeTensor(v) && v.data.length === 1 && !v.imag) return v.data[0];
+  return undefined;
+}
+
 /**
  * A binary operator method ("plus", "minus", "lt", ...) of datetime and
  * duration: at least one operand is a datetime or duration.
@@ -391,8 +401,21 @@ function datetimeDurationBinop(
   const bDt = isDatetime(b);
   const aDur = isDuration(a);
   const bDur = isDuration(b);
+  const aDays = aDt || aDur ? undefined : dayCount(a);
+  const bDays = bDt || bDur ? undefined : dayCount(b);
 
   if (opName === "minus") {
+    if (aDt && bDays !== undefined)
+      return datetimeFromUtcMs(datetimeToUtcMs(a) - bDays * 86400000);
+    if (aDur && bDays !== undefined)
+      return makeDuration(durationSeconds(a) - bDays * 86400);
+    if (aDays !== undefined && bDur)
+      return makeDuration(aDays * 86400 - durationSeconds(b));
+    if (aDays !== undefined && bDt)
+      throw builtinError(
+        "MATLAB:datetime:SubtractionNotDefined",
+        "Cannot subtract a datetime array from a double array."
+      );
     if (aDt && bDt) {
       const secs = (datetimeToUtcMs(a) - datetimeToUtcMs(b)) / 1000;
       return makeDuration(secs);
@@ -406,6 +429,14 @@ function datetimeDurationBinop(
     }
   }
   if (opName === "plus") {
+    if (aDt && bDays !== undefined)
+      return datetimeFromUtcMs(datetimeToUtcMs(a) + bDays * 86400000);
+    if (aDays !== undefined && bDt)
+      return datetimeFromUtcMs(datetimeToUtcMs(b) + aDays * 86400000);
+    if (aDur && bDays !== undefined)
+      return makeDuration(durationSeconds(a) + bDays * 86400);
+    if (aDays !== undefined && bDur)
+      return makeDuration(aDays * 86400 + durationSeconds(b));
     if (aDt && bDur) {
       const ms = datetimeToUtcMs(a) + durationSeconds(b) * 1000;
       return datetimeFromUtcMs(ms);

@@ -8,16 +8,45 @@
 
 #include "numbl_ops.h"
 
-/* Helper: produce JS-compatible Inf/NaN for division by zero, real part. */
-static inline double cdivz_re(double r, double i) {
-  if (r == 0.0 && i == 0.0) return 0.0 / 0.0;            /* NaN */
-  return (r > 0 ? 1.0 : r < 0 ? -1.0 : 0.0) / 0.0;       /* ±Inf */
+#include <math.h>
+
+/* Complex division a / b, identical to src/numbl-core/ops/complexDivide.ts
+ * (and the JIT's jit_cdiv): Smith's algorithm; a zero divisor gives NaN for
+ * 0/0 and a signed Inf per nonzero numerator part; an infinite divisor with
+ * a finite numerator gives 0 where Smith's ratio is Inf/Inf. */
+static inline double cdiv_signed_inf(double x) {
+  return x > 0 ? INFINITY : (x < 0 ? -INFINITY : (x == 0 ? 0.0 : NAN));
 }
 
-/* Imaginary-part variant of the above. */
-static inline double cdivz_im(double r, double i) {
-  if (r == 0.0 && i == 0.0) return 0.0;
-  return (i > 0 ? 1.0 : i < 0 ? -1.0 : 0.0) / 0.0;
+static inline void numbl_cdiv(double ar, double ai, double br, double bi,
+                              double* out_re, double* out_im) {
+  double re, im;
+  if (br == 0.0 && bi == 0.0) {
+    if (ar == 0.0 && ai == 0.0) {
+      re = NAN;
+      im = 0.0;
+    } else {
+      re = cdiv_signed_inf(ar);
+      im = cdiv_signed_inf(ai);
+    }
+  } else if (fabs(br) >= fabs(bi)) {
+    double r = bi / br;
+    double d = br + bi * r;
+    re = (ar + ai * r) / d;
+    im = (ai - ar * r) / d;
+  } else {
+    double r = br / bi;
+    double d = bi + br * r;
+    re = (ar * r + ai) / d;
+    im = (ai * r - ar) / d;
+  }
+  if (isnan(re) && isnan(im) && isinf(br) && isinf(bi) && isfinite(ar) &&
+      isfinite(ai)) {
+    re = 0.0;
+    im = 0.0;
+  }
+  *out_re = re;
+  *out_im = im;
 }
 
 int numbl_complex_binary_elemwise(int op, size_t n,
@@ -47,70 +76,12 @@ int numbl_complex_binary_elemwise(int op, size_t n,
         out_im[i] = ar * bi + ai * br;
       }
       return NUMBL_OK;
-    case NUMBL_COMPLEX_BIN_DIV: {
-      /* Hoist the a_im / b_im presence tests out of the loop so the
-       * vectorizer sees a straight-line body. The main SIMD pass uses
-       * the naive formula (fast but wrong when br=bi=0, since 0/0
-       * produces NaN); a single sequential fix-up pass then restores
-       * the C99 "complex divide by zero" semantics on any positions
-       * where the denominator was zero. Fix-up is only entered when
-       * the main pass actually produced such a position.
-       */
-      size_t zero_count = 0;
-      if (a_im && b_im) {
-        #pragma omp simd reduction(+:zero_count)
-        for (size_t i = 0; i < n; i++) {
-          double ar = a_re[i], ai = a_im[i];
-          double br = b_re[i], bi = b_im[i];
-          double denom = br * br + bi * bi;
-          double inv = 1.0 / denom;
-          out_re[i] = (ar * br + ai * bi) * inv;
-          out_im[i] = (ai * br - ar * bi) * inv;
-          zero_count += (denom == 0.0);
-        }
-      } else if (a_im) {
-        #pragma omp simd reduction(+:zero_count)
-        for (size_t i = 0; i < n; i++) {
-          double ar = a_re[i], ai = a_im[i];
-          double br = b_re[i];
-          double inv = 1.0 / br;
-          out_re[i] = ar * inv;
-          out_im[i] = ai * inv;
-          zero_count += (br == 0.0);
-        }
-      } else if (b_im) {
-        #pragma omp simd reduction(+:zero_count)
-        for (size_t i = 0; i < n; i++) {
-          double ar = a_re[i];
-          double br = b_re[i], bi = b_im[i];
-          double denom = br * br + bi * bi;
-          double inv = 1.0 / denom;
-          out_re[i] = (ar * br) * inv;
-          out_im[i] = (-ar * bi) * inv;
-          zero_count += (denom == 0.0);
-        }
-      } else {
-        #pragma omp simd reduction(+:zero_count)
-        for (size_t i = 0; i < n; i++) {
-          double ar = a_re[i];
-          double br = b_re[i];
-          out_re[i] = ar / br;
-          out_im[i] = 0.0;
-          zero_count += (br == 0.0);
-        }
-      }
-      if (zero_count) {
-        for (size_t i = 0; i < n; i++) {
-          double br = b_re[i], bi = b_im ? b_im[i] : 0.0;
-          if (br == 0.0 && bi == 0.0) {
-            double ar = a_re[i], ai = a_im ? a_im[i] : 0.0;
-            out_re[i] = cdivz_re(ar, ai);
-            out_im[i] = cdivz_im(ar, ai);
-          }
-        }
+    case NUMBL_COMPLEX_BIN_DIV:
+      for (size_t i = 0; i < n; i++) {
+        numbl_cdiv(a_re[i], a_im ? a_im[i] : 0.0, b_re[i],
+                   b_im ? b_im[i] : 0.0, &out_re[i], &out_im[i]);
       }
       return NUMBL_OK;
-    }
     default:
       return NUMBL_ERR_BAD_OP;
   }
@@ -153,37 +124,13 @@ int numbl_complex_scalar_binary_elemwise(int op, size_t n,
       }
       return NUMBL_OK;
     case NUMBL_COMPLEX_BIN_DIV:
-      if (scalar_on_left) {
-        for (size_t i = 0; i < n; i++) {
-          double ar = arr_re[i];
-          double ai = arr_im ? arr_im[i] : 0.0;
-          double denom = ar * ar + ai * ai;
-          if (denom == 0.0) {
-            out_re[i] = cdivz_re(s_re, s_im);
-            out_im[i] = cdivz_im(s_re, s_im);
-          } else {
-            out_re[i] = (s_re * ar + s_im * ai) / denom;
-            out_im[i] = (s_im * ar - s_re * ai) / denom;
-          }
-        }
-      } else {
-        double denom = s_re * s_re + s_im * s_im;
-        if (denom == 0.0) {
-          for (size_t i = 0; i < n; i++) {
-            double ar = arr_re[i];
-            double ai = arr_im ? arr_im[i] : 0.0;
-            out_re[i] = cdivz_re(ar, ai);
-            out_im[i] = cdivz_im(ar, ai);
-          }
-        } else {
-          double inv_denom = 1.0 / denom;
-          for (size_t i = 0; i < n; i++) {
-            double ar = arr_re[i];
-            double ai = arr_im ? arr_im[i] : 0.0;
-            out_re[i] = (ar * s_re + ai * s_im) * inv_denom;
-            out_im[i] = (ai * s_re - ar * s_im) * inv_denom;
-          }
-        }
+      for (size_t i = 0; i < n; i++) {
+        double ar = arr_re[i];
+        double ai = arr_im ? arr_im[i] : 0.0;
+        if (scalar_on_left)
+          numbl_cdiv(s_re, s_im, ar, ai, &out_re[i], &out_im[i]);
+        else
+          numbl_cdiv(ar, ai, s_re, s_im, &out_re[i], &out_im[i]);
       }
       return NUMBL_OK;
     default:
