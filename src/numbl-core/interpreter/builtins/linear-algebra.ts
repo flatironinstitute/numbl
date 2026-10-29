@@ -134,6 +134,7 @@ const unknownNormError = errorFn(
 
 builtin({
   name: "norm",
+  singleOutputs: true,
   accepts: { sparse: true },
   nargin: [1, 2],
   // normImplTensor may allocate scratch (e.g. the SVD for the 2-norm); the
@@ -366,6 +367,7 @@ const vecnormTypeError = errorFn(
 
 builtin({
   name: "vecnorm",
+  singleOutputs: true,
   accepts: { sparse: true },
   nargin: [1, 3],
   apply: args => {
@@ -489,6 +491,7 @@ function vecnormAlongDim(
 
 builtin({
   name: "dot",
+  singleOutputs: true,
   accepts: { sparse: true },
   nargin: [2, 3],
   mfile: true,
@@ -633,6 +636,7 @@ function dotDefault(A: RuntimeTensor, B: RuntimeTensor): RuntimeValue {
 
 builtin({
   name: "det",
+  singleOutputs: true,
   nargin: 1,
   apply: args => {
     const v = boolToNumber(args[0]);
@@ -753,6 +757,7 @@ function detComplexJS(
 
 builtin({
   name: "trace",
+  singleOutputs: true,
   nargin: 1,
   mfile: true,
   apply: args => {
@@ -787,6 +792,7 @@ builtin({
 
 builtin({
   name: "cross",
+  singleOutputs: true,
   accepts: { sparse: true },
   nargin: [2, 3],
   mfile: true,
@@ -885,6 +891,7 @@ const invTypeError = errorFn(
 
 builtin({
   name: "inv",
+  singleOutputs: true,
   accepts: { sparse: true },
   nargin: 1,
   apply: args => invValue(args[0]),
@@ -932,6 +939,7 @@ function invValue(v: RuntimeValue): RuntimeValue {
 
 builtin({
   name: "expm",
+  singleOutputs: true,
   nargin: 1,
   mfile: true,
   apply: args => expmApply(args[0]),
@@ -1031,6 +1039,7 @@ function identityTensor(n: number): RuntimeValue {
 
 builtin({
   name: "svd",
+  singleOutputs: true,
   nargin: [1, 3],
   nargout: 3,
   accepts: { sparse: SVD_SPARSE },
@@ -1168,6 +1177,7 @@ function nullApply(args: RuntimeValue[]): RuntimeValue {
 
 builtin({
   name: "null",
+  singleOutputs: true,
   nargin: [1, 2],
   mfile: true,
   accepts: { sparse: SVD_SPARSE },
@@ -1315,6 +1325,7 @@ builtin({
 
 builtin({
   name: "qr",
+  singleOutputs: true,
   accepts: { sparse: true },
   nargin: [1, 3],
   nargout: 3,
@@ -1629,6 +1640,7 @@ const invalidPermFlagError = errorFn(
 
 builtin({
   name: "lu",
+  singleOutputs: true,
   accepts: { sparse: true },
   nargin: [1, 3],
   nargout: 5,
@@ -1850,6 +1862,7 @@ const eigTypeError = errorFn(
 
 builtin({
   name: "eig",
+  singleOutputs: true,
   accepts: { sparse: true },
   nargin: [1, 4],
   nargout: 3,
@@ -2413,6 +2426,7 @@ const posdefError = errorFn(
 
 builtin({
   name: "chol",
+  singleOutputs: [1],
   accepts: { sparse: true },
   nargin: [1, 3],
   nargout: 3,
@@ -2616,6 +2630,7 @@ function cholApply(
 
 builtin({
   name: "linsolve",
+  singleOutputs: [1, 2],
   nargin: [2, 3],
   nargout: 2,
   accepts: {
@@ -2660,6 +2675,7 @@ builtin({
 
 builtin({
   name: "cond",
+  singleOutputs: true,
   accepts: { sparse: true },
   nargin: [1, 2],
   mfile: true,
@@ -2718,6 +2734,7 @@ function condNorm(A: RuntimeTensor, p: number | "fro"): RuntimeValue {
 
 builtin({
   name: "rcond",
+  singleOutputs: true,
   nargin: 1,
   // inv() allocates the full inverse; wrap so that scratch releases on
   // return (the result is a scalar, so it survives).
@@ -2810,6 +2827,7 @@ function epsOf(x: number): number {
 
 builtin({
   name: "pinv",
+  singleOutputs: true,
   nargin: [1, 2],
   mfile: true,
   accepts: { sparse: SVD_SPARSE },
@@ -2895,6 +2913,7 @@ builtin({
 
 builtin({
   name: "kron",
+  singleOutputs: true,
   accepts: { sparse: true },
   nargin: 2,
   mfile: true,
@@ -2940,6 +2959,7 @@ builtin({
 
 builtin({
   name: "blkdiag",
+  singleOutputs: true,
   accepts: { sparse: true },
   mfile: true,
   apply: args => {
@@ -2985,6 +3005,7 @@ builtin({
 
 builtin({
   name: "pagemtimes",
+  singleOutputs: true,
   nargin: [2, 4],
   accepts: {
     sparse: {
@@ -3198,6 +3219,7 @@ builtin({
 
 builtin({
   name: "qz",
+  singleOutputs: true,
   nargin: [2, 3],
   nargout: 6,
   accepts: {

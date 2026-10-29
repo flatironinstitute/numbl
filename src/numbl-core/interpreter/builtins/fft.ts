@@ -488,6 +488,7 @@ function applyFFTShift(args: RuntimeValue[], inverse: boolean): RuntimeValue {
 
 builtin({
   name: "fft",
+  singleOutputs: true,
   nargin: [1, 3],
   // MATLAB rejects only sparse data (fftDataArg); a sparse n is a number.
   accepts: { sparse: true },
@@ -496,6 +497,7 @@ builtin({
 
 builtin({
   name: "ifft",
+  singleOutputs: true,
   // ifft(Y, n, dim, symflag); only 'nonsymmetric' (the default) is supported
   nargin: [1, 4],
   accepts: { sparse: true },

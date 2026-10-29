@@ -13,7 +13,7 @@ import {
   isRuntimeTensor,
   withElementClass,
 } from "../../runtime/types.js";
-import { RTV, RuntimeError } from "../../runtime/index.js";
+import { RTV, RuntimeError, toString } from "../../runtime/index.js";
 import { sparseToDense } from "../../helpers/sparse-arithmetic.js";
 import {
   firstReduceDim,
@@ -32,7 +32,7 @@ import { cumOp, diffOnce } from "../../helpers/reduction/cumulative.js";
 import { mLogical } from "../../helpers/arithmetic.js";
 import { OpReduce, OpCmp } from "../../ops/index.js";
 import { allocFloat64Array } from "../../runtime/alloc.js";
-import { builtin } from "./builtin.js";
+import { builtin, type SingleOutputs } from "./builtin.js";
 import {
   builtinError,
   mustBeRealError,
@@ -154,8 +154,21 @@ const sumKernel = accumKernel(
 );
 const sumOmitNanKernel = accumKernelOmitNaN((acc, val) => acc + val, 0);
 
+/** The outputs of sum, prod and mean that take a single argument's
+ *  class: none for the 'double' output type. */
+function outTypeOutputs(args: RuntimeValue[]): SingleOutputs {
+  for (const a of args)
+    if (
+      (isRuntimeChar(a) || isRuntimeString(a)) &&
+      toString(a).toLowerCase() === "double"
+    )
+      return [];
+  return true;
+}
+
 builtin({
   name: "sum",
+  singleOutputs: outTypeOutputs,
   accepts: { sparse: true },
   // sum(A, dim|vecdim|'all', outtype, nanflag)
   nargin: [1, 4],
@@ -191,6 +204,7 @@ const prodOmitNanKernel = accumKernelOmitNaN((acc, val) => acc * val, 1);
 
 builtin({
   name: "prod",
+  singleOutputs: outTypeOutputs,
   accepts: { sparse: true },
   nargin: [1, 4],
   apply: args => {
@@ -235,6 +249,7 @@ const meanOmitNanKernel = accumKernelOmitNaN(
 
 builtin({
   name: "mean",
+  singleOutputs: outTypeOutputs,
   accepts: { sparse: true },
   nargin: [1, 4],
   mfile: true,
@@ -298,6 +313,7 @@ function stdVarBuiltin(name: "std" | "var"): void {
   const transform = name === "std" ? Math.sqrt : (x: number) => x;
   builtin({
     name,
+    singleOutputs: true,
     // std(A, w, dim|vecdim|'all', nanflag); [S, M] = std(...)
     nargin: [1, 4],
     nargout: 2,
@@ -395,6 +411,7 @@ function sliceReductionBuiltin(
   const omitNanKernel = sliceKernelOmitNaN(fn);
   builtin({
     name,
+    singleOutputs: [1],
     nargin: [1, 4],
     nargout,
     mfile: true,
@@ -493,6 +510,7 @@ function cumBuiltin(
 ): void {
   builtin({
     name,
+    singleOutputs: [1],
     nargin: [1, 4],
     apply: args => {
       if (isRuntimeChar(args[0]))
@@ -575,6 +593,7 @@ cumExtreme("cummin", Math.min, (a, b) => a < b);
 
 builtin({
   name: "diff",
+  singleOutputs: true,
   nargin: [1, 3],
   apply: (args): RuntimeValue => {
     const v = dense(numericArg(args[0]));

@@ -59,6 +59,7 @@ function floatUnary(
   const f = unaryElemwise(fns, name);
   builtin({
     name,
+    singleOutputs: true,
     help: opts.help,
     nargin: 1,
     mfile: opts.mfile,
@@ -95,6 +96,7 @@ function realOnlyUnary(
   );
   builtin({
     name,
+    singleOutputs: true,
     nargin: 1,
     accepts: { sparse: NOT_FULL_REAL(name) },
     apply: args => f([realFloatArg(args[0], err)]),
@@ -110,6 +112,7 @@ function realFloatBinary(
 ): void {
   builtin({
     name,
+    singleOutputs: true,
     nargin: 2,
     mfile,
     apply: args =>
@@ -406,6 +409,7 @@ const log2Elemwise = unaryElemwise(
 // exponent (x = f .* 2.^e).
 builtin({
   name: "log2",
+  singleOutputs: true,
   nargin: 1,
   nargout: 2,
   apply: (args, nargout) => {
@@ -450,6 +454,7 @@ floatUnary("log10", {
 
 builtin({
   name: "abs",
+  singleOutputs: true,
   nargin: 1,
   apply: unaryRealResult(Math.abs, Math.hypot, "abs", OpUnary.ABS),
 });
@@ -497,6 +502,7 @@ const realsqrtElemwise = unaryElemwise(
 
 builtin({
   name: "realsqrt",
+  singleOutputs: true,
   nargin: 1,
   mfile: true,
   apply: args => {
@@ -521,6 +527,7 @@ builtin({
 
 builtin({
   name: "sign",
+  singleOutputs: true,
   nargin: 1,
   apply: unaryElemwise(
     {
@@ -546,6 +553,7 @@ function registerRounding(
 ): void {
   builtin({
     name,
+    singleOutputs: true,
     nargin: 1,
     apply: unaryElemwise(
       { realFn: fn, complexFn: (re, im) => ({ re: fn(re), im: fn(im) }), op },
@@ -605,6 +613,7 @@ function roundDigitsArg(v: RuntimeValue): number {
 
 builtin({
   name: "round",
+  singleOutputs: true,
   // round(X), round(X, N), round(X, N, type), and the TieBreaker
   // name-value pair (not supported).
   nargin: [1, 5],
@@ -688,6 +697,7 @@ const absOf = unaryRealResult(Math.abs, Math.hypot, "hypot", OpUnary.ABS);
 
 builtin({
   name: "hypot",
+  singleOutputs: true,
   nargin: 2,
   apply: args =>
     applyBinaryElemwise(
@@ -849,6 +859,7 @@ const pow2Elemwise = unaryElemwise(
 
 builtin({
   name: "pow2",
+  singleOutputs: true,
   nargin: [1, 2],
   apply: args => {
     if (args.length === 1) return pow2Elemwise([floatArg(args[0])]);
@@ -873,6 +884,7 @@ function nextpow2Scalar(x: number): number {
 
 builtin({
   name: "nextpow2",
+  singleOutputs: true,
   nargin: 1,
   mfile: true,
   apply: unaryRealResult(
@@ -886,6 +898,7 @@ builtin({
 
 builtin({
   name: "nthroot",
+  singleOutputs: true,
   nargin: 2,
   mfile: true,
   apply: args => {
@@ -992,6 +1005,7 @@ builtin({
 
 builtin({
   name: "beta",
+  singleOutputs: true,
   nargin: 2,
   mfile: true,
   apply: args => {

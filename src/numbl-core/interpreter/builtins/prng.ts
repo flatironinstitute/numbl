@@ -26,15 +26,15 @@ import {
 import { allocFloat64Array } from "../../runtime/alloc.js";
 import { builtin } from "./builtin.js";
 import { builtinError, realNumericArg, realScalarArg } from "./args.js";
-import { stripClassNameArgs } from "./array-construction.js";
+import { inRequestedClass, stripClassNameArgs } from "./array-construction.js";
 
 const isText = (v: RuntimeValue) => isRuntimeChar(v) || isRuntimeString(v);
 
 // ── Size arguments ──────────────────────────────────────────────────────
 
 /** Check a trailing class-name argument (rand(n, 'single'), randi(10,
- *  'int32')): numbl only has double, so the class is accepted and
- *  ignored. */
+ *  'int32')). Single gives a single result (`inRequestedClass`); numbl has
+ *  no integer classes, so an integer class is accepted and gives double. */
 function checkClassName(name: string, args: RuntimeValue[]): void {
   const last = args[args.length - 1];
   if (args.length === 0 || !isText(last)) return;
@@ -163,10 +163,10 @@ function registerRandBuiltin(
         return RTV.num(0);
       }
       // rand(), rand(n), rand(m,n), rand([m,n]), with an optional trailing
-      // class name (rand(n,'single')) that numbl ignores.
+      // class name (rand(n,'single')) or 'like' pair.
       checkClassName(name, rawArgs);
       const args = stripClassNameArgs(rawArgs);
-      if (args.length === 0) return RTV.num(gen());
+      if (args.length === 0) return inRequestedClass(rawArgs, gen());
       const shape = sizeArgs(name, args);
       const n = numel(shape);
       const data = allocFloat64Array(n);
@@ -175,7 +175,7 @@ function registerRandBuiltin(
       } else {
         for (let i = 0; i < n; i++) data[i] = gen();
       }
-      return RTV.tensor(data, shape);
+      return inRequestedClass(rawArgs, RTV.tensor(data, shape));
     },
   });
 }
@@ -220,13 +220,13 @@ builtin({
     checkClassName("randi", rest);
     const shapeArgs = stripClassNameArgs(rest);
     if (shapeArgs.length === 0)
-      return RTV.num(Math.floor(rngRandom() * range) + imin);
+      return inRequestedClass(rest, Math.floor(rngRandom() * range) + imin);
     const shape = sizeArgs("randi", shapeArgs);
     const n = numel(shape);
     const data = allocFloat64Array(n);
     fillRand(data);
     for (let i = 0; i < n; i++) data[i] = Math.floor(data[i] * range) + imin;
-    return RTV.tensor(data, shape);
+    return inRequestedClass(rest, RTV.tensor(data, shape));
   },
 });
 

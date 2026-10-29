@@ -291,6 +291,7 @@ function setInputClassError(
 
 builtin({
   name: "find",
+  singleOutputs: [3],
   accepts: { sparse: true },
   nargin: [1, 3],
   nargout: 3,
@@ -884,6 +885,7 @@ function defineSetOp(
 ): void {
   builtin({
     name: kind,
+    singleOutputs: [1],
     nargin: [2, 4],
     nargout: kind === "setdiff" ? 2 : 3,
     mfile: true,
@@ -1227,6 +1229,7 @@ builtin({
 
 builtin({
   name: "nonzeros",
+  singleOutputs: true,
   accepts: { sparse: true },
   nargin: 1,
   apply: args => {
@@ -1318,6 +1321,7 @@ function parseSortrowsArgs(
 
 builtin({
   name: "sortrows",
+  singleOutputs: [1],
   accepts: { sparse: true },
   nargin: [1, Infinity],
   nargout: 2,
@@ -1375,6 +1379,7 @@ builtin({
 
 builtin({
   name: "unique",
+  singleOutputs: [1],
   accepts: { sparse: true },
   nargin: [1, 4],
   nargout: 3,
@@ -1660,6 +1665,7 @@ function uniqueElements(
 
 builtin({
   name: "uniquetol",
+  singleOutputs: [1],
   accepts: { sparse: true },
   nargin: [1, Infinity],
   nargout: 3,

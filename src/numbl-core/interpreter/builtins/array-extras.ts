@@ -56,6 +56,7 @@ function colonOperand(v: RuntimeValue): number {
 
 builtin({
   name: "colon",
+  singleOutputs: true,
   nargin: [2, 3],
   apply: args => {
     const ops = args.map(colonOperand);
@@ -159,6 +160,7 @@ function triPart(
 
 builtin({
   name: "triu",
+  singleOutputs: true,
   accepts: { sparse: true },
   nargin: [1, 2],
   apply: args => triPart(args, (i, j, k) => j - i >= k, "triu"),
@@ -166,6 +168,7 @@ builtin({
 
 builtin({
   name: "tril",
+  singleOutputs: true,
   accepts: { sparse: true },
   nargin: [1, 2],
   apply: args => triPart(args, (i, j, k) => i - j >= -k, "tril"),
@@ -175,6 +178,7 @@ builtin({
 
 builtin({
   name: "toeplitz",
+  singleOutputs: true,
   accepts: { sparse: true },
   nargin: [1, 2],
   mfile: true,
@@ -679,6 +683,7 @@ function coordTransform(
 ): void {
   builtin({
     name,
+    singleOutputs: true,
     nargin: passZ ? [nIn, nIn + 1] : nIn,
     nargout: 3,
     mfile: true,

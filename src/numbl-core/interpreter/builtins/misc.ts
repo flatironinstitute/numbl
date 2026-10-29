@@ -420,6 +420,7 @@ for (const [binop, op] of opMap) {
   const name = BINARY_OPERATOR_METHODS[binop]!;
   builtin({
     name,
+    singleOutputs: true,
     nargin: 2,
     // mpower is an M-file in MATLAB.
     mfile: name === "mpower",
@@ -437,6 +438,7 @@ for (const [binop, op] of opMap) {
 
 builtin({
   name: "uminus",
+  singleOutputs: true,
   nargin: 1,
   accepts: { sparse: true },
   apply: args => mNeg(args[0]),

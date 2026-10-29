@@ -34,6 +34,7 @@ import {
 
 builtin({
   name: "eigs",
+  singleOutputs: [1, 2],
   nargin: [1, Infinity],
   nargout: 3,
   mfile: true,
