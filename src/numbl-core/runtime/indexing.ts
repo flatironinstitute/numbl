@@ -1415,7 +1415,11 @@ export function indexIntoRTValue(
     case "gpu_array":
       return (
         indexKernel(base, indices) ??
-        outputToGpu(indexIntoRTValue(gatherValue(base), indices), base.device)
+        outputToGpu(
+          indexIntoRTValue(gatherValue(base), indices),
+          base.device,
+          base.isComplex
+        )
       );
     case "function":
     case "dictionary":
@@ -1467,7 +1471,10 @@ export function storeIntoRTValueIndex(
       storeBack,
       nullAssign
     );
-    return outputToGpu(r, device);
+    const complex =
+      (isGpuArray(base) && base.isComplex) ||
+      (isGpuArray(rhs) && rhs.isComplex);
+    return outputToGpu(r, device, complex);
   }
   const del = nullAssign ?? isDeletionRhs(rhs);
   if (isRuntimeSparseMatrix(base)) {

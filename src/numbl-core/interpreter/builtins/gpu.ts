@@ -22,16 +22,20 @@ import {
   currentGpuDevice,
   doubleNotSupportedError,
   existsOnDevice,
+  gatherTensor,
   gatherValue,
   isGpuArray,
+  outputToGpu,
   toGpuArray,
 } from "../../runtime/gpu/gpuArray.js";
 import {
   DOMAIN_OPS,
+  complexElementwiseKernel,
   complexResultError,
   concatKernel,
   dotKernel,
   elementwiseKernel,
+  fftKernel,
   normKernel,
   repmatKernel,
   scanKernel,
@@ -326,8 +330,80 @@ function kernelMethod(
     nargout: [0, Infinity],
     accepts: GPU,
     apply: (args, nargout) =>
-      kernel(args, nargout) ?? getIBuiltin(name)!.call(args, nargout),
+      kernel(args, nargout) ?? onHost(name, args, nargout),
   });
+}
+
+/** Operations whose result stays complex on the GPU when an input is
+ *  complex, though its imaginary parts are zero (the host drops them). */
+const KEEP_COMPLEX = new Set([
+  "plus",
+  "minus",
+  "times",
+  "rdivide",
+  "ldivide",
+  "uminus",
+  "mtimes",
+  "transpose",
+  "ctranspose",
+  "conj",
+  "exp",
+  "sqrt",
+  "log",
+  "log2",
+  "log10",
+  "log1p",
+  "power",
+  "sin",
+  "cos",
+  "tan",
+  "sinh",
+  "cosh",
+  "tanh",
+  "asin",
+  "acos",
+  "atanh",
+  "acosh",
+  "sum",
+  "prod",
+  "mean",
+  "cumsum",
+  "cumprod",
+  "dot",
+  "repmat",
+  "horzcat",
+  "vertcat",
+  "cat",
+]);
+
+/** Run builtin `name` on the host (its gpuArray arguments gathered, its
+ *  outputs uploaded), keeping a complex result complex as the GPU does:
+ *  `fft` and `ifft` (unless 'symmetric') always return complex data. */
+function onHost(
+  name: string,
+  args: RuntimeValue[],
+  nargout: number
+): RuntimeValue | RuntimeValue[] {
+  const r = getIBuiltin(name)!.call(args, nargout) as
+    | RuntimeValue
+    | RuntimeValue[];
+  const last = args[args.length - 1];
+  const symmetric =
+    (isRuntimeChar(last) || isRuntimeString(last)) &&
+    toString(last).toLowerCase() === "symmetric";
+  const keep =
+    name === "fft" ||
+    name === "complex" ||
+    (name === "ifft" && !symmetric) ||
+    (KEEP_COMPLEX.has(name) && args.some(isComplexValue));
+  if (!keep) return r;
+  return Array.isArray(r) ? [stayComplex(r[0]), ...r.slice(1)] : stayComplex(r);
+}
+
+/** A real gpuArray result as a complex one with zero imaginary parts. */
+function stayComplex(v: RuntimeValue): RuntimeValue {
+  if (!isGpuArray(v) || v.isComplex || v.cls === "logical") return v;
+  return outputToGpu(gatherTensor(v), v.device, true);
 }
 
 for (const op of [
@@ -382,7 +458,7 @@ for (const op of DOMAIN_OPS)
     apply: (args, nargout) => {
       const k = nargout <= 1 ? elementwiseKernel(op, args) : null;
       if (k) return k;
-      const r = getIBuiltin(op)!.call(args, nargout) as RuntimeValue;
+      const r = onHost(op, args, nargout) as RuntimeValue;
       if (isGpuArray(r) && r.isComplex && !args.some(isComplexValue))
         throw complexResultError(op);
       return r;
@@ -426,4 +502,24 @@ kernelMethod("cat", args =>
 
 kernelMethod("mtimes", args => mtimesKernel(args));
 kernelMethod("transpose", args => transposeKernel(args));
-kernelMethod("ctranspose", args => transposeKernel(args));
+kernelMethod("ctranspose", args => transposeKernel(args, true));
+
+// real(G) and conj(G) of real data are G.
+for (const op of ["real", "conj"])
+  kernelMethod(op, (args, nargout) => {
+    const g = args[0];
+    if (nargout > 1 || args.length !== 1) return null;
+    if (isGpuArray(g) && !g.isComplex) return g;
+    return complexElementwiseKernel(op, args);
+  });
+for (const op of ["imag", "angle", "complex"])
+  kernelMethod(op, (args, nargout) =>
+    nargout <= 1 ? complexElementwiseKernel(op, args) : null
+  );
+
+kernelMethod("fft", (args, nargout) =>
+  nargout <= 1 ? fftKernel(args, false) : null
+);
+kernelMethod("ifft", (args, nargout) =>
+  nargout <= 1 ? fftKernel(args, true) : null
+);

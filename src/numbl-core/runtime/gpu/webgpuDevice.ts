@@ -7,13 +7,15 @@
  * index output of `max`), and is kept in host memory so that it keeps its
  * precision.
  *
+ * A complex array has two device buffers, its real and imaginary parts.
  * Uploads and frees are posted without waiting; a download waits for the
- * helper. Buffers are freed when their gpuArray is garbage collected.
+ * helper. Buffers are freed when no gpuArray uses them (see `release`).
  */
 
 import { RuntimeTensor, type ElementClass } from "../types.js";
 import { allocFloat64Array } from "../alloc.js";
 import type {
+  ComplexOperand,
   GpuDevice,
   GpuKernels,
   KernelOperand,
@@ -33,6 +35,9 @@ const MODULE = "numbl:gpuarray";
 
 /** `owners` of a buffer that has been freed. */
 const FREED = -1;
+/** `owners` of a part of a complex buffer (see `parts`), which is never
+ *  counted or freed itself. */
+const PART = -2;
 
 /** A buffer: device buffers by id, or host data for a double array. */
 type WebGpuBuffer =
@@ -122,6 +127,88 @@ export class WebGpuDevice implements GpuDevice, GpuKernels {
 
   holds(buffer: unknown): boolean {
     return !("host" in (buffer as WebGpuBuffer));
+  }
+
+  complex(re: unknown, im: unknown): DeviceBuffer {
+    const r = re as DeviceBuffer;
+    const i = im as DeviceBuffer;
+    this.untrack(r);
+    this.untrack(i);
+    const b = { id: r.id, imagId: i.id, n: r.n, owners: 0 };
+    this.track(b);
+    return b;
+  }
+
+  parts(buffer: unknown): { re: DeviceBuffer; im: DeviceBuffer } {
+    const b = buffer as DeviceBuffer;
+    return {
+      re: { id: b.id, imagId: 0, n: b.n, owners: PART },
+      im: { id: b.imagId, imagId: 0, n: b.n, owners: PART },
+    };
+  }
+
+  celementwise(
+    op: string,
+    inputs: ComplexOperand[],
+    n: number,
+    complexResult: boolean,
+    dims?: number[]
+  ): DeviceBuffer {
+    const re = this.result(n);
+    const im = complexResult ? this.result(n) : null;
+    this.helper.post(MODULE, "celementwise", {
+      out: re.id,
+      outIm: im ? im.id : 0,
+      op,
+      n,
+      dims,
+      inputs: inputs.map(x =>
+        "scalar" in x
+          ? { scalar: x.scalar }
+          : {
+              re: (x.re as DeviceBuffer).id,
+              im: x.im ? (x.im as DeviceBuffer).id : 0,
+              n: x.n,
+              strides: x.strides,
+            }
+      ),
+    });
+    return im ? this.complex(re, im) : re;
+  }
+
+  fft(
+    src: unknown,
+    isComplex: boolean,
+    inner: number,
+    len: number,
+    outer: number,
+    n: number,
+    inverse: boolean,
+    symmetric: boolean
+  ): DeviceBuffer | null {
+    // The work buffers hold each sequence at a power-of-2 length (at least
+    // 2n - 1 for a length that is not one), as complex f32.
+    let m = 1;
+    while (m < n) m *= 2;
+    if (m !== n) while (m < 2 * n - 1) m *= 2;
+    if (inner * outer * m * 8 > this.totalMemory) return null;
+    const s = src as DeviceBuffer;
+    const total = inner * n * outer;
+    const re = this.result(total);
+    const im = symmetric ? null : this.result(total);
+    this.helper.post(MODULE, "fft", {
+      out: re.id,
+      outIm: im ? im.id : 0,
+      src: s.id,
+      srcIm: isComplex ? s.imagId : 0,
+      inner,
+      len,
+      outer,
+      n,
+      inverse,
+      symmetric,
+    });
+    return im ? this.complex(re, im) : re;
   }
 
   elementwise(
@@ -342,18 +429,24 @@ export class WebGpuDevice implements GpuDevice, GpuKernels {
     this.freed.register(b, { ids, bytes }, b);
   }
 
+  /** Stop counting a buffer that a complex buffer takes over. */
+  private untrack(b: DeviceBuffer): void {
+    this.freed.unregister(b);
+    this.bytes -= Math.max(4, b.n * 4);
+  }
+
   private free(ids: number[]): void {
     this.helper.post(MODULE, "free", { ids });
   }
 
   retain(buffer: unknown): void {
     const b = buffer as WebGpuBuffer;
-    if (!("host" in b)) b.owners++;
+    if (!("host" in b) && b.owners >= 0) b.owners++;
   }
 
   release(buffer: unknown): void {
     const b = buffer as WebGpuBuffer;
-    if ("host" in b || b.owners === FREED || --b.owners > 0) return;
+    if ("host" in b || b.owners < 0 || --b.owners > 0) return;
     // Freed in order after the work already posted that reads it.
     this.freed.unregister(b);
     b.owners = FREED;

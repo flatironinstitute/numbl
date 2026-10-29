@@ -121,8 +121,26 @@ export function gatherValue(g: RuntimeGpuArray): RuntimeValue {
 
 /** A builtin's output when it ran with a gpuArray argument: numeric and
  *  logical values go to `device`, others (text, cells, ...) stay on the
- *  host. */
-export function outputToGpu(v: RuntimeValue, device: GpuDevice): RuntimeValue {
+ *  host. With `complex`, a real numeric value goes as complex data with
+ *  zero imaginary parts, which the GPU keeps where the host drops them. */
+export function outputToGpu(
+  v: RuntimeValue,
+  device: GpuDevice,
+  complex = false
+): RuntimeValue {
+  if (complex && typeof v === "number") v = new RuntimeComplexNumber(v, 0);
+  else if (
+    complex &&
+    v instanceof RuntimeTensor &&
+    !v.imag &&
+    v.cls !== "logical"
+  )
+    v = new RuntimeTensor(
+      v.data,
+      v.shape,
+      new Float64Array(v.data.length),
+      v.cls
+    );
   if (
     typeof v === "number" ||
     typeof v === "boolean" ||

@@ -14,6 +14,7 @@ import { RuntimeError } from "../error.js";
 import type { GpuDevice } from "./deviceTypes.js";
 
 export type {
+  ComplexOperand,
   GpuDevice,
   GpuKernels,
   HostArray,

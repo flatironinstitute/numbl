@@ -98,6 +98,50 @@ fn pow_(a: f32, b: f32) -> f32 {
   let odd = fract(b) == 0.0 && fract(b * 0.5) != 0.0;
   return select(r, -r, a < 0.0 && odd);
 }
+// Complex values are vec2f (real, imaginary).
+fn cmul(a: vec2f, b: vec2f) -> vec2f { return vec2f(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x); }
+// Smith's algorithm; a real divisor divides each part.
+fn cdiv(a: vec2f, b: vec2f) -> vec2f {
+  if (b.y == 0.0) { return a / b.x; }
+  if (abs(b.x) >= abs(b.y)) {
+    let r = b.y / b.x;
+    let d = b.x + b.y * r;
+    return vec2f((a.x + a.y * r) / d, (a.y - a.x * r) / d);
+  }
+  let r = b.x / b.y;
+  let d = b.x * r + b.y;
+  return vec2f((a.x * r + a.y) / d, (a.y * r - a.x) / d);
+}
+fn cabs(a: vec2f) -> f32 { return hypot_(a.x, a.y); }
+fn cangle(a: vec2f) -> f32 { return select(atan2(a.y, a.x), 0.0, a.x == 0.0 && a.y == 0.0); }
+fn cexp(a: vec2f) -> vec2f {
+  let e = exp(a.x);
+  if (a.y == 0.0) { return vec2f(e, 0.0); }
+  return vec2f(e * cos(a.y), e * sin(a.y));
+}
+fn clog(a: vec2f) -> vec2f { return vec2f(log(cabs(a)), cangle(a)); }
+// The principal square root.
+fn csqrt(a: vec2f) -> vec2f {
+  let r = cabs(a);
+  if (r == 0.0) { return vec2f(0.0, a.y); }
+  let t = sqrt((r + abs(a.x)) * 0.5);
+  if (a.x >= 0.0) { return vec2f(t, a.y / (2.0 * t)); }
+  return vec2f(abs(a.y) / (2.0 * t), select(t, -t, a.y < 0.0));
+}
+fn cpow(a: vec2f, b: vec2f) -> vec2f {
+  if (b.y == 0.0) {
+    if (b.x == 0.0) { return vec2f(1.0, 0.0); }
+    if (b.x == 1.0) { return a; }
+    if (b.x == 2.0) { return cmul(a, a); }
+    if (a.y == 0.0 && (a.x >= 0.0 || fract(b.x) == 0.0)) { return vec2f(pow_(a.x, b.x), 0.0); }
+  }
+  if (a.x == 0.0 && a.y == 0.0) {
+    return select(vec2f(abs(1.0 / a.x), 0.0), vec2f(0.0, 0.0), b.x > 0.0);
+  }
+  return cexp(cmul(b, clog(a)));
+}
+fn csin(a: vec2f) -> vec2f { return vec2f(sin(a.x) * cosh(a.y), cos(a.x) * sinh(a.y)); }
+fn ccos(a: vec2f) -> vec2f { return vec2f(cos(a.x) * cosh(a.y), -sin(a.x) * sinh(a.y)); }
 `;
 
   /** Element-wise operations: a WGSL expression in `a` (and `b`). */
@@ -149,6 +193,40 @@ fn pow_(a: f32, b: f32) -> f32 {
     rem: "rem_(a, b)",
     atan2: "atan2(a, b)",
     hypot: "hypot_(a, b)",
+  };
+
+  /** Complex element-wise operations: a WGSL expression in the vec2f
+   *  values `a` (and `b`), a vec2f or, for an operation with a real
+   *  result, an f32. `ra` and `rb` are the forms for a real `a` or `b`,
+   *  which treat an infinite part as the host does. */
+  const CELEMWISE: Record<string, { e: string; ra?: string; rb?: string }> = {
+    plus: { e: "a + b" },
+    minus: { e: "a - b" },
+    times: { e: "cmul(a, b)", ra: "a.x * b", rb: "a * b.x" },
+    rdivide: { e: "cdiv(a, b)" },
+    ldivide: { e: "cdiv(b, a)" },
+    // conj(a) .* b, for dot.
+    conjtimes: { e: "cmul(vec2f(a.x, -a.y), b)", ra: "a.x * b" },
+    uminus: { e: "-a" },
+    conj: { e: "vec2f(a.x, -a.y)" },
+    complex: { e: "vec2f(a.x, b.x)" },
+    exp: { e: "cexp(a)" },
+    log: { e: "clog(a)" },
+    sqrt: { e: "csqrt(a)" },
+    power: { e: "cpow(a, b)" },
+    sin: { e: "csin(a)" },
+    cos: { e: "ccos(a)" },
+    real: { e: "a.x" },
+    imag: { e: "a.y" },
+    abs: { e: "cabs(a)" },
+    angle: { e: "cangle(a)" },
+    eq: { e: "b2f(a.x == b.x && a.y == b.y)" },
+    ne: { e: "b2f(!(a.x == b.x && a.y == b.y))" },
+    isnan: { e: "b2f(isnan_(a.x) || isnan_(a.y))" },
+    isinf: { e: "b2f(isinf_(a.x) || isinf_(a.y))" },
+    isfinite: {
+      e: "b2f(!isnan_(a.x) && !isnan_(a.y) && !isinf_(a.x) && !isinf_(a.y))",
+    },
   };
 
   /** Reductions: `t` maps an element (any/all test it against 0), `step`
@@ -297,6 +375,123 @@ fn pow_(a: f32, b: f32) -> f32 {
     staging.unmap();
     staging.destroy();
     return out;
+  }
+
+  // ── FFT tables ──────────────────────────────────────────────────────
+  // Twiddle factors and Bluestein's chirps are computed in double
+  // precision here, stored as vec2f, and kept for reuse.
+
+  const tables = new Map<string, GPUBuffer>();
+
+  function table(
+    device: GPUDevice,
+    key: string,
+    n: number,
+    fill: (re: Float64Array, im: Float64Array) => void
+  ): GPUBuffer {
+    let b = tables.get(key);
+    if (!b) {
+      const re = new Float64Array(n);
+      const im = new Float64Array(n);
+      fill(re, im);
+      const data = new Float32Array(2 * Math.max(1, n));
+      for (let k = 0; k < n; k++) {
+        data[2 * k] = re[k];
+        data[2 * k + 1] = im[k];
+      }
+      b = device.createBuffer({
+        size: data.byteLength,
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+      });
+      device.queue.writeBuffer(b, 0, data);
+      tables.set(key, b);
+    }
+    return b;
+  }
+
+  /** exp(sign * 2 pi i t / m) for t < m/2. */
+  function twiddles(device: GPUDevice, m: number, sign: number): GPUBuffer {
+    return table(device, `tw ${m} ${sign}`, m >> 1, (re, im) => {
+      for (let t = 0; t < re.length; t++) {
+        re[t] = Math.cos((2 * Math.PI * t) / m);
+        im[t] = sign * Math.sin((2 * Math.PI * t) / m);
+      }
+    });
+  }
+
+  /** Bluestein's chirp c_j = exp(sign * pi i j^2 / n) for j < n. */
+  function chirp(device: GPUDevice, n: number, sign: number): GPUBuffer {
+    return table(device, `chirp ${n} ${sign}`, n, (re, im) =>
+      chirpValues(n, sign, re, im)
+    );
+  }
+
+  function chirpValues(
+    n: number,
+    sign: number,
+    re: Float64Array,
+    im: Float64Array
+  ): void {
+    for (let j = 0; j < n; j++) {
+      // j^2 mod 2n is exact in double for j < 2^26.
+      const a = (Math.PI * ((j * j) % (2 * n))) / n;
+      re[j] = Math.cos(a);
+      im[j] = sign * Math.sin(a);
+    }
+  }
+
+  /** The forward FFT (length m) of Bluestein's filter conj(c_j), wrapped
+   *  around to negative j. */
+  function chirpFilter(
+    device: GPUDevice,
+    n: number,
+    m: number,
+    sign: number
+  ): GPUBuffer {
+    return table(device, `filter ${n} ${m} ${sign}`, m, (re, im) => {
+      const cr = new Float64Array(n);
+      const ci = new Float64Array(n);
+      chirpValues(n, sign, cr, ci);
+      for (let j = 0; j < n; j++) {
+        re[j] = cr[j];
+        im[j] = -ci[j];
+        if (j > 0) {
+          re[m - j] = cr[j];
+          im[m - j] = -ci[j];
+        }
+      }
+      fft64(re, im);
+    });
+  }
+
+  /** In-place forward FFT in double precision (length a power of 2). */
+  function fft64(re: Float64Array, im: Float64Array): void {
+    const n = re.length;
+    for (let i = 1, j = 0; i < n; i++) {
+      let bit = n >> 1;
+      for (; j & bit; bit >>= 1) j ^= bit;
+      j ^= bit;
+      if (i < j) {
+        [re[i], re[j]] = [re[j], re[i]];
+        [im[i], im[j]] = [im[j], im[i]];
+      }
+    }
+    for (let len = 2; len <= n; len <<= 1) {
+      const a = (-2 * Math.PI) / len;
+      for (let i = 0; i < n; i += len)
+        for (let k = 0; k < len / 2; k++) {
+          const wr = Math.cos(a * k);
+          const wi = Math.sin(a * k);
+          const p = i + k;
+          const q = p + len / 2;
+          const xr = re[q] * wr - im[q] * wi;
+          const xi = re[q] * wi + im[q] * wr;
+          re[q] = re[p] - xr;
+          im[q] = im[p] - xi;
+          re[p] += xr;
+          im[p] += xi;
+        }
+    }
   }
 
   return {
@@ -508,6 +703,278 @@ ${decls.join("\n")}
         [out, ...args.inputs.map(x => buffer(x.id))],
         groups
       );
+    },
+
+    /** Complex element-wise: out (and outIm, for a complex result) =
+     *  op(inputs) over `n` elements, broadcast as in `elementwise`. An
+     *  input is a buffer's real part and imaginary part (0 for real data),
+     *  or a complex scalar. */
+    async celementwise(
+      device: GPUDevice,
+      args: {
+        out: number;
+        outIm: number;
+        op: string;
+        n: number;
+        inputs: (
+          | { re: number; im: number; n: number; strides?: number[] }
+          | { scalar: [number, number] }
+        )[];
+        dims?: number[];
+      }
+    ) {
+      const tpl = CELEMWISE[args.op];
+      if (!tpl) throw new Error("gpuArray: no complex kernel for " + args.op);
+      const cplx = args.outIm !== 0;
+      const out = create(device, args.out, args.n);
+      const outIm = cplx ? create(device, args.outIm, args.n) : null;
+      if (args.n === 0) return;
+      const bcast = !!args.dims;
+      const decls: string[] = [];
+      const reads: string[] = [];
+      const bufs: GPUBuffer[] = outIm ? [out, outIm] : [out];
+      const scalars = [0, 0, 0, 0];
+      const strides: number[][] = [];
+      const real: boolean[] = [];
+      args.inputs.forEach((x, k) => {
+        const v = "ab"[k];
+        if ("scalar" in x) {
+          reads.push(`let ${v} = p.s.${k === 0 ? "xy" : "zw"};`);
+          scalars[2 * k] = x.scalar[0];
+          scalars[2 * k + 1] = x.scalar[1];
+          strides.push([0, 0, 0, 0]);
+          real.push(x.scalar[1] === 0);
+          return;
+        }
+        const idx = bcast ? `o${k}` : x.n === 1 ? "0u" : "i";
+        bufs.push(buffer(x.re));
+        decls.push(
+          `@group(0) @binding(${bufs.length}) var<storage, read> re${k}: array<f32>;`
+        );
+        let im = "0.0";
+        if (x.im) {
+          bufs.push(buffer(x.im));
+          decls.push(
+            `@group(0) @binding(${bufs.length}) var<storage, read> im${k}: array<f32>;`
+          );
+          im = `im${k}[${idx}]`;
+        }
+        reads.push(`let ${v} = vec2f(re${k}[${idx}], ${im});`);
+        strides.push(x.strides ?? [0, 0, 0, 0]);
+        real.push(!x.im);
+      });
+      while (strides.length < 2) strides.push([0, 0, 0, 0]);
+      const expr = (real[0] && tpl.ra) || (real[1] && tpl.rb) || tpl.e;
+      const index = bcast
+        ? `var r = i; var o0 = 0u; var o1 = 0u;
+  for (var d = 0u; d < 4u; d = d + 1u) {
+    let sub = r % p.dims[d]; r = r / p.dims[d];
+    o0 = o0 + sub * p.sa[d]; o1 = o1 + sub * p.sb[d];
+  }`
+        : "";
+      const { groups, width } = grid(args.n);
+      const code = `
+struct P { n: u32, w: u32, p0: u32, p1: u32, s: vec4f, dims: vec4u, sa: vec4u, sb: vec4u }
+@group(0) @binding(0) var<uniform> p: P;
+@group(0) @binding(1) var<storage, read_write> out: array<f32>;
+${cplx ? "@group(0) @binding(2) var<storage, read_write> outIm: array<f32>;" : ""}
+${decls.join("\n")}
+@compute @workgroup_size(256) fn main(@builtin(global_invocation_id) g: vec3u) {
+  let i = g.x + g.y * p.w;
+  if (i >= p.n) { return; }
+  ${index}
+  ${reads.join(" ")}
+  ${cplx ? `let z = ${expr}; out[i] = z.x; outIm[i] = z.y;` : `out[i] = ${expr};`}
+}`;
+      const dims = args.dims ?? [1, 1, 1, 1];
+      const words = new ArrayBuffer(80);
+      new Uint32Array(words, 0, 2).set([args.n, width]);
+      new Float32Array(words, 16, 4).set(scalars);
+      new Uint32Array(words, 32, 12).set([
+        ...dims,
+        ...strides[0],
+        ...strides[1],
+      ]);
+      await run(device, code, words, bufs, groups);
+    },
+
+    /** The DFT (or inverse) of length `n` over the middle dimension of
+     *  `src` (real, or complex with `srcIm`) viewed as [inner, len, outer],
+     *  into out (and outIm), [inner, n, outer]. The sequences are copied
+     *  (padded or truncated) into a work buffer of vec2f, transformed there
+     *  by radix-2 Stockham passes, and copied out. A length that is not a
+     *  power of 2 uses Bluestein's algorithm: a convolution with a chirp,
+     *  by transforms of a power-of-2 length m >= 2n - 1. With `symmetric`,
+     *  the second half of each sequence mirrors the first (conjugated), and
+     *  only the real part is written. */
+    async fft(
+      device: GPUDevice,
+      args: {
+        out: number;
+        outIm: number;
+        src: number;
+        srcIm: number;
+        inner: number;
+        len: number;
+        outer: number;
+        n: number;
+        inverse: boolean;
+        symmetric: boolean;
+      }
+    ) {
+      const { inner, len, outer, n } = args;
+      const nseq = inner * outer;
+      const out = create(device, args.out, nseq * n);
+      const outIm = args.symmetric
+        ? null
+        : create(device, args.outIm, nseq * n);
+      if (nseq * n === 0) return;
+      const sign = args.inverse ? 1 : -1;
+      const pow2 = (n & (n - 1)) === 0;
+      let m = n;
+      if (!pow2) {
+        m = 1;
+        while (m < 2 * n - 1) m *= 2;
+      }
+      const work = () =>
+        device.createBuffer({ size: nseq * m * 8, usage: usage() });
+      let a = work();
+      let b = work();
+      const head = `
+struct P { inner: u32, len: u32, n: u32, m: u32, nseq: u32, w: u32, ns: u32, sym: u32, scale: f32, p1: f32, p2: f32, p3: f32 }
+@group(0) @binding(0) var<uniform> p: P;`;
+      const u = (threads: number, ns = 0, scale = 1) =>
+        uniforms(
+          [
+            inner,
+            len,
+            n,
+            m,
+            nseq,
+            grid(threads).width,
+            ns,
+            args.symmetric ? 1 : 0,
+          ],
+          [scale, 0, 0, 0]
+        );
+      // Copy in: element q of a sequence is src[q] (0 past len); with
+      // `symmetric`, q > n/2 is conj(src[n - q]). Bluestein's input is
+      // multiplied by the chirp.
+      const cplxIn = args.srcIm !== 0;
+      const pack = `${head}
+@group(0) @binding(1) var<storage, read_write> dst: array<vec2f>;
+@group(0) @binding(2) var<storage, read> srcRe: array<f32>;
+${cplxIn ? "@group(0) @binding(3) var<storage, read> srcIm: array<f32>;" : ""}
+${pow2 ? "" : `@group(0) @binding(${cplxIn ? 4 : 3}) var<storage, read> chirp: array<vec2f>;`}
+@compute @workgroup_size(256) fn main(@builtin(global_invocation_id) g: vec3u) {
+  let t = g.x + g.y * p.w;
+  if (t >= p.nseq * p.m) { return; }
+  let s = t / p.m;
+  let j = t % p.m;
+  var v = vec2f(0.0, 0.0);
+  if (j < p.n) {
+    var q = j;
+    let mirror = p.sym != 0u && 2u * j > p.n;
+    if (mirror) { q = p.n - j; }
+    if (q < p.len) {
+      let at = (s % p.inner) + q * p.inner + (s / p.inner) * p.inner * p.len;
+      v = vec2f(srcRe[at], ${cplxIn ? "srcIm[at]" : "0.0"});
+      if (mirror) { v.y = -v.y; }
+    }
+    ${pow2 ? "" : "v = cmul(v, chirp[j]);"}
+  }
+  dst[t] = v;
+}`;
+      const packBufs = [a, buffer(args.src)];
+      if (cplxIn) packBufs.push(buffer(args.srcIm));
+      if (!pow2) packBufs.push(chirp(device, n, sign));
+      await run(device, pack, u(nseq * m), packBufs, grid(nseq * m).groups);
+      // One radix-2 pass: sub-transforms of length ns combine into 2*ns.
+      const half = m >> 1;
+      const pass = `${head}
+@group(0) @binding(1) var<storage, read_write> dst: array<vec2f>;
+@group(0) @binding(2) var<storage, read> src: array<vec2f>;
+@group(0) @binding(3) var<storage, read> tw: array<vec2f>;
+@compute @workgroup_size(256) fn main(@builtin(global_invocation_id) g: vec3u) {
+  let t = g.x + g.y * p.w;
+  let half = p.m / 2u;
+  if (t >= p.nseq * half) { return; }
+  let base = (t / half) * p.m;
+  let j = t % half;
+  let k = j % p.ns;
+  let x0 = src[base + j];
+  let x1 = cmul(src[base + j + half], tw[k * (p.m / (2u * p.ns))]);
+  let d = base + (j / p.ns) * 2u * p.ns + k;
+  dst[d] = x0 + x1;
+  dst[d + p.ns] = x0 - x1;
+}`;
+      const transform = async (dir: number) => {
+        const tw = twiddles(device, m, dir);
+        for (let ns = 1; ns < m; ns *= 2) {
+          await run(
+            device,
+            pass,
+            u(nseq * half, ns),
+            [b, a, tw],
+            grid(nseq * half).groups
+          );
+          [a, b] = [b, a];
+        }
+      };
+      if (pow2) await transform(sign);
+      else {
+        // Convolve with the chirp filter: forward transform, multiply by
+        // the filter's transform, inverse transform (scaled below).
+        await transform(-1);
+        const mul = `${head}
+@group(0) @binding(1) var<storage, read_write> x: array<vec2f>;
+@group(0) @binding(2) var<storage, read> h: array<vec2f>;
+@compute @workgroup_size(256) fn main(@builtin(global_invocation_id) g: vec3u) {
+  let t = g.x + g.y * p.w;
+  if (t >= p.nseq * p.m) { return; }
+  x[t] = cmul(x[t], h[t % p.m]);
+}`;
+        await run(
+          device,
+          mul,
+          u(nseq * m),
+          [a, chirpFilter(device, n, m, sign)],
+          grid(nseq * m).groups
+        );
+        await transform(1);
+      }
+      // Copy out the first n elements of each sequence, scaled (and, for
+      // Bluestein, multiplied by the chirp).
+      const unpack = `${head}
+@group(0) @binding(1) var<storage, read_write> outRe: array<f32>;
+@group(0) @binding(2) var<storage, read> src: array<vec2f>;
+${outIm ? "@group(0) @binding(3) var<storage, read_write> outIm: array<f32>;" : ""}
+${pow2 ? "" : `@group(0) @binding(${outIm ? 4 : 3}) var<storage, read> chirp: array<vec2f>;`}
+@compute @workgroup_size(256) fn main(@builtin(global_invocation_id) g: vec3u) {
+  let t = g.x + g.y * p.w;
+  if (t >= p.nseq * p.n) { return; }
+  let s = t / p.n;
+  let k = t % p.n;
+  var v = src[s * p.m + k];
+  ${pow2 ? "" : "v = cmul(v, chirp[k]);"}
+  v = v * p.scale;
+  let at = (s % p.inner) + k * p.inner + (s / p.inner) * p.inner * p.n;
+  outRe[at] = v.x;
+  ${outIm ? "outIm[at] = v.y;" : ""}
+}`;
+      const scale = (pow2 ? 1 : 1 / m) * (args.inverse ? 1 / n : 1);
+      const outBufs = [out, a];
+      if (outIm) outBufs.push(outIm);
+      if (!pow2) outBufs.push(chirp(device, n, sign));
+      await run(
+        device,
+        unpack,
+        u(nseq * n, 0, scale),
+        outBufs,
+        grid(nseq * n).groups
+      );
+      a.destroy();
+      b.destroy();
     },
 
     /** out[k] = src[off(k)] for the selection's offsets: `start + k*step`,
@@ -967,6 +1434,8 @@ struct P { m: u32, n: u32, w: u32, pad: u32 }
       buffers.clear();
       for (const list of pool.values()) for (const b of list) b.destroy();
       pool.clear();
+      for (const b of tables.values()) b.destroy();
+      tables.clear();
       pooled = 0;
     },
   };
