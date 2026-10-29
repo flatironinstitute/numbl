@@ -208,7 +208,7 @@ function deviceObject(d: GpuDevice, index: number): RuntimeClassInstance {
     ["SupportsDouble", d.supportsDouble],
     ["SingleDoubleRatio", d.supportsDouble ? 1 : Infinity],
     ["TotalMemory", d.totalMemory],
-    ["AvailableMemory", d.totalMemory],
+    ["AvailableMemory", d.totalMemory - (d.usedMemory?.() ?? 0)],
     ["ComputeMode", RTV.char("Default")],
     ["DeviceAvailable", true],
     ["DeviceSupported", true],

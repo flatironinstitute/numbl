@@ -30,21 +30,32 @@ export interface GpuHelperLike {
 
 const MODULE = "numbl:gpuarray";
 
+/** `owners` of a buffer that has been freed. */
+const FREED = -1;
+
 /** A buffer: device buffers by id, or host data for a double array. */
 type WebGpuBuffer =
-  | { id: number; imagId: number; n: number }
+  | DeviceBuffer
   | { host: Float64Array; hostImag: Float64Array | undefined };
 
-type DeviceBuffer = { id: number; imagId: number; n: number };
+/** A buffer in device memory, and how many gpuArrays use it. */
+type DeviceBuffer = { id: number; imagId: number; n: number; owners: number };
 
 export class WebGpuDevice implements GpuDevice, GpuKernels {
   readonly supportsDouble = false;
   readonly kernels: GpuKernels = this;
   generation = 0;
   private nextId = 1;
-  private readonly freed = new FinalizationRegistry<number[]>(ids =>
-    this.helper.post(MODULE, "free", { ids })
-  );
+  /** Frees the buffers of gpuArrays that were never counted (see
+   *  `release`) when they are garbage collected. */
+  private readonly freed = new FinalizationRegistry<{
+    ids: number[];
+    bytes: number;
+  }>(f => {
+    this.bytes -= f.bytes;
+    this.free(f.ids);
+  });
+  private bytes = 0;
 
   private constructor(
     private readonly helper: GpuHelperLike,
@@ -78,8 +89,8 @@ export class WebGpuDevice implements GpuDevice, GpuKernels {
       };
     const id = this.send(t.data);
     const imagId = t.imag ? this.send(t.imag) : 0;
-    const b = { id, imagId, n: t.data.length };
-    this.freed.register(b, imagId ? [id, imagId] : [id]);
+    const b = { id, imagId, n: t.data.length, owners: 0 };
+    this.track(b);
     return b;
   }
 
@@ -303,9 +314,40 @@ export class WebGpuDevice implements GpuDevice, GpuKernels {
 
   /** A new buffer id for a kernel's result of `n` elements. */
   private result(n: number): DeviceBuffer {
-    const b = { id: this.nextId++, imagId: 0, n };
-    this.freed.register(b, [b.id]);
+    const b = { id: this.nextId++, imagId: 0, n, owners: 0 };
+    this.track(b);
     return b;
+  }
+
+  private track(b: DeviceBuffer): void {
+    const ids = b.imagId ? [b.id, b.imagId] : [b.id];
+    const bytes = ids.length * Math.max(4, b.n * 4);
+    this.bytes += bytes;
+    this.freed.register(b, { ids, bytes }, b);
+  }
+
+  private free(ids: number[]): void {
+    this.helper.post(MODULE, "free", { ids });
+  }
+
+  retain(buffer: unknown): void {
+    const b = buffer as WebGpuBuffer;
+    if (!("host" in b)) b.owners++;
+  }
+
+  release(buffer: unknown): void {
+    const b = buffer as WebGpuBuffer;
+    if ("host" in b || b.owners === FREED || --b.owners > 0) return;
+    // Freed in order after the work already posted that reads it.
+    this.freed.unregister(b);
+    b.owners = FREED;
+    const ids = b.imagId ? [b.id, b.imagId] : [b.id];
+    this.bytes -= ids.length * Math.max(4, b.n * 4);
+    this.free(ids);
+  }
+
+  usedMemory(): number {
+    return this.bytes;
   }
 
   private send(data: Float64Array): number {

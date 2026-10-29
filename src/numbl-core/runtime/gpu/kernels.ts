@@ -163,7 +163,10 @@ export function elementwiseKernel(
   let buffer: unknown;
   if (DOMAIN_OPS.has(op)) {
     const r = dk.k.elementwiseChecked(op, ops, n, dims);
-    if (r.bad) throw complexResultError(op);
+    if (r.bad) {
+      dk.device.release?.(r.buffer);
+      throw complexResultError(op);
+    }
     buffer = r.buffer;
   } else buffer = dk.k.elementwise(op, ops, n, dims);
   return result(dk.device, buffer, shape.slice(), cls);
@@ -360,6 +363,7 @@ export function reduceKernel(
       [{ buffer: r.index, n: nOut }, { scalar: 1 }],
       nOut
     );
+    dk.device.release?.(r.index);
     return [
       result(dk.device, r.value, outShape, cls),
       result(dk.device, index, outShape.slice(), "double"),
@@ -372,12 +376,15 @@ export function reduceKernel(
     len,
     outer
   );
-  if (op === "mean")
+  if (op === "mean") {
+    const sum = buf;
     buf = dk.k.elementwise(
       "times",
-      [{ buffer: buf, n: nOut }, { scalar: 1 / len }],
+      [{ buffer: sum, n: nOut }, { scalar: 1 / len }],
       nOut
     );
+    dk.device.release?.(sum);
+  }
   return result(dk.device, buf, outShape, cls);
 }
 
@@ -408,6 +415,7 @@ export function dotKernel(args: RuntimeValue[]): RuntimeValue | null {
   if (a.cls !== "single" && b.cls !== "single") return null;
   const prod = dk.k.elementwise("times", [a.op, b.op], a.n);
   const buf = dk.k.reduce("sum", prod, 1, a.n, 1);
+  dk.device.release?.(prod);
   return result(dk.device, buf, [1, 1], "single");
 }
 
@@ -430,14 +438,18 @@ export function normKernel(args: RuntimeValue[]): RuntimeValue | null {
           : null;
   if (kind === null) return null;
   const n = x.n;
-  const abs = dk.k.elementwise("abs", [x.op], n);
+  const release = (b: unknown) => dk.device.release?.(b);
   let buf: unknown;
-  if (kind === 1) buf = dk.k.reduce("sum", abs, 1, n, 1);
-  else if (kind === Infinity) buf = dk.k.reduce("max", abs, 1, n, 1);
-  else {
+  if (kind === 2) {
     const sq = dk.k.elementwise("times", [x.op, x.op], n);
     const s = dk.k.reduce("sum", sq, 1, n, 1);
     buf = dk.k.elementwise("sqrt", [{ buffer: s, n: 1 }], 1);
+    release(sq);
+    release(s);
+  } else {
+    const abs = dk.k.elementwise("abs", [x.op], n);
+    buf = dk.k.reduce(kind === 1 ? "sum" : "max", abs, 1, n, 1);
+    release(abs);
   }
   return result(dk.device, buf, [1, 1], "single");
 }

@@ -167,6 +167,19 @@ same([gpuArray(single(1)), 2, 3], single([1 2 3]), 0);
 same(repmat(GA(1:3, 1:2), 2, 3), repmat(A(1:3, 1:2), 2, 3), 0);
 same(repmat(GA(1, :), [4 1]), repmat(A(1, :), [4 1]), 0);
 
+% device memory is released when arrays go away (AvailableMemory)
+d = gpuDevice;
+used0 = d.TotalMemory - d.AvailableMemory;
+X = gpuArray(single(rand(500)));
+for k = 1:50
+  X = X .* 0.5 + sum(X(:)) / 1e6;
+end
+Y = reshape(X, 250, []);
+c = {X, Y'};
+clear X Y c
+d = gpuDevice;
+assert(d.TotalMemory - d.AvailableMemory <= used0, 'device memory was not released');
+
 % classes and shapes of results
 assert(strcmp(underlyingType(GA + 1), 'single') && strcmp(underlyingType(GA < 1), 'logical'));
 assert(isequal(size(sum(GA)), [1 53]) && isequal(size(sum(GA, 2)), [37 1]));

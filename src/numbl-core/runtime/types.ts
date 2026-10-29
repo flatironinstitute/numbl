@@ -483,7 +483,9 @@ export class RuntimeClassInstanceArray extends Refcounted {
 /** An array held in a GPU device's memory (MATLAB's gpuArray). The
  *  contents are immutable: every operation, indexed assignment included,
  *  makes a new array. `generation` is the device's generation when the
- *  array was made; resetting the device invalidates the array. See
+ *  array was made; resetting the device invalidates the array. The array
+ *  holds its buffer from construction until its count drops to zero (or,
+ *  for one never counted, until it is garbage collected). See
  *  runtime/gpu/. */
 export class RuntimeGpuArray extends Refcounted {
   readonly kind = "gpu_array" as const;
@@ -498,10 +500,16 @@ export class RuntimeGpuArray extends Refcounted {
     readonly generation: number
   ) {
     super();
+    device.retain?.(buffer);
   }
 
   shallowClone(): RuntimeGpuArray {
     return this;
+  }
+
+  /** Release the device buffer when the last reference goes. */
+  protected _destroy(): void {
+    this.device.release?.(this.buffer);
   }
 }
 
