@@ -11,7 +11,8 @@ declare global {
   /** Optional host element-wise kernels for real tensors (the numbl JIT
    *  host installs the interpreter's native-or-TS kernels). `op` is the
    *  builtin name; `out` has the input's length. `unary` returns false
-   *  for an op it doesn't cover; `minmax` skips NaN. */
+   *  for an op it doesn't cover; `reduce` reduces all of a (non-empty)
+   *  array in sequential order (`min` / `max` skip NaN). */
   var $elemwise:
     | {
         binary(
@@ -28,7 +29,7 @@ declare global {
           out: Float64Array
         ): void;
         unary(op: string, a: Float64Array, out: Float64Array): boolean;
-        minmax(op: "min" | "max", a: Float64Array): number;
+        reduce(op: "sum" | "prod" | "min" | "max", a: Float64Array): number;
       }
     | undefined;
 
