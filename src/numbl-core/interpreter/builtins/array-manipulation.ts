@@ -40,6 +40,7 @@ import {
   type ElementClass,
 } from "../../runtime/types.js";
 import { builtin, type PlainBuiltinSpec } from "./builtin.js";
+import { isSingle } from "../../runtime/single.js";
 import {
   structCat,
   cellCatAlongDim,
@@ -665,6 +666,8 @@ builtin({
 builtin({
   name: "cat",
   accepts: { sparse: true },
+  // Single when an array argument is (the dimension does not count).
+  singleOutputs: args => (args.slice(1).some(isSingle) ? true : []),
   nargin: [1, Infinity],
   apply: args => {
     const d0 = args[0];

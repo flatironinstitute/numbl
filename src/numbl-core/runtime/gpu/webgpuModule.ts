@@ -38,6 +38,29 @@ fn round_(x: f32) -> f32 {
 }
 fn max_(a: f32, b: f32) -> f32 { return select(select(max(a, b), a, isnan_(b)), b, isnan_(a)); }
 fn min_(a: f32, b: f32) -> f32 { return select(select(min(a, b), a, isnan_(b)), b, isnan_(a)); }
+fn isinf_(x: f32) -> bool { return (bitcast<u32>(x) & 0x7fffffffu) == 0x7f800000u; }
+// MATLAB's mod: the sign of b, mod(a, 0) = a.
+fn mod_(a: f32, b: f32) -> f32 {
+  if (b == 0.0) { return a; }
+  let r = a - floor(a / b) * b;
+  return select(r, 0.0, abs(r) >= abs(b));
+}
+// MATLAB's rem: the sign of a, rem(a, 0) = NaN.
+fn rem_(a: f32, b: f32) -> f32 {
+  let r = a - trunc(a / b) * b;
+  return select(r, 0.0, abs(r) >= abs(b));
+}
+// sqrt(a^2 + b^2) without overflow; Inf if either is Inf.
+fn hypot_(a: f32, b: f32) -> f32 {
+  let x = abs(a);
+  let y = abs(b);
+  if (isinf_(x) || isinf_(y)) { return select(x, y, isinf_(y)); }
+  let m = max(x, y);
+  if (m == 0.0) { return 0.0; }
+  let u = x / m;
+  let v = y / m;
+  return m * sqrt(u * u + v * v);
+}
 fn log1p_(x: f32) -> f32 {
   let u = 1.0 + x;
   return select(log(u) * x / (u - 1.0), x, u == 1.0);
@@ -97,6 +120,33 @@ fn pow_(a: f32, b: f32) -> f32 {
     atanh: "atanh(a)",
     acosh: "acosh(a)",
     power: "pow_(a, b)",
+    isnan: "b2f(isnan_(a))",
+    isinf: "b2f(isinf_(a))",
+    isfinite: "b2f(!isnan_(a) && !isinf_(a))",
+    mod: "mod_(a, b)",
+    rem: "rem_(a, b)",
+    atan2: "atan2(a, b)",
+    hypot: "hypot_(a, b)",
+  };
+
+  /** Reductions: `t` maps an element (any/all test it against 0), `step`
+   *  folds it into `acc`, `better` (max/min with positions) says whether
+   *  x replaces acc (strictly, so the first extreme wins; NaN skipped). */
+  const REDUCE: Record<string, { t: string; step: string; better?: string }> = {
+    sum: { t: "x", step: "acc + x" },
+    prod: { t: "x", step: "acc * x" },
+    max: {
+      t: "x",
+      step: "max_(acc, x)",
+      better: "!isnan_(x) && (isnan_(acc) || x > acc)",
+    },
+    min: {
+      t: "x",
+      step: "min_(acc, x)",
+      better: "!isnan_(x) && (isnan_(acc) || x < acc)",
+    },
+    any: { t: "b2f(x != 0.0)", step: "max(acc, x)" },
+    all: { t: "b2f(x != 0.0)", step: "min(acc, x)" },
   };
 
   /** For the operations whose real result needs the input in a domain: the
@@ -471,11 +521,14 @@ ${offs ? `@group(0) @binding(${scalar ? 2 : 3}) var<storage, read> offs: array<u
 
     /** out = op over the middle dimension of `src` viewed as
      *  [inner, len, outer] (column-major): sum, prod, max or min (NaN
-     *  skipped). A long reduction with few outputs runs in two passes. */
+     *  skipped), any or all (logical). With `outIdx`, max and min also
+     *  give the (0-based) position of the first extreme value. A long
+     *  reduction with few outputs runs in several passes. */
     async reduce(
       device: GPUDevice,
       args: {
         out: number;
+        outIdx?: number;
         op: string;
         src: number;
         inner: number;
@@ -485,22 +538,21 @@ ${offs ? `@group(0) @binding(${scalar ? 2 : 3}) var<storage, read> offs: array<u
     ) {
       const nOut = args.inner * args.outer;
       const out = create(device, args.out, nOut);
+      const outIdx =
+        args.outIdx !== undefined ? create(device, args.outIdx, nOut) : null;
       if (nOut === 0) return;
-      const step = (
-        {
-          sum: "acc + x",
-          prod: "acc * x",
-          max: "max_(acc, x)",
-          min: "min_(acc, x)",
-        } as Record<string, string>
-      )[args.op];
-      if (!step) throw new Error("gpuArray: no reduction " + args.op);
-      // pass: dst[o + c*nOut... ] over chunks of the middle dimension
-      const reduceCode = `
+      const r = REDUCE[args.op];
+      if (!r) throw new Error("gpuArray: no reduction " + args.op);
+      const withIdx = outIdx !== null;
+      // `first`: the pass over the data (positions are k); later passes
+      // combine partial results (positions read from the partials).
+      const code = (first: boolean) => `
 struct P { inner: u32, len: u32, outer: u32, chunk: u32, nchunks: u32, w: u32 }
 @group(0) @binding(0) var<uniform> p: P;
 @group(0) @binding(1) var<storage, read_write> dst: array<f32>;
 @group(0) @binding(2) var<storage, read> src: array<f32>;
+${withIdx ? "@group(0) @binding(3) var<storage, read_write> dstIdx: array<f32>;" : ""}
+${withIdx && !first ? "@group(0) @binding(4) var<storage, read> srcIdx: array<f32>;" : ""}
 @compute @workgroup_size(256) fn main(@builtin(global_invocation_id) g: vec3u) {
   let t = g.x + g.y * p.w;
   let nOut = p.inner * p.outer;
@@ -512,15 +564,26 @@ struct P { inner: u32, len: u32, outer: u32, chunk: u32, nchunks: u32, w: u32 }
   let k0 = c * p.chunk;
   let k1 = min(k0 + p.chunk, p.len);
   let base = ii + oo * p.inner * p.len;
-  var acc: f32 = src[base + k0 * p.inner];
+  var x = src[base + k0 * p.inner];
+  var acc: f32 = ${r.t};
+  ${withIdx ? `var ai: f32 = ${first ? "f32(k0)" : "srcIdx[base + k0 * p.inner]"};` : ""}
   for (var k = k0 + 1u; k < k1; k = k + 1u) {
-    let x = src[base + k * p.inner];
-    acc = ${step};
+    x = src[base + k * p.inner];
+    ${
+      withIdx
+        ? `if (${r.better}) { acc = x; ai = ${first ? "f32(k)" : "srcIdx[base + k * p.inner]"}; }`
+        : `x = ${r.t}; acc = ${r.step};`
+    }
   }
   dst[o + c * nOut] = acc;
+  ${withIdx ? "dstIdx[o + c * nOut] = ai;" : ""}
 }`;
       let src = buffer(args.src);
+      let srcIdx: GPUBuffer | null = null;
       let len = args.len;
+      let geom = { inner: args.inner, outer: args.outer };
+      let first = true;
+      const temps: GPUBuffer[] = [];
       // Split the reduction when there are too few outputs to fill the GPU.
       while (nOut < 4096 && len > 64) {
         const chunk = 64;
@@ -529,30 +592,193 @@ struct P { inner: u32, len: u32, outer: u32, chunk: u32, nchunks: u32, w: u32 }
           size: nOut * nchunks * 4,
           usage: usage(),
         });
+        const partIdx = withIdx
+          ? device.createBuffer({ size: nOut * nchunks * 4, usage: usage() })
+          : null;
+        temps.push(part);
+        if (partIdx) temps.push(partIdx);
         const { groups, width } = grid(nOut * nchunks);
+        const bufs = [part, src];
+        if (partIdx) bufs.push(partIdx);
+        if (partIdx && !first) bufs.push(srcIdx!);
         await run(
           device,
-          reduceCode,
-          uniforms([args.inner, len, args.outer, chunk, nchunks, width]),
-          [part, src],
+          code(first),
+          uniforms([geom.inner, len, geom.outer, chunk, nchunks, width]),
+          bufs,
           groups
         );
-        if (src !== buffer(args.src)) src.destroy();
         // The partials, [nOut, nchunks], reduce over their second
         // dimension: inner = nOut, len = nchunks, outer = 1.
         src = part;
+        srcIdx = partIdx;
         len = nchunks;
-        args = { ...args, inner: nOut, outer: 1 };
+        geom = { inner: nOut, outer: 1 };
+        first = false;
       }
       const { groups, width } = grid(nOut);
+      const bufs = [out, src];
+      if (outIdx) bufs.push(outIdx);
+      if (outIdx && !first) bufs.push(srcIdx!);
       await run(
         device,
-        reduceCode,
-        uniforms([args.inner, len, args.outer, len, 1, width]),
-        [out, src],
+        code(first),
+        uniforms([geom.inner, len, geom.outer, len, 1, width]),
+        bufs,
         groups
       );
-      if (src !== buffer(args.src)) src.destroy();
+      for (const b of temps) b.destroy();
+    },
+
+    /** Concatenation: a new `out` of `total` elements, into which each
+     *  part (`block` contiguous elements per slab, `outer` slabs) is copied
+     *  at `offset` within each slab of `stride` elements. */
+    async concat(
+      device: GPUDevice,
+      args: {
+        out: number;
+        total: number;
+        outer: number;
+        stride: number;
+        parts: { src: number; block: number; offset: number }[];
+      }
+    ) {
+      const out = create(device, args.out, args.total);
+      const code = `
+struct P { n: u32, w: u32, block: u32, stride: u32, offset: u32, p1: u32, p2: u32, p3: u32 }
+@group(0) @binding(0) var<uniform> p: P;
+@group(0) @binding(1) var<storage, read_write> dst: array<f32>;
+@group(0) @binding(2) var<storage, read> src: array<f32>;
+@compute @workgroup_size(256) fn main(@builtin(global_invocation_id) g: vec3u) {
+  let t = g.x + g.y * p.w;
+  if (t >= p.n) { return; }
+  let o = t / p.block;
+  let j = t % p.block;
+  dst[o * p.stride + p.offset + j] = src[t];
+}`;
+      for (const part of args.parts) {
+        const n = part.block * args.outer;
+        if (n === 0) continue;
+        const { groups, width } = grid(n);
+        await run(
+          device,
+          code,
+          uniforms([n, width, part.block, args.stride, part.offset, 0, 0, 0]),
+          [out, buffer(part.src)],
+          groups
+        );
+      }
+    },
+
+    /** Cumulative sum or product over the middle dimension of `src`
+     *  viewed as [inner, len, outer]: each sequence is scanned in chunks,
+     *  the chunk totals are scanned, and each chunk adds (or multiplies by)
+     *  the total before it. */
+    async scan(
+      device: GPUDevice,
+      args: {
+        out: number;
+        op: string;
+        src: number;
+        inner: number;
+        len: number;
+        outer: number;
+      }
+    ) {
+      const total = args.inner * args.len * args.outer;
+      const out = create(device, args.out, total);
+      if (total === 0) return;
+      const f = args.op === "cumprod" ? "*" : "+";
+      const unit = args.op === "cumprod" ? "1.0" : "0.0";
+      const nseq = args.inner * args.outer;
+      const chunk = 256;
+      const nchunks = Math.ceil(args.len / chunk);
+      const head = `
+struct P { inner: u32, len: u32, outer: u32, chunk: u32, nchunks: u32, w: u32, p1: u32, p2: u32 }
+@group(0) @binding(0) var<uniform> p: P;
+fn at(s: u32, k: u32) -> u32 {
+  return (s % p.inner) + k * p.inner + (s / p.inner) * p.inner * p.len;
+}`;
+      // 1: scan within each chunk; record the chunk's total.
+      const local = `${head}
+@group(0) @binding(1) var<storage, read_write> dst: array<f32>;
+@group(0) @binding(2) var<storage, read> src: array<f32>;
+@group(0) @binding(3) var<storage, read_write> totals: array<f32>;
+@compute @workgroup_size(256) fn main(@builtin(global_invocation_id) g: vec3u) {
+  let t = g.x + g.y * p.w;
+  if (t >= p.inner * p.outer * p.nchunks) { return; }
+  let s = t % (p.inner * p.outer);
+  let c = t / (p.inner * p.outer);
+  let k1 = min((c + 1u) * p.chunk, p.len);
+  var acc: f32 = ${unit};
+  for (var k = c * p.chunk; k < k1; k = k + 1u) {
+    acc = acc ${f} src[at(s, k)];
+    dst[at(s, k)] = acc;
+  }
+  totals[s + c * p.inner * p.outer] = acc;
+}`;
+      // 2: per sequence, the running total before each chunk (in place).
+      const across = `${head}
+@group(0) @binding(1) var<storage, read_write> totals: array<f32>;
+@compute @workgroup_size(256) fn main(@builtin(global_invocation_id) g: vec3u) {
+  let s = g.x + g.y * p.w;
+  let nseq = p.inner * p.outer;
+  if (s >= nseq) { return; }
+  var acc: f32 = ${unit};
+  for (var c = 0u; c < p.nchunks; c = c + 1u) {
+    let v = totals[s + c * nseq];
+    totals[s + c * nseq] = acc;
+    acc = acc ${f} v;
+  }
+}`;
+      // 3: combine each element with its chunk's preceding total.
+      const fix = `${head}
+@group(0) @binding(1) var<storage, read_write> dst: array<f32>;
+@group(0) @binding(2) var<storage, read> totals: array<f32>;
+@compute @workgroup_size(256) fn main(@builtin(global_invocation_id) g: vec3u) {
+  let t = g.x + g.y * p.w;
+  let nseq = p.inner * p.outer;
+  if (t >= nseq * p.len) { return; }
+  let s = t % nseq;
+  let k = t / nseq;
+  let c = k / p.chunk;
+  if (c == 0u) { return; }
+  let i = at(s, k);
+  dst[i] = totals[s + c * nseq] ${f} dst[i];
+}`;
+      const totals = device.createBuffer({
+        size: nseq * nchunks * 4,
+        usage: usage(),
+      });
+      const u = (n: number) =>
+        uniforms([
+          args.inner,
+          args.len,
+          args.outer,
+          chunk,
+          nchunks,
+          grid(n).width,
+          0,
+          0,
+        ]);
+      await run(
+        device,
+        local,
+        u(nseq * nchunks),
+        [out, buffer(args.src), totals],
+        grid(nseq * nchunks).groups
+      );
+      if (nchunks > 1) {
+        await run(device, across, u(nseq), [totals], grid(nseq).groups);
+        await run(
+          device,
+          fix,
+          u(nseq * args.len),
+          [out, totals],
+          grid(nseq * args.len).groups
+        );
+      }
+      totals.destroy();
     },
 
     /** out (m x n) = a (m x k) * b (k x n), column-major, tiled. */
