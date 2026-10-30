@@ -421,13 +421,13 @@ fn ccos(a: vec2f) -> vec2f { return vec2f(cos(a.x) * cosh(a.y), -sin(a.x) * sinh
     | { scalar: number };
 
   /** A selection of `take` and `put` (see `KernelSelection`). */
-  interface Sel {
+  type Sel = {
     n: number;
     start: number;
     step: number;
     offsets: Uint32Array<ArrayBuffer> | null;
     grid?: { counts: number[]; strides: number[] };
-  }
+  };
 
   /** WGSL for a selection's k-th offset, given the uniform fields `start`
    *  and `step`, or (`grid`) `gc` and `gs`, and the buffer `offs`. */
