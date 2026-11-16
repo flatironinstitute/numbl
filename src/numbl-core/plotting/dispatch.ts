@@ -28,6 +28,7 @@ import {
   isRuntimeString,
 } from "../runtime/types.js";
 import type { PlotInstruction } from "./types.js";
+import { colormapTable } from "./colormaps.js";
 import { toNumber, toString } from "../runtime/convert.js";
 import { RuntimeError } from "../runtime/error.js";
 import {
@@ -569,7 +570,15 @@ function dispatchColormap(
     });
   } else {
     const name = toString(rv).replace(/^"|"$/g, "");
-    plotInstr(instructions, { type: "set_colormap", name });
+    // Send the table for MATLAB's named colormaps, so the renderer draws
+    // them without knowing each one; other names (redblue) go by name.
+    const table = colormapTable(name.toLowerCase(), 256);
+    plotInstr(
+      instructions,
+      table
+        ? { type: "set_colormap", name, data: table }
+        : { type: "set_colormap", name }
+    );
   }
 }
 

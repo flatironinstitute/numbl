@@ -46,7 +46,7 @@ import {
 } from "../../helpers/arithmetic.js";
 import { allocFloat64Array } from "../../runtime/alloc.js";
 import { convertJsonValue } from "../../runtime/jsonDecode.js";
-import { PARULA_ANCHORS } from "../../plotting/colormaps.js";
+import { COLORMAP_NAMES, colormapTable } from "../../plotting/colormaps.js";
 import { incref, decref } from "../../runtime/refcount.js";
 import type { Runtime } from "../../runtime/runtime.js";
 import { stripClassNameArgs, withGpuOption } from "./array-construction.js";
@@ -528,7 +528,8 @@ builtin({
         : isRuntimeString(prop)
           ? prop
           : "";
-      if (propStr.toLowerCase() === "colormap") return parulaColormap(64);
+      if (propStr.toLowerCase() === "colormap")
+        return colormapMatrix("parula", 64);
     }
     return RTV.dummyHandle();
   },
@@ -570,64 +571,37 @@ builtin({
   apply: () => RTV.cell([], [0, 0]),
 });
 
-// Colormap name functions — return the name as a char (so `colormap(jet)`
-// works). `parula` additionally supports `parula(m)` returning an m×3 RGB
-// matrix, matching MATLAB, for callers that index into the colormap.
-for (const cm of [
-  "jet",
-  "hsv",
-  "hot",
-  "cool",
-  "spring",
-  "summer",
-  "autumn",
-  "winter",
-  "gray",
-  "bone",
-  "copper",
-  "pink",
-]) {
+// Colormap functions: `jet(m)`, `hot(m)`, ... return an m×3 matrix of RGB
+// values, 256 rows by default (MATLAB uses the current figure's colormap
+// length, 256 by default). `colormap(jet)` then sets a custom colormap with
+// those rows.
+for (const name of COLORMAP_NAMES) {
   builtin({
-    name: cm,
+    name,
+    help: {
+      signatures: [`c = ${name}`, `c = ${name}(m)`],
+      description: `The ${name} colormap as an m-by-3 matrix of RGB values in [0, 1] (m = 256 by default). Use it with colormap: colormap(${name}) or colormap(${name}(m)).`,
+    },
     nargin: [0, 1],
     mfile: true,
-    apply: () => RTV.char(cm),
+    apply: args =>
+      colormapMatrix(
+        name,
+        args.length >= 1 ? Math.round(realScalarArg(args[0])) : 256
+      ),
   });
 }
 
-/** Build an `m × 3` parula colormap (column-major) by interpolating the
- *  anchor table. */
-function parulaColormap(m: number): RuntimeValue {
-  const data = allocFloat64Array(m * 3);
-  const last = PARULA_ANCHORS.length - 1;
-  for (let i = 0; i < m; i++) {
-    const t = m <= 1 ? 0 : (i / (m - 1)) * last;
-    const k = Math.min(last - 1, Math.floor(t));
-    const f = t - k;
-    const a = PARULA_ANCHORS[k];
-    const b = PARULA_ANCHORS[Math.min(last, k + 1)];
-    for (let c = 0; c < 3; c++) {
-      data[c * m + i] = a[c] + f * (b[c] - a[c]); // column-major [m, 3]
-    }
-  }
-  return RTV.tensor(data, [m, 3]);
+/** MATLAB colormap `name` as an m×3 double matrix. */
+function colormapMatrix(name: string, m: number): RuntimeValue {
+  const rows = colormapTable(name, m) ?? [];
+  const n = rows.length;
+  const data = allocFloat64Array(n * 3);
+  rows.forEach((rgb, i) => {
+    for (let c = 0; c < 3; c++) data[c * n + i] = rgb[c]; // column-major
+  });
+  return RTV.tensor(data, [n, 3]);
 }
-
-builtin({
-  name: "parula",
-  accepts: { sparse: true },
-  nargin: [0, 1],
-  mfile: true,
-  apply: args => {
-    if (
-      args.length >= 1 &&
-      (isRuntimeNumber(args[0]) || isRuntimeTensor(args[0]))
-    ) {
-      return parulaColormap(Math.max(0, Math.round(realScalarArg(args[0]))));
-    }
-    return RTV.char("parula");
-  },
-});
 
 // ── setappdata / getappdata / rmappdata / isappdata ────────────────────
 

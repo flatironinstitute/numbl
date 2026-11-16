@@ -87,3 +87,140 @@ export function colormapLookup(t: number, cm: ColormapSpec = {}): RGB {
   if (cm.name === "redblue") return redblueColormap(clamped);
   return interpTable(PARULA_ANCHORS, clamped);
 }
+
+// ── MATLAB colormap tables ──────────────────────────────────────────────
+
+/** The `m × 3` table MATLAB's colormap function `name` returns (`jet(m)`,
+ *  `hot(m)`, ...), following MATLAB's formulas; parula interpolates its
+ *  anchor samples. Undefined for an unknown name. */
+export function colormapTable(name: string, m: number): RGB[] | undefined {
+  const make = COLORMAP_TABLES[name];
+  if (!make) return undefined;
+  m = Math.max(0, Math.floor(m));
+  return m === 0 ? [] : make(m);
+}
+
+/** Names `colormapTable` knows. */
+export const COLORMAP_NAMES: readonly string[] = [
+  "parula",
+  "jet",
+  "hsv",
+  "hot",
+  "cool",
+  "spring",
+  "summer",
+  "autumn",
+  "winter",
+  "gray",
+  "bone",
+  "copper",
+  "pink",
+];
+
+/** (0:m-1)'/max(m-1,1) */
+const ramp = (m: number) =>
+  Array.from({ length: m }, (_, i) => i / Math.max(m - 1, 1));
+
+function grayTable(m: number): RGB[] {
+  return ramp(m).map(g => [g, g, g]);
+}
+
+function hotTable(m: number): RGB[] {
+  const n = Math.trunc((3 / 8) * m);
+  const rows: RGB[] = [];
+  for (let i = 0; i < m; i++) {
+    const r = i < n ? (i + 1) / n : 1;
+    const g = i < n ? 0 : i < 2 * n ? (i - n + 1) / n : 1;
+    const b = i < 2 * n ? 0 : (i - 2 * n + 1) / (m - 2 * n);
+    rows.push([r, g, b]);
+  }
+  return rows;
+}
+
+function jetTable(m: number): RGB[] {
+  const n = Math.ceil(m / 4);
+  const u: number[] = [];
+  for (let i = 1; i <= n; i++) u.push(i / n);
+  for (let i = 1; i < n; i++) u.push(1);
+  for (let i = n; i >= 1; i--) u.push(i / n);
+  const g0 = Math.ceil(n / 2) - (m % 4 === 1 ? 1 : 0);
+  const J: RGB[] = Array.from({ length: m }, () => [0, 0, 0]);
+  // 1-based rows, as in MATLAB: g = g0 + (1:numel(u)), r = g + n, b = g - n.
+  const g = u.map((_, k) => g0 + k + 1);
+  const r = g.map(v => v + n).filter(v => v <= m);
+  const gIn = g.filter(v => v <= m);
+  const b = g.map(v => v - n).filter(v => v >= 1);
+  r.forEach((row, k) => (J[row - 1][0] = u[k]));
+  gIn.forEach((row, k) => (J[row - 1][1] = u[k]));
+  b.forEach((row, k) => (J[row - 1][2] = u[u.length - b.length + k]));
+  return J;
+}
+
+function hsvTable(m: number): RGB[] {
+  // hsv2rgb([h, 1, 1]) with h = (0:m-1)'/m
+  return Array.from({ length: m }, (_, i) => {
+    const h = (i / m) * 6;
+    const k = Math.floor(h);
+    const f = h - k;
+    switch (k % 6) {
+      case 0:
+        return [1, f, 0] as RGB;
+      case 1:
+        return [1 - f, 1, 0] as RGB;
+      case 2:
+        return [0, 1, f] as RGB;
+      case 3:
+        return [0, 1 - f, 1] as RGB;
+      case 4:
+        return [f, 0, 1] as RGB;
+      default:
+        return [1, 0, 1 - f] as RGB;
+    }
+  });
+}
+
+function parulaTable(m: number): RGB[] {
+  const last = PARULA_ANCHORS.length - 1;
+  return Array.from({ length: m }, (_, i) => {
+    const t = m <= 1 ? 0 : (i / (m - 1)) * last;
+    const k = Math.min(last - 1, Math.floor(t));
+    const f = t - k;
+    const a = PARULA_ANCHORS[k];
+    const b = PARULA_ANCHORS[k + 1];
+    return [0, 1, 2].map(c => a[c] + f * (b[c] - a[c])) as RGB;
+  });
+}
+
+const COLORMAP_TABLES: Record<string, (m: number) => RGB[]> = {
+  parula: parulaTable,
+  jet: jetTable,
+  hsv: hsvTable,
+  hot: hotTable,
+  gray: grayTable,
+  cool: m => ramp(m).map(r => [r, 1 - r, 1]),
+  spring: m => ramp(m).map(r => [1, r, 1 - r]),
+  summer: m => ramp(m).map(r => [r, 0.5 + r / 2, 0.4]),
+  autumn: m => ramp(m).map(r => [1, r, 0]),
+  winter: m => ramp(m).map(r => [0, r, 0.5 + (1 - r) / 2]),
+  // (7*gray + fliplr(hot)) / 8
+  bone: m => {
+    const h = hotTable(m);
+    return grayTable(m).map(
+      ([g], i) => [0, 1, 2].map(c => (7 * g + h[i][2 - c]) / 8) as RGB
+    );
+  },
+  // min(1, gray * diag([1.25 0.7812 0.4975]))
+  copper: m =>
+    grayTable(m).map(([g]) => [
+      Math.min(1, g * 1.25),
+      Math.min(1, g * 0.7812),
+      Math.min(1, g * 0.4975),
+    ]),
+  // sqrt((2*gray + hot) / 3)
+  pink: m => {
+    const h = hotTable(m);
+    return grayTable(m).map(
+      ([g], i) => [0, 1, 2].map(c => Math.sqrt((2 * g + h[i][c]) / 3)) as RGB
+    );
+  },
+};

@@ -22,7 +22,7 @@ numbl supports a wide range of 2-D and 3-D plot types. In the browser, plots ren
 
 figure, subplot, tiledlayout, nexttile, title, xlabel, ylabel, zlabel, sgtitle, legend, hold, grid, box, axis, xlim, ylim, caxis, clim, view, colormap, colorbar, shading, gca, gcf, set, get, close, clf, cla, drawnow, pause
 
-`colormap` accepts `parula` (the default), `jet` and `redblue`, or an n-by-3 matrix of RGB values in [0, 1]. Other colormap names (`hot`, `gray`, `cool`, ...) are accepted but currently display as `parula`.
+`colormap` accepts MATLAB's named colormaps (`parula`, the default, `jet`, `hsv`, `hot`, `cool`, `spring`, `summer`, `autumn`, `winter`, `gray`, `bone`, `copper`, `pink`), `redblue`, or an n-by-3 matrix of RGB values in [0, 1]. The functions of the same names return the table: `hot(64)` is a 64-by-3 matrix, and `jet` alone has 256 rows. numbl's `parula` approximates MATLAB's.
 
 For figures that render custom HTML (`uihtml`), see the repository guide [docs/uihtml-figures.md](https://github.com/flatironinstitute/numbl/blob/main/docs/uihtml-figures.md).
 
@@ -67,7 +67,7 @@ x = randn(n, 1);
 y = randn(n, 1);
 z = randn(n, 1);
 scatter3(x, y, z, 20, z, 'filled');
-colormap('jet');
+colormap('cool');
 ```
 
 ## CLI Usage
