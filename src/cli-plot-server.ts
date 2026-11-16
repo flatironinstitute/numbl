@@ -1,4 +1,8 @@
-import { createServer, type ServerResponse } from "node:http";
+import {
+  createServer,
+  type IncomingMessage,
+  type ServerResponse,
+} from "node:http";
 import { exec } from "node:child_process";
 import { readFileSync, existsSync } from "node:fs";
 import { join, extname } from "node:path";
@@ -24,6 +28,9 @@ export interface PlotServer {
   /** Register the handler for uihtml events POSTed back from the viewer
    *  (page → interpreter). Set after the run, once the session exists. */
   setUihtmlEventHandler(fn: (e: UihtmlClientEvent) => void): void;
+  /** Resolves once every viewer connection has flushed what was sent to it
+   *  (or after `timeoutMs`). Lets a producer slow down to the viewer's pace. */
+  waitForDrain(timeoutMs?: number): Promise<void>;
   /** Signal that the script has finished. Server stays alive until Ctrl+C. */
   scriptDone(): void;
   /** The port the server is listening on */
@@ -46,6 +53,13 @@ export interface PlotServerOptions {
   port?: number;
   /** Address to bind to (default: "127.0.0.1") */
   host?: string;
+  /** Extra routes, tried before the built-in ones. Return true when the
+   *  request was handled. */
+  handleRequest?: (
+    req: IncomingMessage,
+    res: ServerResponse,
+    url: URL
+  ) => boolean;
 }
 
 export async function startPlotServer(
@@ -69,6 +83,8 @@ export async function startPlotServer(
 
   const server = createServer((req, res) => {
     const url = new URL(req.url ?? "/", `http://localhost`);
+
+    if (options?.handleRequest?.(req, res, url)) return;
 
     // uihtml reverse channel: events POSTed back from the viewer
     // (page → interpreter). Localhost-only by default; figures are trusted.
@@ -207,6 +223,27 @@ export async function startPlotServer(
     broadcast(`id: ${messageId}\nevent: uihtml\ndata: ${data}\n\n`);
   }
 
+  function waitForDrain(timeoutMs = 5000): Promise<void> {
+    const busy = sseClients.filter(c => c.writableNeedDrain);
+    if (busy.length === 0) return Promise.resolve();
+    const drained = busy.map(
+      c =>
+        new Promise<void>(resolve => {
+          const done = () => {
+            c.off("drain", done);
+            c.off("close", done);
+            resolve();
+          };
+          c.on("drain", done);
+          c.on("close", done);
+        })
+    );
+    return Promise.race([
+      Promise.all(drained).then(() => {}),
+      new Promise<void>(resolve => setTimeout(resolve, timeoutMs)),
+    ]);
+  }
+
   function setUihtmlEventHandler(fn: (e: UihtmlClientEvent) => void): void {
     uihtmlHandler = fn;
   }
@@ -221,6 +258,7 @@ export async function startPlotServer(
     sendInstructions,
     sendUihtmlEvent,
     setUihtmlEventHandler,
+    waitForDrain,
     scriptDone,
     port,
     closed,

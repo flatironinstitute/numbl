@@ -7,6 +7,7 @@ import { drawLegend } from "./plotLegend.js";
 import { drawColorbarAtLocation } from "./renderers/colorbar.js";
 import { CANVAS_RENDER_ORDER, canvasRenderer } from "./renderers/index.js";
 import type { RenderContext, PlotTransform } from "./renderers/types.js";
+import type { PlotLayout } from "./plotInteraction.js";
 
 /** Generate tick values at powers of 10 for log-scale axes. */
 function generateLogTicks(min: number, max: number): number[] {
@@ -41,8 +42,13 @@ function formatLogTick(v: number): string {
 /** Render one 2-D axes to a canvas. The per-kind drawing lives in the
  *  renderer table (renderers/index.ts); this function owns what the kinds
  *  share: the data limits, axis modes and scales, grid, ticks, labels, legend
- *  and colorbar. 3-D axes are drawn by SurfView instead. */
-export function drawPlot(canvas: HTMLCanvasElement, axes: AxesState) {
+ *  and colorbar. 3-D axes are drawn by SurfView instead. Returns where the
+ *  plot area and colorbar went and the limits drawn (for interaction), or
+ *  undefined when there are no shared axes. */
+export function drawPlot(
+  canvas: HTMLCanvasElement,
+  axes: AxesState
+): PlotLayout | undefined {
   const {
     traces,
     title,
@@ -394,10 +400,12 @@ export function drawPlot(canvas: HTMLCanvasElement, axes: AxesState) {
   }
 
   // Colorbar (drawn after clip is restored so it can sit outside the plot area)
+  const colorRange = caxis ?? computeColorbarRange(axes) ?? undefined;
+  let colorbarRect: PlotLayout["colorbar"];
   if (colorbar) {
-    const cbRange = caxis ?? computeColorbarRange(axes);
+    const cbRange = colorRange;
     if (cbRange) {
-      drawColorbarAtLocation(
+      colorbarRect = drawColorbarAtLocation(
         ctx,
         cbLoc,
         effMarginLeft,
@@ -410,6 +418,22 @@ export function drawPlot(canvas: HTMLCanvasElement, axes: AxesState) {
       );
     }
   }
+
+  return {
+    plot: {
+      left: effMarginLeft,
+      top: effMarginTop,
+      width: effPlotW,
+      height: effPlotH,
+    },
+    x: [xMin, xMax],
+    y: [yMin, yMax],
+    logX,
+    logY,
+    yReversed,
+    colorRange,
+    colorbar: colorbarRect,
+  };
 }
 
 /** The automatic colorbar range: the extent of the values that the drawn

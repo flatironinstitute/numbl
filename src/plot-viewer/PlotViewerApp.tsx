@@ -215,7 +215,7 @@ export function PlotViewerApp() {
               inset: 0,
             }}
           >
-            <FigureView figure={currentFig} />
+            <FigureView figure={currentFig} interactive />
           </div>
         ) : (
           <div

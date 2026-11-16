@@ -49,7 +49,8 @@
     "dist-plot-viewer/",
     "dist-site-viewer/",
     "native/",
-    "binding.gyp"
+    "binding.gyp",
+    "clients/c/numbl_plot.h"
   ],
   "scripts": {
     "dev": "npm run build:snippets && npm run bundle:stdlib && vite",
