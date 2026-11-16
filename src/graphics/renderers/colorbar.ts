@@ -8,9 +8,18 @@ export function formatCbVal(v: number): string {
   return v.toPrecision(3);
 }
 
+/** Where a colorbar was drawn, in CSS pixels. */
+export interface ColorbarRect {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  vertical: boolean;
+}
+
 /**
  * Draw a colorbar at one of the 8 MATLAB locations relative to the plot
- * area at (plotL, plotT, plotW, plotH).
+ * area at (plotL, plotT, plotW, plotH). Returns where it was drawn.
  */
 export function drawColorbarAtLocation(
   ctx: CanvasRenderingContext2D,
@@ -22,133 +31,71 @@ export function drawColorbarAtLocation(
   dMin: number,
   dMax: number,
   colormap: ColormapSpec
-) {
-  const barThickness = 16;
+): ColorbarRect | undefined {
+  const t = 16; // bar thickness
   const inset = 8; // gap between plot edge and colorbar for inside variants
   const gap = 10; // gap between plot edge and colorbar for outside variants
 
-  switch (location) {
-    case "eastoutside": {
-      const x = plotL + plotW + gap;
-      drawColorbarVertical(
-        ctx,
-        x,
-        plotT,
-        barThickness,
-        plotH,
-        dMin,
-        dMax,
-        colormap,
-        "right"
-      );
-      break;
-    }
-    case "westoutside": {
-      const x = plotL - gap - barThickness;
-      drawColorbarVertical(
-        ctx,
-        x,
-        plotT,
-        barThickness,
-        plotH,
-        dMin,
-        dMax,
-        colormap,
-        "left"
-      );
-      break;
-    }
-    case "northoutside": {
-      const y = plotT - gap - barThickness;
-      drawColorbarHorizontal(
-        ctx,
-        plotL,
-        y,
-        plotW,
-        barThickness,
-        dMin,
-        dMax,
-        colormap,
-        "top"
-      );
-      break;
-    }
-    case "southoutside": {
-      const y = plotT + plotH + gap;
-      drawColorbarHorizontal(
-        ctx,
-        plotL,
-        y,
-        plotW,
-        barThickness,
-        dMin,
-        dMax,
-        colormap,
-        "bottom"
-      );
-      break;
-    }
-    case "east": {
-      const x = plotL + plotW - inset - barThickness;
-      drawColorbarVertical(
-        ctx,
-        x,
-        plotT + inset,
-        barThickness,
-        plotH - 2 * inset,
-        dMin,
-        dMax,
-        colormap,
-        "left"
-      );
-      break;
-    }
-    case "west": {
-      const x = plotL + inset;
-      drawColorbarVertical(
-        ctx,
-        x,
-        plotT + inset,
-        barThickness,
-        plotH - 2 * inset,
-        dMin,
-        dMax,
-        colormap,
-        "right"
-      );
-      break;
-    }
-    case "north": {
-      const y = plotT + inset;
-      drawColorbarHorizontal(
-        ctx,
-        plotL + inset,
-        y,
-        plotW - 2 * inset,
-        barThickness,
-        dMin,
-        dMax,
-        colormap,
-        "bottom"
-      );
-      break;
-    }
-    case "south": {
-      const y = plotT + plotH - inset - barThickness;
-      drawColorbarHorizontal(
-        ctx,
-        plotL + inset,
-        y,
-        plotW - 2 * inset,
-        barThickness,
-        dMin,
-        dMax,
-        colormap,
-        "top"
-      );
-      break;
-    }
+  // [left, top, width, height, label side]
+  type Geom = [
+    number,
+    number,
+    number,
+    number,
+    "left" | "right" | "top" | "bottom",
+  ];
+  const geoms: Record<string, Geom> = {
+    eastoutside: [plotL + plotW + gap, plotT, t, plotH, "right"],
+    westoutside: [plotL - gap - t, plotT, t, plotH, "left"],
+    northoutside: [plotL, plotT - gap - t, plotW, t, "top"],
+    southoutside: [plotL, plotT + plotH + gap, plotW, t, "bottom"],
+    east: [
+      plotL + plotW - inset - t,
+      plotT + inset,
+      t,
+      plotH - 2 * inset,
+      "left",
+    ],
+    west: [plotL + inset, plotT + inset, t, plotH - 2 * inset, "right"],
+    north: [plotL + inset, plotT + inset, plotW - 2 * inset, t, "bottom"],
+    south: [
+      plotL + inset,
+      plotT + plotH - inset - t,
+      plotW - 2 * inset,
+      t,
+      "top",
+    ],
+  };
+  const g = geoms[location];
+  if (!g) return undefined;
+  const [left, top, width, height, side] = g;
+  const vertical = side === "left" || side === "right";
+  if (vertical) {
+    drawColorbarVertical(
+      ctx,
+      left,
+      top,
+      width,
+      height,
+      dMin,
+      dMax,
+      colormap,
+      side
+    );
+  } else {
+    drawColorbarHorizontal(
+      ctx,
+      left,
+      top,
+      width,
+      height,
+      dMin,
+      dMax,
+      colormap,
+      side
+    );
   }
+  return { left, top, width, height, vertical };
 }
 
 function drawColorbarVertical(

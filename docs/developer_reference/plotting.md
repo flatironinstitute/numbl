@@ -7,6 +7,7 @@ The interpreter's plotting commands (`plot`, `surf`, `imagesc`, `figure`, `hold`
 This keeps numbl-core free of any rendering code and lets every platform surface render however it likes:
 
 - **CLI**: with `--plot`, serves the prebuilt plot viewer bundle (`dist-plot-viewer/`) from a local HTTP server and pushes instructions to a connected browser.
+- **External programs**: `numbl plot-server` (`src/cli-plot-session.ts`) serves the same viewer and runs frames posted to `/eval` (MATLAB code plus arrays, JSON or the binary format in `src/plotFrame.ts`) in one `ExecSession`. The C client in `clients/c/` uses it.
 - **Web app**: renders in-page: the IDE, gallery and embed pages (and the static site viewer) import `FigureView` from `src/graphics/` and compile it from source, so they do not use the viewer bundle.
 - **Server**: relays the `drawnow` messages of the CLI's `--stream` output to the calling client (see [server.md](server.md)).
 
@@ -37,7 +38,7 @@ The dependency runs one way. The renderer in `src/graphics/` imports the types, 
 
 ## The plot viewer
 
-The CLI's plot viewer (`src/plot-viewer/`) is a separate Vite-built bundle in `dist-plot-viewer/`. It receives `PlotInstruction` batches from the CLI over server-sent events, folds them into a `FiguresState` with `figuresReducer`, and renders the current figure with `FigureView`, the same component the web app uses. 2-D axes are static canvases with no interaction; 3-D axes can be rotated and zoomed with the mouse (Three.js `OrbitControls`, panning disabled).
+The CLI's plot viewer (`src/plot-viewer/`) is a separate Vite-built bundle in `dist-plot-viewer/`. It receives `PlotInstruction` batches from the CLI over server-sent events, folds them into a `FiguresState` with `figuresReducer`, and renders the current figure with `FigureView`, the same component the web app uses. The viewer passes `interactive` to `FigureView`, so 2-D axes can be panned, zoomed and given new color limits with the mouse and keyboard (`plotInteraction.ts`). The user's view is kept beside the axes state and applied as explicit `xlim` / `ylim` / `caxis` at draw time, so it persists while new data arrives. Elsewhere (IDE, embeds) 2-D axes stay static, since interaction captures the scroll wheel. 3-D axes can be rotated and zoomed with the mouse (Three.js `OrbitControls`, panning disabled).
 
 Because the viewer is its own bundle, it does not rebuild with the rest of numbl-core. **After changing anything under `src/graphics/`, or a core plotting module it imports (`types.ts`, `axesTraces.ts`, `figuresReducer.ts`, `axisLimits.ts`, `imagescExtent.ts`, `colormaps.ts`), rebuild the viewer explicitly** (`npm run build:plot-viewer`); unit tests will not catch a stale bundle. The web app does not need this step, since it compiles the renderer from source.
 
