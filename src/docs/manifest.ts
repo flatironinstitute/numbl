@@ -43,6 +43,13 @@ export const docsManifest: DocMeta[] = [
     file: "plotting.md",
   },
   {
+    slug: "live-plots-from-c",
+    title: "Live Plots from C/C++",
+    description:
+      "Plot arrays from a running C or C++ simulation in numbl's browser viewer with MATLAB plot commands, and zoom, pan and adjust the plots while it runs.",
+    file: "live-plots-from-c.md",
+  },
+  {
     slug: "library",
     title: "Library Usage",
     description:

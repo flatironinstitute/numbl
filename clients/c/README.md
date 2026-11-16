@@ -2,6 +2,8 @@
 
 A single-header library that lets a C or C++ program (Fortran later) plot its arrays while it runs, using MATLAB plot commands, in numbl's browser viewer. It follows the MATLAB Engine API: put named arrays, then evaluate MATLAB code.
 
+User guide: https://numbl.org/docs/live-plots-from-c
+
 ## Getting started
 
 With numbl installed (`npm install -g numbl`), get the header into your project:

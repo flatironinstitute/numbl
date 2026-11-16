@@ -2,6 +2,7 @@ import gettingStarted from "./getting-started.md?raw";
 import language from "./language.md?raw";
 import builtins from "./builtins.md?raw";
 import plotting from "./plotting.md?raw";
+import liveC from "./live-plots-from-c.md?raw";
 import library from "./library.md?raw";
 import jsFunctions from "./js-functions.md?raw";
 import deploying from "./deploying.md?raw";
@@ -17,6 +18,7 @@ const contentByFile: Record<string, string> = {
   "language.md": language,
   "builtins.md": builtins,
   "plotting.md": plotting,
+  "live-plots-from-c.md": liveC,
   "library.md": library,
   "js-functions.md": jsFunctions,
   "deploying.md": deploying,

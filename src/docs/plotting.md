@@ -77,3 +77,9 @@ numbl --plot              # REPL with plot server
 ```
 
 The plot server opens a browser window that updates as plot commands are executed.
+
+In the plot server's window, 2-D plots can be zoomed (scroll), panned (drag) and given new color limits (scroll or drag on the colorbar); double-click resets the view.
+
+## Plotting from C and C++
+
+A C or C++ program can send its arrays and MATLAB plot commands to the same viewer while it runs. See [Live Plots from C/C++](/docs/live-plots-from-c).
