@@ -27,7 +27,7 @@ numbl implements a substantial subset of the MATLAB language.
 | class instances | Supported (value and handle classes)     |
 | dictionary      | Supported (MATLAB R2022b+ feature)       |
 
-Integer types (`int8`, `uint16`, etc.) and single precision are not supported as distinct types; see [Differences from MATLAB](/docs/differences).
+Single precision (`single`) is supported as a distinct class. Integer types (`int8`, `uint16`, etc.) are not: their conversion functions return doubles. See [Differences from MATLAB](/docs/differences).
 
 ## Control Flow
 

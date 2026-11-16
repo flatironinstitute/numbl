@@ -43,7 +43,7 @@ Get the header with `numbl c-header > numbl_plot.h`. In exactly one source file,
 
 int main(void) {
   numbl_engine *e = numbl_open();
-  numbl_eval_sync(e, "colormap hot");
+  numbl_eval_sync(e, "colormap jet");
   for (int step = 0; step < nsteps; step++) {
     advance(u);
     if (step % 50 == 0) {

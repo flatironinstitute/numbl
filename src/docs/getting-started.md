@@ -54,11 +54,16 @@ Commands:
   info               Print machine-readable info (JSON)
   list-builtins      List available built-in functions
   serve              Start local execution server for the browser IDE
+  plot-server        Start a plot viewer for programs in other languages
+  c-header           Print numbl_plot.h, the C/C++ client for plot-server
   (no command)       Start interactive REPL
 
 Global options:
   --version, -V      Print version and exit
   --help, -h         Print this help message
+
+Options (for plot-server):
+  --plot-port <port> Set server port (default: any free port)
 
 Options (for REPL):
   --plot             Enable plot server
