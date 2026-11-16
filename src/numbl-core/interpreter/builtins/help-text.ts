@@ -2148,60 +2148,6 @@ export const HELP_TEXT: Record<string, BuiltinHelp> = {
     description:
       "Bitwise shift. Positive K shifts left, negative shifts right.",
   },
-
-  // ── Colormaps ─────────────────────────────────────────────────────────
-  autumn: {
-    signatures: ["C = autumn"],
-    description: "Autumn colormap name.",
-  },
-  bone: {
-    signatures: ["C = bone"],
-    description: "Bone colormap name.",
-  },
-  cool: {
-    signatures: ["C = cool"],
-    description: "Cool colormap name.",
-  },
-  copper: {
-    signatures: ["C = copper"],
-    description: "Copper colormap name.",
-  },
-  gray: {
-    signatures: ["C = gray"],
-    description: "Gray colormap name.",
-  },
-  hot: {
-    signatures: ["C = hot"],
-    description: "Hot colormap name.",
-  },
-  hsv: {
-    signatures: ["C = hsv"],
-    description: "HSV colormap name.",
-  },
-  jet: {
-    signatures: ["C = jet"],
-    description: "Jet colormap name.",
-  },
-  parula: {
-    signatures: ["C = parula"],
-    description: "Parula colormap name.",
-  },
-  pink: {
-    signatures: ["C = pink"],
-    description: "Pink colormap name.",
-  },
-  spring: {
-    signatures: ["C = spring"],
-    description: "Spring colormap name.",
-  },
-  summer: {
-    signatures: ["C = summer"],
-    description: "Summer colormap name.",
-  },
-  winter: {
-    signatures: ["C = winter"],
-    description: "Winter colormap name.",
-  },
 };
 
 for (const [name, help] of Object.entries(HELP_TEXT)) {
