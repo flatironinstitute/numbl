@@ -20,7 +20,7 @@ In exactly one source file, define `NUMBL_PLOT_IMPLEMENTATION` before including 
 
 int main(void) {
   numbl_engine *e = numbl_open();
-  numbl_eval_sync(e, "colormap hot");        /* setup: waits for the reply */
+  numbl_eval_sync(e, "colormap jet");        /* setup: waits for the reply */
   for (int step = 0; step < nsteps; step++) {
     advance(u);
     if (step % 50 == 0) {

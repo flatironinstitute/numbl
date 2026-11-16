@@ -8,7 +8,7 @@ Browser mode is designed for development, teaching, and sharing. The CLI with th
 
 ## Numeric Types
 
-All numeric values are double precision. The conversion functions `single`, `int8`, ..., `uint64` exist so that ported code runs: `single` rounds to single precision and the integer functions round and saturate to the type's range, but the result is still a double and `class` reports `'double'`. Integer type names are otherwise recognized only as precision strings in `fread`/`fwrite`.
+Numeric values are double precision, or single precision for values made with `single`. `single` is a distinct class, as in MATLAB: single values keep their class through operators, indexing, concatenation and functions (`class` reports `'single'`). Integer types are not distinct: `int8`, ..., `uint64` exist so that ported code runs, and they round and saturate to the type's range, but the result is a double and `class` reports `'double'`. Integer type names are otherwise recognized only as precision strings in `fread`/`fwrite`.
 
 ## Path Management
 
@@ -29,9 +29,8 @@ These may gain real implementations as the relevant subsystems land.
 
 The following MATLAB features are not implemented today. Some may be added in future releases; others are unlikely to ever be supported.
 
-- Single-precision and integer numeric types
+- Integer numeric types (see Numeric Types above)
 - Parallel computing (`parfor`, `spmd`)
-- GPU arrays
 - MEX interface (numbl provides its own equivalent: `.js` user functions can bind to compiled `.wasm` modules or native shared libraries via `// wasm:` and `// native:` directives)
 - Simulink and toolboxes
 - Java / .NET integration

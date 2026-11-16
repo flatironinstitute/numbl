@@ -15,11 +15,14 @@ numbl supports a wide range of 2-D and 3-D plot types. In the browser, plots ren
 | Contour     | contour, contourf                                        |
 | Image       | imagesc, heatmap                                         |
 | Vector      | quiver, quiver3, streamline                              |
+| Volume      | isosurface                                               |
 | Statistical | histogram, histogram2, boxchart, piechart, donutchart    |
 
 ## Figure Management
 
 figure, subplot, tiledlayout, nexttile, title, xlabel, ylabel, zlabel, sgtitle, legend, hold, grid, box, axis, xlim, ylim, caxis, clim, view, colormap, colorbar, shading, gca, gcf, set, get, close, clf, cla, drawnow, pause
+
+`colormap` accepts `parula` (the default), `jet` and `redblue`, or an n-by-3 matrix of RGB values in [0, 1]. Other colormap names (`hot`, `gray`, `cool`, ...) are accepted but currently display as `parula`.
 
 For figures that render custom HTML (`uihtml`), see the repository guide [docs/uihtml-figures.md](https://github.com/flatironinstitute/numbl/blob/main/docs/uihtml-figures.md).
 
@@ -64,7 +67,7 @@ x = randn(n, 1);
 y = randn(n, 1);
 z = randn(n, 1);
 scatter3(x, y, z, 20, z, 'filled');
-colormap('cool');
+colormap('jet');
 ```
 
 ## CLI Usage
@@ -76,7 +79,7 @@ numbl run --plot script.m
 numbl --plot              # REPL with plot server
 ```
 
-The plot server opens a browser window that updates as plot commands are executed.
+The plot server opens a browser window. In the REPL it updates after each command; with `numbl run --plot`, the figures appear when the script finishes.
 
 In the plot server's window, 2-D plots can be zoomed (scroll), panned (drag) and given new color limits (scroll or drag on the colorbar); double-click resets the view.
 

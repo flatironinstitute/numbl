@@ -14,7 +14,7 @@
  * -lm). POSIX only (Linux, macOS).
  *
  *   numbl_engine *e = numbl_open();
- *   numbl_eval_sync(e, "colormap hot");        // setup: waits, never dropped
+ *   numbl_eval_sync(e, "colormap jet");        // setup: waits, never dropped
  *   for (...) {
  *     numbl_put_matrix(e, "u", u, rows, cols); // column-major, copied
  *     numbl_put_scalar(e, "t", t);
