@@ -7,15 +7,16 @@
  * The field is stored column-major (u[i + j * ny]), so it goes to numbl
  * as-is.
  */
-#define _POSIX_C_SOURCE 200809L
+/* numbl_plot.h is a single-header library: in one file of the program,
+ * define NUMBL_PLOT_IMPLEMENTATION and include it before other headers. */
+#define NUMBL_PLOT_IMPLEMENTATION
+#include "numbl_plot.h"
 
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-
-#include "numbl_plot.h"
 
 static double now(void) {
   struct timespec ts;
@@ -30,8 +31,8 @@ int main(int argc, char **argv) {
   const int ny = argc > 4 ? atoi(argv[4]) : 150;
   const double dt = 0.2; /* stable for dt <= 0.25 with unit spacing */
 
-  double *u = calloc((size_t)nx * (size_t)ny, sizeof *u);
-  double *un = calloc((size_t)nx * (size_t)ny, sizeof *un);
+  double *u = (double *)calloc((size_t)nx * (size_t)ny, sizeof *u);
+  double *un = (double *)calloc((size_t)nx * (size_t)ny, sizeof *un);
   if (!u || !un) return 1;
 
   numbl_engine *e = numbl_open();

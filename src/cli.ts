@@ -67,6 +67,7 @@ Commands:
   list-builtins      List available built-in functions (--no-help: only those without help text)
   serve              Start local execution server for the browser IDE
   plot-server        Start a plot viewer driven by POST /eval requests
+  c-header           Print numbl_plot.h, the C/C++ client for plot-server
   (no command)       Start interactive REPL
 
 Global options:
@@ -592,6 +593,17 @@ async function cmdPlotServer(args: string[]) {
   });
 }
 
+// ── C client header ─────────────────────────────────────────────────────────
+
+function cmdCHeader() {
+  const headerPath = join(packageDir, "clients", "c", "numbl_plot.h");
+  if (!existsSync(headerPath)) {
+    console.error(`Error: ${headerPath} not found`);
+    process.exit(1);
+  }
+  process.stdout.write(readFileSync(headerPath, "utf-8"));
+}
+
 // ── Serve ───────────────────────────────────────────────────────────────────
 
 function cmdServe(args: string[]): void {
@@ -687,6 +699,9 @@ async function main() {
       break;
     case "plot-server":
       await cmdPlotServer(rest);
+      break;
+    case "c-header":
+      cmdCHeader();
       break;
     case "serve":
       cmdServe(rest);

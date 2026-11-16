@@ -1,31 +1,47 @@
-# numbl_plot: live plots from C
+# numbl_plot: live plots from C and C++
 
-A small C library that lets a C/C++ program (Fortran later) plot its arrays while it runs, using MATLAB plot commands, in numbl's browser viewer. It follows the MATLAB Engine API: put named arrays, then evaluate MATLAB code.
+A single-header library that lets a C or C++ program (Fortran later) plot its arrays while it runs, using MATLAB plot commands, in numbl's browser viewer. It follows the MATLAB Engine API: put named arrays, then evaluate MATLAB code.
+
+## Getting started
+
+With numbl installed (`npm install -g numbl`), get the header into your project:
+
+```bash
+numbl c-header > numbl_plot.h
+```
+
+In exactly one source file, define `NUMBL_PLOT_IMPLEMENTATION` before including it (and before any other `#include`); other files include it plainly:
 
 ```c
+#define NUMBL_PLOT_IMPLEMENTATION
 #include "numbl_plot.h"
 
-numbl_engine *e = numbl_open();
-numbl_eval_sync(e, "colormap hot");        /* setup: waits for the reply */
-for (int step = 0; step < nsteps; step++) {
-  advance(u);
-  if (step % 50 == 0) {
-    numbl_put_matrix(e, "u", u, ny, nx);   /* column-major, copied */
-    numbl_put_scalar(e, "t", t);
-    numbl_eval(e, "imagesc(u); colorbar; title(sprintf('t = %g', t))");  /* returns at once */
+int main(void) {
+  numbl_engine *e = numbl_open();
+  numbl_eval_sync(e, "colormap hot");        /* setup: waits for the reply */
+  for (int step = 0; step < nsteps; step++) {
+    advance(u);
+    if (step % 50 == 0) {
+      numbl_put_matrix(e, "u", u, ny, nx);   /* column-major, copied */
+      numbl_put_scalar(e, "t", t);
+      numbl_eval(e, "imagesc(u); colorbar; title(sprintf('t = %g', t))");  /* returns at once */
+    }
   }
+  numbl_close(e);
 }
-numbl_close(e);
 ```
+
+Build with no extra paths or libraries beyond threads:
+
+```bash
+cc sim.c -pthread -lm -o sim
+```
+
+The header compiles as C99 or later and as C++. Re-run `numbl c-header` after upgrading numbl so the client matches the server.
 
 The code runs in a numbl process (`numbl plot-server`) that keeps one workspace, so variables persist between calls and the snippet can use any numbl function (`log10(abs(u))`, `u(1:4:end, :)`, `subplot`, ...).
 
-## Build and run the demo
-
-```bash
-make
-./examples/heat2d
-```
+## Running
 
 `numbl_open` starts `numbl plot-server`, which opens the viewer in the browser. When the program finishes, `numbl_close` keeps the server running so the figures stay visible; press Ctrl+C to exit.
 
@@ -33,8 +49,10 @@ To keep one viewer across runs, start the server yourself and point programs at 
 
 ```bash
 numbl plot-server --plot-port 8790
-NUMBL_PLOT_URL=http://127.0.0.1:8790/ ./examples/heat2d
+NUMBL_PLOT_URL=http://127.0.0.1:8790/ ./sim
 ```
+
+The demo in this directory (a 2-D heat equation with a moving source) builds with `make` and runs as `./examples/heat2d`.
 
 ## Viewer controls
 
@@ -52,7 +70,7 @@ While the program runs, 2-D plots in the viewer can be explored without stopping
 
 ## API
 
-See `numbl_plot.h`. In short:
+See the comments in `numbl_plot.h`. In short:
 
 - `numbl_put_matrix(e, name, data, rows, cols)`: double data, column-major (element `(i, j)` at `data[i + j*rows]`). A row-major C array `a[rows][cols]` can be passed as `cols x rows` and transposed in MATLAB with `u.'`.
 - `numbl_put_matrix_f32`: same from float data (half the bytes on the wire).

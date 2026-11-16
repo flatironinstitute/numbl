@@ -113,6 +113,7 @@ Commands:
   list-builtins      List available built-in functions (--no-help: only those without help text)
   serve              Start local execution server for the browser IDE
   plot-server        Start a plot viewer driven by POST /eval requests
+  c-header           Print numbl_plot.h, the C/C++ client for plot-server
   (no command)       Start interactive REPL
 
 Global options:

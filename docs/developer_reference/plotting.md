@@ -7,7 +7,7 @@ The interpreter's plotting commands (`plot`, `surf`, `imagesc`, `figure`, `hold`
 This keeps numbl-core free of any rendering code and lets every platform surface render however it likes:
 
 - **CLI**: with `--plot`, serves the prebuilt plot viewer bundle (`dist-plot-viewer/`) from a local HTTP server and pushes instructions to a connected browser.
-- **External programs**: `numbl plot-server` (`src/cli-plot-session.ts`) serves the same viewer and runs frames posted to `/eval` (MATLAB code plus arrays, JSON or the binary format in `src/plotFrame.ts`) in one `ExecSession`. The C client in `clients/c/` uses it.
+- **External programs**: `numbl plot-server` (`src/cli-plot-session.ts`) serves the same viewer and runs frames posted to `/eval` (MATLAB code plus arrays, JSON or the binary format in `src/plotFrame.ts`) in one `ExecSession`. The C/C++ client is the single header `clients/c/numbl_plot.h`, shipped in the npm package and printed by `numbl c-header`.
 - **Web app**: renders in-page: the IDE, gallery and embed pages (and the static site viewer) import `FigureView` from `src/graphics/` and compile it from source, so they do not use the viewer bundle.
 - **Server**: relays the `drawnow` messages of the CLI's `--stream` output to the calling client (see [server.md](server.md)).
 
